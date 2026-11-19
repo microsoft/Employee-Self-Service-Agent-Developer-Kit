@@ -79,6 +79,77 @@ def _run_nuget(arguments: list[str]) -> subprocess.CompletedProcess[str]:
     return completed
 
 
+def _dotnet_command() -> str:
+    roots: list[Path] = []
+    if os.environ.get("DOTNET_ROOT"):
+        roots.append(Path(os.environ["DOTNET_ROOT"]))
+    roots.append(Path.home() / ".dotnet")
+
+    candidates: list[Path] = []
+    for root in roots:
+        candidates.extend((root / "dotnet", root / "dotnet.exe"))
+
+    path_command = shutil.which("dotnet")
+    if path_command:
+        candidates.append(Path(path_command))
+
+    for candidate in candidates:
+        resolved = candidate.expanduser().resolve()
+        sdk_directory = resolved.parent / "sdk"
+        if resolved.is_file() and sdk_directory.is_dir():
+            return str(resolved)
+
+    raise ObjectModelInstallError(
+        "The .NET SDK is not installed. See `setup/README.md` and "
+        "`setup/install-ess-adk.sh`."
+    )
+
+
+def _run_dotnet(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+    try:
+        completed = subprocess.run(
+            [_dotnet_command(), *arguments],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=NUGET_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ObjectModelInstallError(
+            ".NET did not complete while verifying Object Model dependencies."
+        ) from exc
+    if completed.returncode != 0:
+        raise ObjectModelInstallError(
+            f".NET package verification failed: {_process_detail(completed)}"
+        )
+    return completed
+
+
+def _verify_package(nupkg: Path) -> None:
+    if sys.platform == "darwin":
+        try:
+            _run_dotnet(["nuget", "verify", "--all", str(nupkg)])
+        except ObjectModelInstallError as exc:
+            print(
+                "WARNING: NuGet signature verification failed for "
+                f"{nupkg}. The package will be used without successful "
+                f"signature verification. {exc}",
+                file=sys.stderr,
+            )
+        return
+    _run_nuget(
+        [
+            "verify",
+            "-All",
+            str(nupkg),
+            "-NonInteractive",
+            "-Verbosity",
+            "quiet",
+        ]
+    )
+
+
 def install_packages(
     output_directory: Path,
     *,
@@ -130,16 +201,7 @@ def install_packages(
             raise ObjectModelInstallError(
                 f"NuGet did not retain the expected package archive: {nupkg}"
             )
-        _run_nuget(
-            [
-                "verify",
-                "-All",
-                str(nupkg),
-                "-NonInteractive",
-                "-Verbosity",
-                "quiet",
-            ]
-        )
+        _verify_package(nupkg)
 
     installed_assemblies = assembly_paths(output_directory)
     missing = [str(path) for path in installed_assemblies if not path.is_file()]

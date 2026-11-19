@@ -109,6 +109,103 @@ Copilot Studio and deployed to the organization. `/setup` installs and extracts
 the Power Platform agent; publication, admin approval, and Integrated apps
 deployment are separate steps.
 
+### 📢 Post Organization Announcements
+
+Publish announcements for the selected deployed ESS agent and its audiences.
+Run `/org-announcements`, ask `Create an announcement`, or use the **Post an
+announcement** Quick Action.
+
+- **Standard announcements** carry a title, description, priority, and up to
+  two actions.
+- **Alerts** carry a single link action for time-sensitive notices.
+- **Audiences** are optional. An empty audience applies no additional Security
+  Group filtering and reaches everyone who uses the selected agent. Security
+  groups, mail-enabled security groups, or classic distribution groups limit
+  delivery and are searched by name or email in one combined query.
+- **Scheduling** publishes an announcement for a start/end window, and expired
+  announcements can be published again through the normal editor after
+  reviewing and updating their schedule.
+- **Lifecycle** actions archive, unarchive, move back to draft, duplicate, or
+  delete an announcement.
+
+Describe the announcement in chat and the kit opens a pre-filled editor for
+you to review — nothing is saved until you publish or save a draft in that
+editor.
+
+If a save is acknowledged but its refreshed record cannot be read, the editor
+reports `CommittedRefreshFailed`: the announcement was saved; refresh rather
+than repeating the action. An unreadable acknowledgment for a new announcement
+or duplicate reports `IndeterminateWrite`: it may have been created, so refresh
+and check before retrying. Neither failure automatically repeats the write.
+
+Org Announcements are **scoped to the authenticated tenant and selected agent
+registration's title ID**, not shared across agents or distinct registrations.
+The current 100 limit and latest 50 archive window apply per
+tenant-and-registration pair. Within that registration, `audience: []` applies
+no additional Security Group filtering. There is no cross-agent or legacy
+tenant-only API fallback.
+
+**LOB means line-of-business.** Regular and LOB are separate Microsoft 365 app
+registrations of the same bot, not different agents or audience groups.
+Announcements and landing-page settings belong to the chosen registration;
+changes for one do not automatically apply to the other. Choose the registration
+your intended users use to open the agent, without guessing its deployment
+channel from the label.
+
+Both feature MCP providers expose read-only `resolve_agent_title_id(botId)`
+through `src/mcp/agentconfig_core/agent_title_resolution.py`. Native DA discovery
+binds the exact bot, environment, ring and tenant from `.local/config.json` and
+the locked `.local/setup/config.json`; no Dataverse endpoint is required.
+It validates `GET /copilotstudio/minimalBots/api/{botId}?api-version=2024-10-01`,
+then reads the regular ID from `bot.teamsAppInformation.microsoft365.titleId`
+using the existing component fetch:
+`POST /copilotstudio/minimalBots/api/{botId}/components?api-version=2022-03-01-preview`
+with `{}`. LOB requires a separate read:
+`GET /copilotstudio/agents/{botId}/channels/m365/publish?api-version=2024-10-01`,
+with `X-CCI-CdsBotId` set to the exact bot. Its plain `titleId` maps to canonical
+`lobTitleId`; components alone do not expose that DA registration. No realm or
+channel-root probe is added, and `/publish` is never called with POST.
+This Studio frontend route was confirmed by prior read-only probes, not a
+public documented contract.
+
+The resolver always returns both registration keys (`null` when unavailable)
+and requires at least one valid title. HTTP 404 remains an explicit error, not
+proof that a registration is absent or a reason to switch backend. Null/non-object
+publish status or a missing `titleId` field is malformed; an explicit null/blank
+title means unavailable. These fail-closed failure policies are offline-tested,
+not live-established. Authentication, authorization, malformed metadata and
+network failures never become empty discovery or registration substitutions.
+
+Both skills follow `src/skills/shared/agent-title-resolution.md`. The verified
+pair is retained per agent and active mirror under `registrationTitleIds`;
+the legacy scalar `titleId` remains the selected scope. Explicit, verified or
+compatible cached selections take precedence. Only when no selection exists
+and both IDs are distinct does the skill ask which registration to configure.
+A missing requested registration never silently falls back. Setup preserves
+the pair and scalar only for the same bot and environment.
+
+Metadata discovery reuses the authoring MSAL cache for the same tenant/account
+and requests ring-global MinimalBot.Read and MakerOperations.Read scopes.
+Earlier successful probes also had previously granted ReadWrite permissions,
+so minimum endpoint permissions have not been established. Power Platform and
+Substrate use separate resource tokens. Browser sign-in is bounded to 300
+seconds; cancelled lookups remain tracked until their worker finishes.
+Neither feature requires the other's MCP process, searches by agent name,
+derives IDs from apps/share links, or initializes configuration during discovery.
+
+Announcement authoring requires the Org Announcements feature to be enabled
+for your tenant, and audience search requires the `Directory.Read.All`
+Microsoft Graph permission to be consented in your tenant. Graph uses a
+separate resource token for the same authoring tenant and account. The current
+account-context check requires readable `tid` and `oid` claims; opaque tokens
+or credentials missing those claims return an explicit authentication failure
+rather than using a different account. The API still validates tokens and
+authorizes every request.
+
+This development surface requires the matching agent-qualified v1.1 backend
+and scoped widget. The MCP rejects unscoped canonical responses instead of
+silently consuming records from an older backend.
+
 ### 📖 Pre-Loaded ESS Documentation, Samples & Best Practices
 
 The kit ships with a complete reference library that the AI agent reads at task time — you don't need to look anything up yourself.
@@ -119,6 +216,37 @@ The kit ships with a complete reference library that the AI agent reads at task 
 - **Integration-specific guidance** — Connector setup, SOAP/REST template patterns, and extensibility docs for each supported system
 
 The agent uses this knowledge when drafting topics or evaluation sets and inspecting existing integration contracts.
+
+### Manage topics
+
+Run `/manage-topics` to enable or disable whole ISV-based topic sets on the
+selected ESS agent, or list their current states. The skill recognizes
+**Workday HR Topics**, **Workday IT Topics**, **ServiceNow HR Topics**, and
+**ServiceNow IT Topics**, and offers only the sets present in your agent.
+`/topic-actions` remains a compatibility alias.
+
+Use Copilot Chat in the `solutions/ess-maker-skills` workspace. Your agent must
+already be selected and its local workspace prepared through `/setup`; a
+completed Workday or ServiceNow connection is not required.
+
+Choose **Enable**, **Disable**, or **List**, then select one or more available
+sets when prompted. Listing is read-only. For enable or disable, review the
+agent, account, current topic states, and planned changes before approving.
+Choose **Not now** to make no changes. If all selected topics already match
+the requested state, the skill reports that without asking for approval.
+After a change, it reads back the topic states and reports the result.
+
+| Example prompt in Copilot Chat                                      | Result                                                   |
+| ------------------------------------------------------------------- | -------------------------------------------------------- |
+| `/manage-topics list topic sets`                                    | Show available sets, topic counts, and current states    |
+| `/manage-topics enable Workday HR Topics`                           | Review and approve enabling that set                     |
+| `/manage-topics disable ServiceNow HR Topics`                       | Review and approve disabling that set                    |
+| `/manage-topics disable Workday HR Topics and ServiceNow HR Topics` | Review both sets in one request, when both are available |
+
+This changes topic states on the selected agent, not just local files. It does
+not configure ISV connections. See the
+[Manage topics walkthrough](src/skills/manage-topics/SKILL.md) for the detailed
+flow.
 
 ### ✏️ Create, Update and Delete Topics
 
@@ -312,6 +440,7 @@ This toolkit is designed for:
 - **Planning ESS rollouts before environment setup**, with grounded scenarios,
   dependency-ordered tasks, role ownership, and shared progress
 - **Connecting to an existing editable DA Dev agent**
+- **Listing, enabling, and disabling ISV-based topic sets on the selected agent**
 - **Authoring supported Copilot Studio components locally**
 - **Generating evaluation files**
 - **Local validation** via `/flightcheck`, `/scan`, and `/review`
@@ -375,15 +504,63 @@ administrator details. Custom-engine Workday guidance is maintained on
 
 ### ServiceNow (HRSD / ITSM)
 
-Run `/connect servicenow` to connect an ESS DA HR (HRSD) or ESS DA IT (ITSM)
-Development agent. Connect shows the supported ServiceNow agents, lets you pick
-one or paste its Copilot Studio link, and resumes the saved progress for the
-selected agent. Settings without a reliable DA-scoped API require explicit
-maker or administrator confirmation. These items are reported as human-verified
+Connect your agent to ServiceNow for HR cases (HRSD) or IT tickets (ITSM). For
+Declarative Agents, this release supports the **ESS DA HR** and **ESS DA IT**
+agents. Run `/connect servicenow` to start. Connect shows the supported
+ServiceNow agents, lets you pick one or paste its Copilot Studio link, and
+resumes the saved progress for the selected agent.
+
+Before you start:
+
+- Open the `solutions/ess-maker-skills` folder in VS Code and start a **new**
+  Copilot chat.
+- Sign in with the Microsoft work account that can access the target Power
+  Platform environment and agent. This is separate from your GitHub Copilot
+  sign-in; see
+  [Authentication prompts](../../setup/README.md#authentication-prompts).
+- You do not need to run `/setup` first. If the workspace or the agent is not
+  prepared yet, Connect hands off to Setup automatically, then returns to the
+  ServiceNow connection without Setup's final summary or menu. `/setup` itself
+  is unchanged.
+- If VS Code asks to approve local commands, you can select **Allow all** for
+  the chat session to avoid repeated prompts. These approvals do not grant
+  Power Platform access.
+
+The guided experience helps you:
+
+- Share requests with your Microsoft Entra and ServiceNow administrators and
+  check their confirmations. Administrators make those changes; the kit does
+  not create Entra applications or ServiceNow sign-in objects for you.
+- Create the ServiceNow connection in Copilot Studio and verify that it is
+  connected and used by the agent.
+- Review and enable the ServiceNow topics, and save the employee portal URL.
+  The skill asks for the full portal URL, never assumes a path such as `/sp` or
+  `/esc`, and asks you to confirm it before saving anything.
+- Run a real request in the Copilot Studio Test pane (for example, "Show my
+  open HR cases" or "Show my open IT tickets"), then tell the skill what it
+  returned: the expected results, an empty result, an error, or finish without
+  testing. Your answer decides pass, fail or untested; an empty result never
+  counts as a pass.
+
+Settings without a reliable DA-scoped API require explicit maker or
+administrator confirmation. These items are reported as human-verified
 ("Confirmed by the administrator", "Confirmed by the Maker") rather than as
 passing Connect checks.
 
-Connecting ServiceNow does not publish the agent.
+**Test and Production:** Test and Production are read-only for topics and the
+portal URL. Publish the Dev agent, deploy it to Test using your organization's
+approved process, copy the Test agent's Copilot Studio link, and paste it into
+`/connect servicenow`. The skill reuses verified administrator setup from Dev
+where it applies, checks that environment's own connection, topics and portal
+URL, and asks you to confirm with a Test pane request. If something needs a
+fix, change it in Dev, publish again, deploy again, then tell the skill
+"Done". Production is a separate run with the Prod agent link.
+
+Connecting ServiceNow does not publish or promote the agent. See the
+[ServiceNow walkthrough](src/skills/connect/servicenow/entry.md) for the guided
+procedure, the [HR](src/skills/connect/servicenow-da-hrsd/SKILL.md) and
+[IT](src/skills/connect/servicenow-da-itsm/SKILL.md) Dev lifecycles, and the
+[Test and Production guide](src/skills/connect/servicenow/realms.md).
 
 ### Developer integration tools
 
@@ -482,8 +659,11 @@ first** when setup offers it, or run **`/planner`** directly.
 | `/roles`                    | Attest who holds a rollout role on a shared plan; list or revoke attestations                                 |
 | `/discover`                 | Inventory tenant environments, agents, and integrations to ground the rollout in actual configuration         |
 | `/landing-page`             | Configure landing-page branding and content                                                                   |
+| `/org-announcements`        | Create and manage announcements for the selected ESS agent                                                    |
 | `/connect`                  | Choose an available integration                                                                               |
 | `/connect-workday`          | Connect the ESS HR agent to Workday                                                                           |
+| `/manage-topics`            | List current ISV topic-set states, or review and approve enabling or disabling sets                           |
+| `/topic-actions`            | Compatibility alias for `/manage-topics`                                                                      |
 | `/create`                   | Draft and approve a topic save, or separately author evaluation sets; flow authoring is outside ADK           |
 | `/update`                   | Read and approve a mapped topic save, or separately edit evaluation sets                                      |
 | `/delete`                   | Review and approve a selected Dev topic deletion, stage it locally, or discard a never-pushed local draft     |
@@ -507,6 +687,8 @@ You can also describe what you want in plain English — the agent will figure o
 Start with `/planner` when rollout scope or ownership is not settled. It saves
 the plan and hands ready work to the existing setup and authoring experience
 below; presenting a plan does not execute its tasks.
+
+For local authoring:
 
 ```text
 You describe what you need

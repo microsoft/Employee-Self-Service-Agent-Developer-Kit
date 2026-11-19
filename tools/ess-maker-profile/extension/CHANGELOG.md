@@ -1,8 +1,18 @@
 # Changelog
 
-## 0.4.38 (POC)
+## 0.4.39 (POC)
 
 - Enable Create and Update topic entry points and align their labels and walkthroughs with native DA Dev authoring. Saving does not activate or publish topics.
+
+## 0.4.38 (POC)
+
+- Added **Post an announcement** to the guided Customization rail. The action
+  opens a guided Copilot chat for announcements in the selected deployed ESS
+  agent, with setup enforced by the skill.
+- Current and archived announcement limits apply per tenant and agent, not
+  across every agent in the organization. Audience targeting is optional.
+- Retained the guided layout, topic availability gates, and the landing-page
+  action and tutorial from the current upstream extension.
 
 ## 0.4.37 (POC)
 

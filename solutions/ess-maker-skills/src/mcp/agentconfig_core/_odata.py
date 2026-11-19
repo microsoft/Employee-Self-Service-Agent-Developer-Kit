@@ -70,6 +70,14 @@ def _escape_odata_literal(value: str, name: str) -> str:
     return _validate_odata_string(value, name).replace("'", "''")
 
 
+def _validate_title_id(title_id: str) -> str:
+    """Validate the opaque EmployeeAgents key shared by authoring surfaces."""
+    _validate_odata_string(title_id, "titleId")
+    if len(title_id) > 256:
+        raise ValueError("titleId must not exceed 256 characters")
+    return title_id
+
+
 def _require_odata_id(value: str, name: str) -> str:
     """Validate a non-empty, control-char-free id and encode it as an OData key."""
     return urllib.parse.quote(_escape_odata_literal(value, name), safe="")

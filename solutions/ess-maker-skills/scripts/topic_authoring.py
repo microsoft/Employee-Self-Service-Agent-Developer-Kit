@@ -48,7 +48,7 @@ class TopicBookkeepingError(ComponentEditError):
 
 
 _TEMPLATE_CATALOG_DIRECTORY = (
-    Path(__file__).resolve().parents[1] / "src" / "reference" / "topic-actions"
+    Path(__file__).resolve().parents[1] / "src" / "reference" / "manage-topics"
 )
 _DELETION_TEMPLATE_FAMILIES = {
     f"gptagent_copilotforemployeeselfservice{persona}"
