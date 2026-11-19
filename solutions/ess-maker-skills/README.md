@@ -204,6 +204,8 @@ Local draft -> Review and preview -> Scoped approval -> AgentBuilder save and re
 
 General `/push` first shows local pending changes, then delegates selected topics, separately approved instructions, and evaluation sets to their owners. Each owner acknowledges only its submitted content; later edits and unsupported changes remain pending. A local baseline is not a remote mirror.
 
+This release supports DA authoring and Push operations. General Push no longer deploys Dataverse-based agent components. Connect Workday's Dataverse-backed runtime setup and topic wiring and activation remain supported through its separate lifecycle. For legacy/custom-engine guidance, see [`main-ca`](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/tree/main-ca).
+
 Explicit evaluation push retains its selected-set flow and AgentBuilder new-copy behavior. Topic deletion is not available in this release. Workflow and template-config deployment, activation, and publication are not part of general Push. Publication remains separately approved.
 
 ### ✈️ FlightCheck — Agent Setup Diagnostics
