@@ -85,11 +85,11 @@ These decisions come from PM answers (Q1–Q3) and from the discussion with the 
 ```mermaid
 flowchart TD
     Admin["Admin creates the Graph connector<br/>(Microsoft 365 admin center, outside ADK)"]
-    Pick["Connect skill lists connections;<br/>maker picks one; Connect skill links it to the agent"]
+    Pick["Connect skill selects the connection and KB<br/>with maker input, links the KB to the agent,<br/>and checks the connector is ready"]
     Call["Connect skill calls the eval skill<br/>with connection ID + KB sys_id (section 5.3)"]
-    Check{"Does the handoff name<br/>a knowledge source?"}
-    Stop["Hard stop: say no KB is set up"]
-    Read["Eval skill reads the KB through Graph<br/>and pulls excerpts (sections 6.1, 7)"]
+    Check{"Are connectionId and kbSysId<br/>both supplied?"}
+    Stop["Stop: ask Connect skill<br/>for the missing IDs; do not choose a KB"]
+    Read["Eval skill reads complete articles<br/>from only the passed KB through Graph<br/>and pulls excerpts (sections 6.1, 7)"]
     Write["Eval skill writes tests;<br/>maker confirms (section 8)"]
     Save["Eval skill saves the set,<br/>creates it in Copilot Studio"]
     Run["Eval skill runs it after maker permission<br/>(setup checked here)"]
