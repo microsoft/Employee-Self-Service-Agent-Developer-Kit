@@ -77,6 +77,10 @@ The command verifies the target, selects the architecture-specific package,
 and reports whether that package already exists. It never installs the package.
 Do not request installation approval during Preflight or expose package
 sequencing details in the customer-facing response.
+An absent package is expected before Connections; do not ask the maker to
+install it during Preflight. After all required Preflight checks pass,
+continue the lifecycle. The Connections operation owns approved installation
+and verification; package absence alone is not a manual installation handoff.
 
 Before Preflight completes, the controller reuses the setup-complete
 environment selection and runs automatic live readiness checks for the

@@ -18,6 +18,13 @@ Begin by preparing the selected Power Platform environment. Do not ask the
 maker to create physical connections until the supported Workday package is
 installed and verified.
 
+Package installation is an automated Connect operation. The maker only
+approves installation and completes any required Microsoft sign-in.
+Do not hand the maker a `pac application install` command or ask them to
+open PowerShell to install the package. Do not direct the maker to
+Settings > Customize > Workday > Install. Those are not alternate steps in
+this guided lifecycle, even if reference documentation describes them.
+
 Run:
 
 ```powershell
@@ -53,6 +60,18 @@ python scripts/workday_connect.py prepare-connections --install-plan-hash "{PLAN
 The apply command rediscovers the exact environment, package, agent, and maker,
 rejects stale approval, installs through PAC, and rereads Dataverse. Continue
 only after it confirms the package is ready.
+Run both approved commands in this invocation; do not ask the maker to rerun
+`/connect workday` after installation or confirm that they installed it.
+When the package is verified, continue directly to physical-connection
+discovery below without a separate installation-complete question.
+
+If either command fails, report the actual failure and preserve the current
+phase and completed administrator evidence. Use the returned error to guide
+the specific sign-in, permission, tooling, or service recovery. Obtain any
+required repair approval before making changes and revalidate the installation
+plan before another install attempt. Never substitute a manual installation
+handoff for a failed or unattempted command, infer missing privileges from
+package absence, or continue without verified package presence.
 
 The skill does not create physical connector connections or complete connector
 OAuth. The maker performs those actions; the skill discovers and verifies the

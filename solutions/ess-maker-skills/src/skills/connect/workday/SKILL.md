@@ -48,6 +48,12 @@ it is not a customer-executed phase and must not be shown as an extra step.
 - Reuse the exact recorded account through the shared credential cache. Run
   only the narrow verification required for the current phase; do not launch
   broader checks that request unrelated API audiences.
+- Package installation is performed by Connect, not by the maker, through
+  the approved Connections operation. Do not replace it with a manual PAC
+  command or portal installation walkthrough, including installation guidance
+  found in reference documentation. Preserve the installation approval and
+  required sign-in; an installation failure remains a specific, recoverable
+  blocker rather than a new customer installation task.
 
 ## Customer-facing language contract
 

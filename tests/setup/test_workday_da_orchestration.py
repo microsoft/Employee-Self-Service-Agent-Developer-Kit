@@ -626,6 +626,27 @@ def test_preflight_is_read_only_and_package_install_starts_connections() -> None
     assert "installs through PAC, and rereads Dataverse" in connections
 
 
+def test_workday_package_installation_is_not_handed_to_the_maker() -> None:
+    skill = " ".join((_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8").split())
+    preflight = " ".join(
+        (_WORKDAY_DA / "install-extension.md").read_text(encoding="utf-8").split()
+    )
+    connections = " ".join(
+        (_WORKDAY_DA / "configure-power-platform.md").read_text(encoding="utf-8").split()
+    )
+
+    assert "Package installation is performed by Connect, not by the maker" in skill
+    assert "Do not replace it with a manual PAC command or portal installation walkthrough" in skill
+    assert "An absent package is expected before Connections" in preflight
+    assert "do not ask the maker to install it during Preflight" in preflight
+    assert "The maker only approves installation and completes any required Microsoft sign-in" in connections
+    assert "Do not hand the maker a `pac application install` command" in connections
+    assert "Do not direct the maker to Settings > Customize > Workday > Install" in connections
+    assert "do not ask the maker to rerun `/connect workday` after installation" in connections
+    assert "report the actual failure and preserve the current phase" in connections
+    assert "Never substitute a manual installation handoff for a failed or unattempted command" in connections
+
+
 def test_preflight_recovery_is_limited_to_the_setup_development_foundation() -> None:
     text = (_WORKDAY_DA / "install-extension.md").read_text(encoding="utf-8")
     normalized = " ".join(text.split())
