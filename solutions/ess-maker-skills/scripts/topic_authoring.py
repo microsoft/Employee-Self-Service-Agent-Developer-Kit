@@ -86,7 +86,13 @@ def _deletion_template_protection(
                 or not isinstance(catalog.get("packages"), list)
             ):
                 raise ValueError(f"{path.name}: expected schemaVersion 1 and packages.")
-            for package in catalog["packages"]:
+        except (OSError, ValueError) as exc:
+            protection["catalogErrors"].append({
+                "file": str(path), "errors": _exception_chain(exc),
+            })
+            continue
+        for package_index, package in enumerate(catalog["packages"]):
+            try:
                 if not isinstance(package, dict):
                     raise ValueError(f"{path.name}: package must be an object.")
                 key = str(package.get("key") or "")
@@ -109,24 +115,33 @@ def _deletion_template_protection(
                 topics = package.get("topics")
                 if not isinstance(topics, list):
                     raise ValueError(f"{path.name}: topics must be a list.")
-                for topic in topics:
+            except ValueError as exc:
+                protection["catalogErrors"].append({
+                    "file": str(path), "packageIndex": package_index,
+                    "errors": _exception_chain(exc),
+                })
+                continue
+            for topic_index, topic in enumerate(topics):
+                try:
                     if not isinstance(topic, dict) or not isinstance(topic.get("schemaName"), str):
                         raise ValueError(f"{path.name}: topic.schemaName must be a string.")
-                    for component in by_schema.get(topic["schemaName"].casefold(), []):
-                        protection["protectedTopics"].append({
-                            "componentId": component["id"],
-                            "schemaName": component["schemaName"],
-                            "catalog": path.name,
-                            "source": catalog.get("source"),
-                            "packageKey": package["key"],
-                            "packageVersion": package.get("packageVersion"),
-                            "sourcePath": source_path,
-                            "sourceRevision": package.get("sourceRevision"),
-                        })
-        except (OSError, ValueError) as exc:
-            protection["catalogErrors"].append({
-                "file": str(path), "errors": _exception_chain(exc),
-            })
+                except ValueError as exc:
+                    protection["catalogErrors"].append({
+                        "file": str(path), "packageIndex": package_index,
+                        "topicIndex": topic_index, "errors": _exception_chain(exc),
+                    })
+                    continue
+                for component in by_schema.get(topic["schemaName"].casefold(), []):
+                    protection["protectedTopics"].append({
+                        "componentId": component["id"],
+                        "schemaName": component["schemaName"],
+                        "catalog": path.name,
+                        "source": catalog.get("source"),
+                        "packageKey": package["key"],
+                        "packageVersion": package.get("packageVersion"),
+                        "sourcePath": source_path,
+                        "sourceRevision": package.get("sourceRevision"),
+                    })
     if protection["protectedTopics"]:
         raise ComponentEditError(
             "The deletion scope includes protected DA-GA agent-template topics. "

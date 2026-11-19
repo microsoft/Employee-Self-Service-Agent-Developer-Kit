@@ -1118,6 +1118,95 @@ def test_delete_retains_positive_template_match_with_missing_companion(
     assert topic_cli.draft.exists() and _map(topic_cli) == mapping
 
 
+@pytest.mark.parametrize("failure", [
+    "topic-row", "topic-schema", "package-row", "package-identities", "package-topics",
+])
+def test_deletion_template_protection_keeps_later_matches_after_malformed_entries(
+    monkeypatch, tmp_path, failure,
+):
+    filename = "catalog.authoring-additions.json"
+    catalog = json.loads(
+        (authoring._TEMPLATE_CATALOG_DIRECTORY / filename).read_text(encoding="utf-8")
+    )
+    components = [
+        {
+            "$kind": "DialogComponent", "id": f"protected-{index}",
+            "schemaName": package["topics"][0]["schemaName"],
+        }
+        for index, package in enumerate(catalog["packages"])
+    ]
+    first_package = catalog["packages"][0]
+    if failure in {"topic-row", "topic-schema"}:
+        first_package["topics"].insert(
+            0, None if failure == "topic-row" else {"schemaName": 42},
+        )
+    else:
+        invalid_package = copy.deepcopy(first_package)
+        if failure == "package-row":
+            invalid_package = None
+        elif failure == "package-identities":
+            invalid_package["agentSchemaNames"] = None
+        else:
+            invalid_package["topics"] = None
+        catalog["packages"].insert(0, invalid_package)
+    reference = tmp_path / "catalogs"
+    reference.mkdir()
+    (reference / filename).write_text(json.dumps(catalog), encoding="utf-8")
+    (reference / "catalog.provisional.json").write_text(
+        json.dumps({"schemaVersion": 1, "packages": []}), encoding="utf-8",
+    )
+    monkeypatch.setattr(authoring, "_TEMPLATE_CATALOG_DIRECTORY", reference)
+
+    with pytest.raises(native.ComponentEditError, match="protected DA-GA") as raised:
+        authoring._deletion_template_protection(components)
+
+    facts = raised.value.evidence
+    assert facts["writeAttempted"] is facts["deleted"] is False
+    protection = facts["templateProtection"]
+    assert {match["componentId"] for match in protection["protectedTopics"]} == {
+        component["id"] for component in components
+    }
+    error, = protection["catalogErrors"]
+    assert error["file"] == str(reference / filename)
+    assert error["packageIndex"] == 0 and error["errors"]
+    if failure in {"topic-row", "topic-schema"}:
+        assert error["topicIndex"] == 0
+    else:
+        assert "topicIndex" not in error
+
+
+def test_deletion_template_protection_reports_each_invalid_row_without_a_match(
+    monkeypatch, tmp_path,
+):
+    filename = "catalog.authoring-additions.json"
+    catalog = json.loads(
+        (authoring._TEMPLATE_CATALOG_DIRECTORY / filename).read_text(encoding="utf-8")
+    )
+    catalog["packages"][0]["topics"] = [None, {"schemaName": 42}]
+    reference = tmp_path / "catalogs"
+    reference.mkdir()
+    (reference / filename).write_text(json.dumps(catalog), encoding="utf-8")
+    (reference / "catalog.provisional.json").write_text(
+        json.dumps({"schemaVersion": 1, "packages": []}), encoding="utf-8",
+    )
+    monkeypatch.setattr(authoring, "_TEMPLATE_CATALOG_DIRECTORY", reference)
+
+    protection = authoring._deletion_template_protection([{
+        "$kind": "DialogComponent", "id": "custom", "schemaName": "custom.topic.Unmatched",
+    }])
+
+    assert protection["protectedTopics"] == []
+    assert protection["coverageVerified"] is False
+    errors = protection["catalogErrors"]
+    assert len(errors) == 2
+    assert [error["topicIndex"] for error in errors] == [0, 1]
+    assert all(
+        error["file"] == str(reference / filename)
+        and error["packageIndex"] == 0 and error["errors"]
+        for error in errors
+    )
+
+
 def test_delete_accepts_case_only_schema_mapping_difference(topic_cli, monkeypatch, capsys):
     component = _register_existing(topic_cli)
     mapping = _map(topic_cli)
