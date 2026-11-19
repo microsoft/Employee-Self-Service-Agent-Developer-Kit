@@ -544,7 +544,8 @@ def test_servicenow_test_question_has_explicit_result_choices(
 
     assert [option["label"] for option in payload["options"]] == [
         f"It returned the {records} I expected",
-        "It returned an empty result or an error",
+        "It returned an empty result",
+        "It returned an error",
         "Finish without testing",
     ]
     assert not any(option.get("recommended") for option in payload["options"])
@@ -557,8 +558,9 @@ def test_servicenow_test_question_has_explicit_result_choices(
     doc = (
         _CONNECT / provider / "actions" / "test-connection.md"
     ).read_text(encoding="utf-8")
-    assert "--result <pass-fail-or-untested>" in doc
+    assert "--result <pass-fail-untested-or-empty>" in doc
     assert "record `--result untested`" in doc
+    assert "`--result empty`" in doc
     assert "Required prompt" in doc and "do not add a \"Required prompt\"" in doc
 
 

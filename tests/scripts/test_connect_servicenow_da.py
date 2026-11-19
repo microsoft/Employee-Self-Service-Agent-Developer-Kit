@@ -10112,6 +10112,225 @@ def test_record_test_cli_accepts_untested_result() -> None:
 
 
 @pytest.mark.parametrize(
+    ("profile", "prompt_category", "audience"),
+    (
+        ("hrsd", "list-my-open-hr-cases", "HR"),
+        ("itsm", "list-my-open-it-tickets", "IT"),
+    ),
+)
+def test_record_test_empty_result_records_nothing_and_never_passes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    prompt_category: str,
+    audience: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context = _context()
+    components = _components(CONNECTION_ID)
+    if profile == "itsm":
+        context = {
+            **context,
+            "agent": {
+                **context["agent"],
+                "schema_name": snow.IT_SCHEMA_NAME,
+                "workspace_slug": "employee-self-service-it",
+            },
+            "active": {"slug": "employee-self-service-it"},
+        }
+        components = _itsm_components()
+    with snow.product_profile_context(profile):
+        state = snow._state_base(context, components)
+        _add_current_agent_binding(context, state, components)
+        state_path = snow._lifecycle_state_path(context)
+        state_path.parent.mkdir(parents=True)
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        monkeypatch.setattr(
+            snow,
+            "_agentbuilder_client",
+            lambda _context: type(
+                "FakeAgentBuilder",
+                (),
+                {"fetch_components": lambda self, _agent_id: components},
+            )(),
+        )
+        contract = json.loads(
+            (
+                snow.SOLUTION_ROOT
+                / "src"
+                / "skills"
+                / "connect"
+                / snow.ACTIVE_PROFILE.provider_key
+                / "contract.json"
+            ).read_text(encoding="utf-8")
+        )
+        test_phase = next(p for p in contract["phases"] if p["id"] == "test")
+        before = state_path.read_bytes()
+
+        result = snow.record_test_attestation(
+            context,
+            prompt_category=prompt_category,
+            result="empty",
+            failure_category=None,
+        )
+
+        assert result["message"] == (
+            "An empty result alone doesn't show whether the agent can "
+            f"retrieve your {audience} data.\n\n"
+            "Try a supported request for ServiceNow data you know exists "
+            "for your account, then tell us whether the result matches. "
+            "You can also finish without testing."
+        )
+        assert result["status"] == "open"
+        assert result["recorded"] is False
+        assert state_path.read_bytes() == before
+        saved = json.loads(state_path.read_text(encoding="utf-8"))
+        assert "test" not in saved.get("evidence", {})
+        assert not snow._manual_evidence_current(saved, test_phase)
+        with pytest.raises(snow.ServiceNowConnectError, match="empty-result"):
+            snow.record_test_attestation(
+                context,
+                prompt_category=prompt_category,
+                result="empty",
+                failure_category="empty-result",
+            )
+
+        error = snow.record_test_attestation(
+            context,
+            prompt_category=prompt_category,
+            result="fail",
+            failure_category=None,
+        )
+        assert error["status"] == "failed"
+        assert error["failureCategory"] is None
+        after_fail = state_path.read_bytes()
+        snow.record_test_attestation(
+            context,
+            prompt_category=prompt_category,
+            result="empty",
+            failure_category=None,
+        )
+        assert state_path.read_bytes() == after_fail
+
+        snow.record_test_attestation(
+            context,
+            prompt_category=prompt_category,
+            result="pass",
+            failure_category=None,
+        )
+        replaced = json.loads(state_path.read_text(encoding="utf-8"))
+        assert replaced["evidence"]["test"]["result"] == "pass"
+        assert snow._manual_evidence_current(replaced, test_phase)
+
+
+def test_dev_test_step_hr_and_it_copy_is_identical_except_domain_nouns() -> None:
+    nouns = {
+        "hrsd": (
+            ("Employee Self-Service HR", "AGENT"),
+            ("HR cases", "RECORDS"),
+            ("HR data", "AUDIENCE data"),
+            ("an HR request", "an AUDIENCE request"),
+            ("cases", "RECORDS"),
+            ("case", "RECORD"),
+        ),
+        "itsm": (
+            ("Employee Self-Service IT", "AGENT"),
+            ("IT tickets", "RECORDS"),
+            ("IT data", "AUDIENCE data"),
+            ("an IT request", "an AUDIENCE request"),
+            ("tickets", "RECORDS"),
+            ("ticket", "RECORD"),
+        ),
+    }
+
+    def neutral(text: str, profile: str) -> str:
+        for source, target in nouns[profile]:
+            text = text.replace(source, target)
+        return text
+
+    # The untested message is intentionally excluded: its HR and IT wording
+    # is pinned separately from the spec.
+    rendered: dict[str, dict[str, str]] = {}
+    for profile in ("hrsd", "itsm"):
+        with snow.product_profile_context(profile):
+            rendered[profile] = {
+                "ready": snow._dev_test_ready_message(),
+                "question": snow._dev_test_clarifying_question(),
+                "empty": snow._dev_empty_result_message(),
+            }
+    for key in rendered["hrsd"]:
+        assert neutral(rendered["hrsd"][key], "hrsd") == neutral(
+            rendered["itsm"][key], "itsm"
+        ), key
+
+
+def test_test_connection_docs_hr_and_it_are_identical_except_domain_nouns() -> None:
+    root = snow.SOLUTION_ROOT / "src" / "skills" / "connect"
+    hr = (root / "servicenow-da-hrsd" / "actions" / "test-connection.md").read_text(
+        encoding="utf-8"
+    )
+    it = (root / "servicenow-da-itsm" / "actions" / "test-connection.md").read_text(
+        encoding="utf-8"
+    )
+    for source, target in (
+        ("case/ticket", "CASE_OR_TICKET"),
+        ("list-my-open-it-tickets", "list-my-open-hr-cases"),
+        ("servicenow-da-itsm", "servicenow-da-hrsd"),
+        ("ITSM", "HRSD"),
+        ("(IT)", "(HR)"),
+        ("IT tickets", "HR cases"),
+        ("tickets", "cases"),
+        ("ticket", "case"),
+    ):
+        it = it.replace(source, target)
+    hr = hr.replace("case/ticket", "CASE_OR_TICKET")
+    assert it == hr
+
+
+def test_record_test_cli_accepts_empty_result() -> None:
+    args = snow.build_parser().parse_args(
+        [
+            "--provider",
+            "servicenow-da-itsm",
+            "record-test",
+            "--prompt-category",
+            "list-my-open-it-tickets",
+            "--result",
+            "empty",
+        ]
+    )
+    assert args.result == "empty"
+    realm = snow.build_parser().parse_args(
+        [
+            "--provider",
+            "servicenow-da-hrsd",
+            "record-realm-test",
+            "--realm",
+            "test",
+            "--prompt-category",
+            "list-my-open-hr-cases",
+            "--result",
+            "pass",
+        ]
+    )
+    assert realm.result == "pass"
+    with pytest.raises(SystemExit):
+        snow.build_parser().parse_args(
+            [
+                "--provider",
+                "servicenow-da-hrsd",
+                "record-realm-test",
+                "--realm",
+                "test",
+                "--prompt-category",
+                "list-my-open-hr-cases",
+                "--result",
+                "empty",
+            ]
+        )
+
+
+@pytest.mark.parametrize(
     ("profile", "records", "record"),
     (("hrsd", "cases", "case"), ("itsm", "tickets", "ticket")),
 )
@@ -12344,7 +12563,7 @@ def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
             "my open IT tickets,\"** if you have open tickets.\n\n"
             "Come back and tell us what happened and whether it matched what "
             "you expected. You don't need to paste ticket contents.\n\n"
-            "You can also finish without testing; the IT integration will "
+            "You can also finish without testing; the integration will "
             "remain untested."
         )
     assert expected_test == test

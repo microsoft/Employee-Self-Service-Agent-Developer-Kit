@@ -31,7 +31,8 @@ result question:
     "question": "What did the request return: your expected tickets, an empty result, or an error? No need to share ticket contents.",
     "options": [
       { "label": "It returned the tickets I expected" },
-      { "label": "It returned an empty result or an error" },
+      { "label": "It returned an empty result" },
+      { "label": "It returned an error" },
       { "label": "Finish without testing" }
     ],
     "allowFreeformInput": false
@@ -44,11 +45,12 @@ Never store response text, case/ticket data, URLs, identifiers, or free-form
 details:
 
 ```text
-python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} record-test --prompt-category list-my-open-it-tickets --result <pass-fail-or-untested>
+python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} record-test --prompt-category list-my-open-it-tickets --result <pass-fail-untested-or-empty>
 ```
 
 - **It returned the tickets I expected:** record `--result pass`.
-- **It returned an empty result or an error:** record `--result fail` without inventing a failure category.
+- **It returned an empty result:** run the same command with `--result empty`. Nothing is recorded and the test stays open; show the `message` field of the command output verbatim as an ordinary reply. Never record pass or fail for an empty result. The maker's next answer to the same question can still be pass, fail, or untested, so ask the result question again and return `ACTION_RESULT = "waiting"`.
+- **It returned an error:** record `--result fail` without inventing a failure category.
 - **Finish without testing:** record `--result untested`, then show the `message` field of the command output verbatim as an ordinary reply. Do not claim the integration is connected or working, do not run final validation, and do not show the final success message. The test stays open, so the next Connect run resumes at the Test-pane request. The Test step is only reached after the earlier setup steps are complete, so no setup blocker is outstanding at this point.
 - If the maker replies in chat with only "Done" or an unclear answer instead of using the question, ask the same question again and do not record evidence.
 - While the question is unanswered, the test is not performed or the maker is

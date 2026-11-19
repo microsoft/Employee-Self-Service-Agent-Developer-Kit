@@ -433,8 +433,10 @@ def test_servicenow_connect_guides_require_the_test_ready_message_verbatim() -> 
             "controller-built: show it verbatim and never reword it"
         ) in text, path.name
         assert (
-            "when `record-test --result untested` returns `message`, show "
-            "that `message` verbatim and never claim the integration works"
+            "when `record-test --result untested` or `--result empty` "
+            "returns `message`, show that `message` verbatim (for `empty`, "
+            "nothing is recorded and the Test step stays open; ask the "
+            "result question again) and never claim the integration works"
         ) in text, path.name
 
 
@@ -829,7 +831,10 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "save the current authored draft" in test
     assert "selected ServiceNow connection" in test
     assert '"label": "It returned the cases I expected"' in test
-    assert '"label": "It returned an empty result or an error"' in test
+    assert '"label": "It returned an empty result"' in test
+    assert '"label": "It returned an error"' in test
+    assert "empty result or an error" not in test
+    assert "`--result empty`" in test
     assert '"label": "Finish without testing"' in test
     assert 'ACTION_RESULT = "waiting"' in test
     assert "Do not ask a second failure-classification question" in (
@@ -1162,7 +1167,10 @@ def test_da_servicenow_itsm_skill_uses_isolated_shared_lifecycle() -> None:
     assert "Show my open IT tickets" in test
     assert "record `--result untested`" in test
     assert '"label": "It returned the tickets I expected"' in test
-    assert '"label": "It returned an empty result or an error"' in test
+    assert '"label": "It returned an empty result"' in test
+    assert '"label": "It returned an error"' in test
+    assert "empty result or an error" not in test
+    assert "`--result empty`" in test
     assert '"label": "Finish without testing"' in test
     assert "--failure-category" not in test
     assert "decides pass, fail, or untested" in " ".join(test.split())

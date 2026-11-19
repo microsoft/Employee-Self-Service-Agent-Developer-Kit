@@ -10486,7 +10486,6 @@ _DEV_TEST_COPY = {
         "records": "cases",
         "record": "case",
         "example": "Show my open HR cases",
-        "integration": "the integration",
     },
     "itsm": {
         "article": "an",
@@ -10494,7 +10493,6 @@ _DEV_TEST_COPY = {
         "records": "tickets",
         "record": "ticket",
         "example": "Show my open IT tickets",
-        "integration": "the IT integration",
     },
 }
 
@@ -10508,7 +10506,7 @@ def _dev_test_ready_message() -> str:
         f"**\"{copy_['example']},\"** if you have open {copy_['records']}.\n\n"
         "Come back and tell us what happened and whether it matched what you "
         f"expected. You don't need to paste {copy_['record']} contents.\n\n"
-        f"You can also finish without testing; {copy_['integration']} will "
+        "You can also finish without testing; the integration will "
         "remain untested."
     )
 
@@ -10519,6 +10517,17 @@ def _dev_test_clarifying_question() -> str:
         f"What did the request return: your expected {copy_['records']}, an "
         "empty result, or an error? No need to share "
         f"{copy_['record']} contents."
+    )
+
+
+def _dev_empty_result_message() -> str:
+    copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
+    return (
+        "An empty result alone doesn't show whether the agent can retrieve "
+        f"your {copy_['audience']} data.\n\n"
+        "Try a supported request for ServiceNow data you know exists for "
+        "your account, then tell us whether the result matches. You can "
+        "also finish without testing."
     )
 
 
@@ -12033,6 +12042,19 @@ def record_test_attestation(
         raise ServiceNowConnectError(
             "Unsupported privacy-safe Test pane prompt category."
         )
+    if result == "empty":
+        if failure_category is not None:
+            raise ServiceNowConnectError(
+                "An empty-result answer cannot have a failure category."
+            )
+        # An empty result is not evidence: nothing is recorded and the Test
+        # step stays open.
+        return {
+            "status": "open",
+            "result": "empty",
+            "recorded": False,
+            "message": _dev_empty_result_message(),
+        }
     if result not in {"pass", "fail", "untested"}:
         raise ServiceNowConnectError(
             "Test pane result must be pass, fail, or untested."
@@ -13053,7 +13075,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     test_parser.add_argument(
         "--result",
-        choices=("pass", "fail", "untested"),
+        choices=("pass", "fail", "untested", "empty"),
         required=True,
     )
     test_parser.add_argument(
