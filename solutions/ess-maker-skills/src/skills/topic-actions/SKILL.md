@@ -9,12 +9,17 @@ classification or custom-dependency coverage. Those unknowns remain warnings;
 they are not changed to verified evidence. Effective edit permission is
 enforced by the write API, not inferred from authentication or read access.
 Native stale-token, batch and draft/published behavior is unqualified.
-Dev, Test, Prod and unenrolled native agents are not excluded by realm.
+For enable/disable, Dev, Test, Prod and unenrolled native agents are not excluded by realm.
 Service authorization or unsupported native API access can still block an
 operation. Removing the realm gate does not qualify those targets or make
 changes safe for published conversations.
 This is not a qualified customer release. Never describe a preview as a
 completed enable/disable or promise draft/published isolation.
+
+Add uses the same reviewed flow for sets with shipped content and requires a live
+Development agent enrolled in ALM; saved setup data alone does not satisfy that requirement.
+Nothing is published by this command. Use promotion for Test and Production;
+add never writes to those agents.
 
 ## Interaction and output
 
@@ -28,13 +33,16 @@ below, without asking which sets to list. For explicit per-topic detail or
 preview requests, show the selected sets, short topic
 names and observed current states. Both are read-only and need no approval
 or unsolicited offer to execute.
-Successful read-only replies contain only the heading and requested tables.
+For List/Enable/Disable, successful read-only replies contain only the heading and requested tables.
 Omit agent/environment identifiers, redundant set-total summaries and
 "No topics were changed" or publishing commentary. Target identifiers and
 counts remain in structured results; execution reviews still show the complete
 required target and account.
+Add lists report live presence and say that nothing was changed;
+presence alone does not establish eligibility to add.
 Do not turn a topic-list request into an enable/disable plan: omit requested
 states, plan columns, change counts and write-specific limitation notes.
+The same preview-only rule applies to add.
 Keep unresolved topics and blockers visible; do not imply complete discovery.
 For an explicit
 enable/disable request with established sets, use the execution helper's fresh review directly;
@@ -45,6 +53,7 @@ Once sets are established, enable and disable requests always enter the `--revie
 helper. Verified no-change enable/disable returns `already_correct` after a
 fresh readback: render the final result and stop without approval or
 `--apply-review`.
+Add uses the same flow, including `already_correct` without approval or apply.
 Never substitute a read-only list or preview because approval transport
 appears unavailable.
 
@@ -74,13 +83,21 @@ bodies.
 
 After execution, show the outcome and verified counts, target/account context,
 grouped per-topic results and any material blocker or preservation limitation.
+For enable/disable:
 Do not append routine submission or publishing footers; submission evidence stays
 in structured diagnostics. Distinguish observed state success from incomplete
 preservation. Do not repeat the review, narrate routine steps, open another
 decision control or append an unsolicited follow-up menu.
 Cancellation says only "Canceled." Denial says only "Not approved."
+
+Retain the helper's draft/publish and no-change notes. For add, a
+submitted write changes only the draft, and Microsoft 365 Copilot sees it after a
+publish in Copilot Studio; a result with no write says nothing was changed. A
+review says the change will stay in the draft. Preserve the existing enable/disable output and shared
+review-error wording. These notes describe this invocation, not earlier writes.
+Render cancellation, denial and review errors as returned.
 An error shows the specific problem and one supported next step, not a generic
-failure heading, unchanged-topic footer or repeated inventory. Put the supported
+failure heading or repeated inventory. Retain the helper's no-change note. Put the supported
 guidance in a short paragraph under a standalone **NEXT STEPS** heading,
 not an inline "Next step:" label. Do not invent unrelated setup or connection
 recommendations. Use this same heading-and-paragraph pattern wherever next-step
@@ -100,13 +117,15 @@ result into success. For multiple independent previews, render each returned
 `userMessage`; do not combine them into a newly interpreted successful scope.
 
 The deterministic presentation is owned by
-`scripts/topic_actions_presentation.py`. Do not show a "Before you approve"
+`scripts/topic_actions_presentation.py`. Except for diagnostics Add, do not show a "Before you approve"
 section, its notes, or a replacement warning section. Limitations and dependency
 impact remain available in structured diagnostics for technical questions.
-Read-only previews show the topic inventory, not an execution plan,
+For enable/disable, read-only previews show the topic inventory, not an execution plan,
 and never ask for approval. Display the schema-name suffix after `.topic.`
 (for example, `WorkdayGetVisas`); keep full identities in structured evidence
 and mutation logic. Use "No change" rather than "Already correct" in plans.
+Add previews show current state or presence without approval and retain
+the helper's no-change note. Give the diagnostics Add notice below before approval.
 Routine diagnostics such as service-enforced edit permission are not
 repeated as notices. Structured `warnings`, `blockers`, HTTP status and
 other evidence remain intact for callers and requested technical diagnosis;
@@ -128,6 +147,8 @@ Use **Enable** / **Disable** for actions and plans, and **Enabled** /
 **Disabled** / **Unknown** for topic states. Topic-set aggregates also use
 **Mixed**. Do not mix On/Off or turn-on/turn-off language into maker-facing
 topic-state copy; internal state/API values remain unchanged.
+Use **Add** for that action and its plans. Its lists use Absent, Partial or Present;
+an absent topic has no enabled state.
 
 The review shows action, account and exact target first, followed directly
 by tables grouped under friendly topic-set names. Do not add a separate
@@ -140,6 +161,8 @@ Do not add a separate Requested state column: the planned change says
 evidenced reason a topic is kept unchanged. Keep unknown states and unresolved
 members explicit. Use **No change** for matching states and **Kept unchanged** with the evidenced
 reason for protections. Retain all selected scope, including unresolved members.
+Add plans instead use Add and the helper's no-change/skip wording.
+Their reviews also show presence and check content equality.
 Use catalog-provided display names only; never infer availability from them.
 Keep internal set keys for helper inputs and diagnostic evidence.
 
@@ -208,7 +231,7 @@ target, and distinguish these entry outcomes:
   cannot be validated. Do not assume `/setup` repairs it or recommend deleting
   setup state, switching targets or creating a replacement. State when the
   supported recovery route or installed-version support is unconfirmed.
-- **Selected topics unavailable:** live agent inventory determines which
+- **Selected topics unavailable for enable/disable:** live agent inventory determines which
   topics exist. For each requested set, use every present exact catalog
   match; differing template counts are normal, not missing-topic warnings.
   If no topics from a requested set are present, say
@@ -231,9 +254,9 @@ target, and distinguish these entry outcomes:
   environment to grant topic-edit access. Do not invent a permission-request
   command or infer denial from an unavailable permission check.
 
-For each blocker show its specific problem and one supported next step. Do not
-append "No topics were changed." or repeat the complete inventory. Never
-automatically start setup, install packages, repair a connection, switch
+For each blocker show its specific problem and one supported next step.
+Retain any no-change statement in the helper's text without repeating the
+inventory. Never automatically start setup, install packages, repair a connection, switch
 targets or resume topic changes after recovery. A new request performs fresh
 checks, review and applicable explicit approval. The helper rechecks identity
 and direct native access; reads do not prove write permission.
@@ -247,7 +270,8 @@ explain that automatic return is unavailable and keep the result in this
 conversation. Do not promise persistent resume, invent a destination, mark
 the topic step complete or start the caller's next mutation.
 
-Before writes, **Cancel** or **Not now** ends the request. Show only "Canceled."
+Before writes, **Cancel** or **Not now** ends the request. For enable/disable, show only "Canceled."
+For add, render the helper's result.
 Direct entry remains in this conversation. Caller
 entry preserves completed steps and leaves the topic step incomplete unless
 the requested state was independently verified, using only the supported
@@ -257,8 +281,8 @@ approval. No automatic retry or resume follows cancellation.
 ## Action, live set overview and selection
 
 When the action is unknown, ask just the action question first using the
-host's structured question tool. Keep Enable, Disable and List in that order,
-with the host's "Enter custom answer" fourth:
+host's structured question tool. Keep Enable, Disable, Add and List in that order,
+with the host's "Enter custom answer" fifth:
 
 ```json
 [
@@ -268,6 +292,7 @@ with the host's "Enter custom answer" fourth:
     "options": [
       { "label": "Enable topic sets" },
       { "label": "Disable topic sets" },
+      { "label": "Add topic sets" },
       { "label": "List topic sets/current states" }
     ],
     "allowFreeformInput": true
@@ -285,6 +310,7 @@ generic heading. This applies to action, set-selection and approval cards.
 Do not include a set-key question in this first control. Reuse an action
 already supplied by the maker. Do not batch the action and set questions
 into one call: wait for the action answer before discovery and selection.
+For Add without established sets, use the same inventory entry below.
 After the action is chosen, if the request
 is a set listing or enable/disable without established sets, read the
 selected agent's inventory using:
@@ -293,8 +319,11 @@ selected agent's inventory using:
 
 Pass one JSON request on standard input containing `contractVersion: 1`,
 `target: {tenantId, environmentId, agentId}` and `entry: "direct"`.
-Omit `action` and `setKeys`; do not invent an enable/disable request to list
+For List/Enable/Disable, omit `action` and `setKeys`; do not invent an enable/disable request to list
 sets. Keep private caller context in the calling conversation as below.
+For Add, omit `setKeys` but include `action: "add"`
+to request the content-backed picker. This mode only reads; it never creates
+a review or writes.
 Parse `TOPIC_ACTIONS_RESULT_JSON:` and render `userMessage` verbatim.
 
 Run this fresh for the current invocation and selected target. Earlier chat
@@ -308,14 +337,21 @@ membership could not be resolved. Absent sets are omitted. Do not populate
 the overview from the source catalog alone or expand it into individual
 topic rows unless the maker explicitly requests topic details.
 
+Add lists only shipped-content sets supported for the live schema, with
+present/expected member counts, and offers sets not fully present. Listing neither converts content nor validates
+Dev enrollment; review may still block on content, state or target.
+
 For **List topic sets/current states**, stop after this overview. Do not
 ask for set selection or approval. For **Enable** or **Disable**, when
 `discoveryComplete` is true and `sets` is nonempty, pass the helper's
 `selectionQuestion` unchanged as the sole next structured question. The
 helper supplies exactly one option per present set with only its friendly
 name, such as "Workday HR Topics" or "ServiceNow IT Topics". Use this
-name-only pattern for all four supported sets: no state/count suffix or
+name-only pattern for all supported sets: no state/count suffix or
 description in picker options. Counts and states belong only in the overview.
+Add uses the same gate and names-only `selectionQuestion`; keep presence in the overview only.
+When Add's complete discovery lists exactly one set, the helper omits `selectionQuestion`:
+go directly to the fresh review for that set's `key`; its approval is the maker's decision.
 Multi-select is enabled, with no custom-answer field and no preselected
 choices. Map answered option labels to the `key` of each
 matching entry in the same response's `sets`; retain keys internally.
@@ -329,7 +365,7 @@ successful list or a guessed selection; render its result and stop.
 
 After selection, use the normal fresh `--review` flow. The overview is not
 approval or write evidence. If the maker already supplied an unambiguous
-enable/disable action and sets, skip the action/overview/selection detour
+add/enable/disable action and sets, skip the action/overview/selection detour
 and go directly to that fresh review.
 
 ### Proposed source catalog
@@ -340,7 +376,7 @@ This is not installed availability. The catalog deliberately retains unknown
 required-topic classifications, package IDs and coverage, and provisional
 approval. Do not change those labels to make a plan pass.
 
-For changes, establish exactly one action (`enable` or `disable`) and use
+For changes, establish exactly one action (`add`, `enable` or `disable`) and use
 the canonical selected target with the selected whole-set keys internally.
 Restore and undo of previous Topic Actions changes are not supported.
 Do not translate an undo request into the opposite action, since earlier
@@ -355,6 +391,51 @@ An agent with 10 matching topics does not need the 15 topics another agent
 has. Absent template members are ignored, not reported as incomplete.
 Ambiguous identities still block. Legacy flat definitions remain read-only.
 
+### Content-backed sets
+
+Add accepts only whole sets with a catalog `contentFolder`. The helper checks
+the live schema family and exact members and converts the shipped files. Never supply
+topic bodies or build change rows in chat. Other topic creation, update and deletion
+still use the kit's existing capability stops. There is no Remove: the maker deletes
+added topics in Copilot Studio.
+
+Add inserts all members disabled only when all are absent. All-present matching
+content changes nothing and points to Enable. Partial sets, different content,
+duplicate schemas and wrong component kinds block add. If the present part matches,
+follow the helper's guidance to delete those topics in Copilot Studio, then Add.
+
+Add requires the Object Model converter; missing runtime or conversion failure
+stops before writing, with the helper's guidance. Listing, Enable and Disable need no
+converter. Blocking service diagnostics fail Add without enabling inserted topics;
+warnings alone do not. Claim a disabled state only after verification, and keep the
+helper's qualified result and recovery guidance after partial or uncertain writes.
+
+### Diagnostics notices
+
+For an Add request containing `diagnostics`, give this notice with the review
+and before its approval question. It is required even if the maker skipped
+set selection. Do not add a second confirmation or change `approvalQuestion`.
+
+> Diagnostics Topics are an experimental aid for development and test agents.
+> The model writes the record; it is not an audit log. Without special settings
+> on the Copilot side, the record topic is rarely offered, so a report may have
+> no recorded search results. Report problems with Add, Enable or
+> Disable to the [kit's GitHub Issues](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/issues).
+
+After a verified successful diagnostics add, append these next steps to the
+helper's result. For blocked, partial or unverified results, retain the
+helper's recovery guidance instead of implying the set is ready.
+
+> After they are on, publish in Copilot Studio, then ask a
+> question followed by `/diagnose` in the same chat. Microsoft 365 Copilot may
+> take time to serve the new version; one test took 45 minutes. Disable the
+> set in Dev before promoting to Production.
+
+These instructions do not authorize Enable or publishing. Enable needs its
+own review and approval. The maker publishes in Copilot Studio.
+To delete the set, name its topics as Copilot Studio shows them:
+`[System] - Record Search Results` and `[System] - Diagnose Report`.
+
 ## Read-only preview or chat review and apply
 
 Pass one JSON request on standard input to:
@@ -364,7 +445,7 @@ Pass one JSON request on standard input to:
 The request contains `contractVersion: 1`,
 `target: {tenantId, environmentId, agentId}`, `action`,
 `setKeys` (distinct exact keys), and `entry: "direct"`.
-Only enable/disable is accepted; `initializeBaseline` is no longer an input.
+Only add/enable/disable is accepted; `initializeBaseline` is no longer an input.
 Do not save an input file. For terminal execution omit private caller context; retain it with the
 calling conversation. An in-process caller can use
 `run_topic_actions(..., confirm=..., preview=True)` with `entry: "caller"` and
@@ -376,9 +457,11 @@ For preview, it presents the selected topics and observed
 current states in fixed plain language, plus any blocker preventing resolution.
 Execution reviews additionally present proposed changes, no-change topics
 and protections. Limitations remain in structured diagnostics.
+For enable/disable:
 Observed differences in a blocked plan are **not eligible changes**. Report
 all requested sets using their present members. A requested set with no
 present members blocks rather than disappearing from the request.
+Add uses the expected members, including absent ones; blocked changes are ineligible.
 No user approval can override blockers.
 Preview returns `status: "preview"` and `writeStatus: "not_attempted"`. It
 does not acquire write scopes or collect executable consent.
@@ -391,7 +474,7 @@ This command finishes; it does not wait for terminal input. Parse
 `TOPIC_ACTIONS_RESULT_JSON:`. Only `status: "review_ready"` supplies a
 `reviewId` and permits asking for approval. Display its complete `userMessage`,
 including account, target, every selected set/member, proposed changes,
-no-change topics and protections. Do not append approval notes. Keep `reviewId` and
+no-change topics and protections. Do not append approval notes except the diagnostics Add notice above. Keep `reviewId` and
 expiry metadata internal. For any other status, render the returned
 `userMessage` without asking for approval and stop.
 
@@ -419,7 +502,7 @@ For example, a two-topic enable review for Workday HR Topics supplies:
 ]
 ```
 
-Use Enable/Disable consistently, not Turn on/off. Leave every option initially
+Use Add/Enable/Disable consistently, not Turn on/off. Leave every option initially
 unset and do not mark an option recommended. Only an explicit selection of the
 returned action-specific option maps to `approve`; selection of **Not now**
 maps to `deny`. Dismissal, custom text, an ambiguous or multiple-option response
@@ -482,6 +565,8 @@ without a mode remains a read-only prerequisite inspection.
 
 ## Planning and approval rules
 
+The following state-only planning rules govern Enable/Disable; Add uses the content-backed rules above.
+
 The planner deduplicates selected membership. Known required topics cannot be
 valid members and remain defensively protected. Unknown required status does
 not block this policy and remains visible as a plain-language limitation
@@ -500,6 +585,7 @@ states, protections and delta. Approval lasts at most five minutes and is rechec
 before dispatch. Denial/cancellation changes nothing. Any drift requires a
 fresh review. A nonempty eligible scope already in the desired state is
 different from empty scope or an all-protected action.
+The same approval binding, expiry and fresh-review requirements apply to add.
 
 ## Current-state operations
 
@@ -517,39 +603,49 @@ previous operation.
 
 ## Execution and truthful return
 
+For enable/disable:
 The executor can submit at most one full-component, state-only changeset.
 Component reads and writes use the skill-owned `TopicActionsClient` in
 `scripts/topic_actions_client.py`. It sends the exact state-only changeset
 computed from the freshly revalidated inventory, without a second payload
 builder, content merging or automatic conflict handling. Retries and redirects
 are disabled. Preservation normalization is owned by topic actions as well.
+Add also submits at most one changeset per apply, built by the helper from fresh evidence:
+it inserts shipped dialogs disabled. Conflicts require a new review. Never construct a second payload or merge content in chat.
 There is no runtime import of Connect Workday or `minimalbot_evaluation`.
 Neutral ADK authentication, host validation and HTTP error utilities remain
 shared dependencies; this skill is not a standalone copy of the whole ADK.
 `AgentBuilderClient` is used for direct selected-agent identity verification,
-without requiring a particular realm or ALM enrollment.
+without requiring a particular realm or ALM enrollment for enable/disable.
+Only Add also runs the existing live Dev and ALM validation.
 Dispatch and readback are serialized per target within the
 process. Independent processes, workspaces or makers can still overlap;
 there is no durable cross-process write lock. This does not
 establish server-side stale-write protection. The native adapter
 independently binds submission to its freshly read selected target and an exact
-computed state-only payload, and consumes at most one submission attempt.
+computed payload, and consumes at most one submission attempt.
 
 After any submission, including timeout/conflict/error, the controller reads
 back and reports each observed result. Desired state after an uncertain
 submission is not attributed to this request. Verify non-state content and
 outside-scope preservation; otherwise report partial/unverified. Never replay,
-automatically roll back, request publishing, repair or continue a detached write.
+automatically roll back, publish, repair or continue a detached write.
 Any later attempt needs new evidence and approval.
+Add also verifies exact identity, presence, disabled state, content and blocking diagnostics.
+Observed presence or content after
+an uncertain submission is not attributed to this request.
 
 Preservation comparison tolerates `version` and `auditInfo.modifiedTimeUtc`
 updates only on topics in the approved delta, and generated `diagnostics` and
 `structuredCondition` within dialogue definitions, including dependent topics.
 Other content, identity, membership and outside-scope state/revision changes
-remain strict. This normalization applies only to post-submission readback;
+remain strict. For enable/disable, this normalization applies only to post-submission readback;
 review freshness and state-only payload checks remain unchanged. A genuine
 preservation failure must be distinguished from observed state success.
 Enabled state does not establish runtime health or resolved diagnostics.
+Add also compares live dialogs with converted shipped dialogs using the helper's normalization;
+other content, including comments, must match. Review freshness binds full evidence and shipped
+content. Distinguish preservation failures from verified presence and content too.
 
 For an unsuccessful submission, use the fixed plain-language failure text.
 Keep the safe failure category and `submissionHttpStatus` in the diagnostic
@@ -562,6 +658,7 @@ completed, completed-with-protections, partial and unverified outcomes.
 Protected topics are never reported as disabled. Partial, protected or
 uncertain scope must not complete the caller's whole-set request.
 
+All actions leave the local agent folder, component map and push baseline unchanged.
 Only short-lived pending reviews are persisted under `.local/topic-actions`.
 Pending reviews contain only the non-secret target/request, evidence/review fingerprint and
 expiry metadata; they never contain an approval, caller context, token or full

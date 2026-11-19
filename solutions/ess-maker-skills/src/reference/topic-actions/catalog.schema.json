@@ -91,6 +91,16 @@
       "properties": {
         "schemaName": {"$ref": "#/$defs/key"},
         "displayName": {"type": ["string", "null"]},
+        "description": {"type": "string"},
+        "managedProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "isManaged": {"type": "boolean"},
+            "isCustomizable": {"type": "boolean"}
+          }
+        },
+        "shareContext": {"type": "object"},
         "classification": {
           "enum": ["isv_topic", "required_system", "other_non_isv", "unknown"],
           "description": "Source-backed eligibility classification; supporting ISV system topics can be isv_topic, but core, example, behavioral and customer-authored topics are not set members."
@@ -117,6 +127,7 @@
             "name": {"$ref": "#/$defs/key"}
           }
         },
+        "contentFolder": {"$ref": "#/$defs/key"},
         "guidance": {
           "anyOf": [
             {"type": "null"},

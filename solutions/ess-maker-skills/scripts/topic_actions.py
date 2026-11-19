@@ -50,7 +50,7 @@ def _entry_message(reason: str, message: str) -> str:
     if reason == "cancelled":
         return "Canceled. No topics were changed."
     if reason == "invalid_request":
-        message = "Provide a valid enable or disable request with explicit whole topic-set keys. Restore is not supported."
+        message = "Provide a valid add, enable or disable request with explicit whole topic-set keys. Restore is not supported."
     elif reason == "setup_not_run":
         message = (
             "ADK setup has not established the account, agent and environment "
@@ -139,9 +139,9 @@ def validate_request(value: Any, *, list_sets: bool = False) -> dict[str, Any]:
             "invalid_request", "Provide one tenant, environment and agent ID."
         ) from exc
     action = value.get("action", "list" if list_sets else None)
-    if action not in (("list",) if list_sets else ("enable", "disable")):
+    if action not in (("list", "add") if list_sets else ("enable", "disable", "add")):
         raise TopicActionsError(
-            "invalid_request", "Choose one action: enable or disable. Restore is not supported."
+            "invalid_request", "Choose one action: add, enable or disable. Restore is not supported."
         )
     keys = value.get("setKeys", [] if list_sets else None)
     if (
@@ -159,6 +159,17 @@ def validate_request(value: Any, *, list_sets: bool = False) -> dict[str, Any]:
         raise TopicActionsError(
             "invalid_request", "Provide distinct, nonempty topic-set keys."
         )
+    if action == "add":
+        from topic_actions_catalog import load_catalog
+        from topic_actions_discovery import DiscoveryError
+
+        try:
+            catalog = load_catalog()
+        except DiscoveryError as error:
+            raise TopicActionsError(error.reason, str(error)) from None
+        supported = {item["key"] for item in catalog.document()["sets"] if "contentFolder" in item}
+        if any(key not in supported for key in keys):
+            raise TopicActionsError("content_required", "Add requires sets with shipped topic content.")
     entry = value.get("entry")
     context = value.get("callerContext", {})
     if (
@@ -307,6 +318,7 @@ def _result(
     *,
     target: dict[str, str] | None = None,
     verified: bool = False,
+    action: str | None = None,
 ) -> dict[str, Any]:
     result = {
         "contractVersion": 1,
@@ -328,7 +340,7 @@ def _result(
         },
         "callerContext": deepcopy(context),
     }
-    result["userMessage"] = result_text(result)
+    result["userMessage"] = result_text(result, action=action)
     return result
 
 
@@ -479,10 +491,17 @@ def run_topic_actions(
             backend = NativeActionBackend(
                 client, discovery_target, selected_keys, catalog, account, components,
             )
+            if list_sets and request["action"] == "add":
+                from topic_actions_content_actions import content_set_overview
+                result = content_set_overview(backend.read(), catalog, request["action"])
+                result["callerContext"] = deepcopy(request["callerContext"])
+                return result
             if list_sets:
                 result = agent_set_overview(backend.read(), catalog)
                 result["callerContext"] = deepcopy(request["callerContext"])
                 return result
+            if request["action"] == "add":
+                backend.action = "add"
             result = TopicActionSession(
                 backend, request["action"], caller_context=request["callerContext"],
             ).run(
@@ -537,10 +556,11 @@ def apply_topic_review(
     try:
         pending = TopicReviewStore(workspace_root).consume(review_id)
         if decision in ("deny", "cancel"):
-            result = _result("cancelled", "Canceled. No topics were changed.", {})
+            action = pending["request"]["action"]
+            result = _result("cancelled", "Canceled. No topics were changed.", {}, action=action)
             if decision == "deny":
                 result.update(status="denied", reason="denied", message="Not approved. No topics were changed.")
-                result["userMessage"] = result_text(result)
+                result["userMessage"] = result_text(result, action=action)
             return result
         if decision != "approve":
             raise TopicReviewError("explicit_approval_required")

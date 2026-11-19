@@ -49,6 +49,10 @@ class OperationEvidence:
         })
 
 
+class SubmissionNotAttempted(ValueError):
+    """Admission failed before the transport received a payload."""
+
+
 class ActionBackend(Protocol):
     def read(self) -> OperationEvidence: ...
     def admission_blockers(self, evidence: OperationEvidence) -> tuple[str, ...]: ...
@@ -82,7 +86,10 @@ def build_state_payload(evidence: OperationEvidence, plan: TopicPlan) -> dict:
                 raise ValueError("Unverified parent identity.")
         indexed[identity] = component
     changes = []
-    for change in plan.delta:
+    if plan.action == "add":
+        from topic_actions_content_actions import content_change_rows
+        changes = content_change_rows(evidence, plan)
+    for change in plan.delta if plan.action in ("enable", "disable") else ():
         component = indexed.get(change.component_id)
         if (
             component is None or component.get("$kind") != "DialogComponent"
@@ -114,7 +121,10 @@ def public_plan(
 ) -> dict:
     def changes(items):
         return [
-            {"componentId": item.component_id, "before": item.before, "after": item.after}
+            {"componentId": item.component_id, "before": item.before, "after": item.after,
+             **({"operation": item.operation, "schemaName": item.schema_name,
+                 "displayName": item.display_name, "contentDigest": item.content_digest}
+                if item.operation != "update" else {})}
             for item in items
         ]
 
@@ -156,6 +166,11 @@ def public_plan(
             for topic in evidence.snapshot.evidence.topics
             if topic.component_id in evidence.snapshot.evidence.selected_member_ids
         ]
+        if plan.action == "add":
+            result["currentStates"] = [
+                {"componentId": item.component_id, "state": item.state}
+                for item in evidence.snapshot.content_members
+            ]
     return result
 
 
@@ -274,6 +289,9 @@ def _reconcile(
     before: OperationEvidence, after: OperationEvidence, plan: TopicPlan,
 ) -> tuple[list[dict], bool, str]:
     """Observed desired state after an uncertain submission is not attribution."""
+    if plan.action == "add":
+        from topic_actions_content_actions import content_reconcile
+        return content_reconcile(before, after, plan)
     before_map = _component_map(before.body)
     after_map = _component_map(after.body)
     delta = {item.component_id: item for item in plan.delta}
@@ -332,7 +350,7 @@ class TopicActionSession:
         self, backend: ActionBackend, action: str, *, caller_context: dict | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        if action not in ("enable", "disable"):
+        if action not in ("enable", "disable", "add"):
             raise ValueError("Unsupported action.")
         self.backend = backend
         self.action = action
@@ -453,6 +471,8 @@ class TopicActionSession:
         try:
             self.backend.submit_once(plan.target.agent_id, payload)
             acknowledged = True
+        except SubmissionNotAttempted:
+            return self._result("blocked", plan=plan, blockers=("pre_dispatch_check_failed",))
         except AgentBuilderHTTPError as error:
             submission_http_status = error.status_code
             submission_reason = {
@@ -488,7 +508,10 @@ class TopicActionSession:
                 topics=[{
                     "componentId": identity, "state": "Unknown",
                     "status": "unverified", "reason": "readback_unavailable",
-                } for identity in fresh.snapshot.evidence.selected_member_ids],
+                } for identity in (
+                    [item.component_id for item in fresh.snapshot.content_members]
+                    if self.action == "add" else fresh.snapshot.evidence.selected_member_ids
+                )],
             )
         verified = scope_verified and all(
             item["status"] in ("observed_desired", "already_correct", "protected")
@@ -557,5 +580,8 @@ class TopicActionSession:
                 "unverified": "The submission outcome is uncertain. Observations are not proof that this request made the changes.",
             }[status],
         }
-        result["userMessage"] = result_text(result)
+        if self.action == "add":
+            from topic_actions_content_presentation import content_message
+            result["message"] = content_message(result)
+        result["userMessage"] = result_text(result, action=self.action)
         return result
