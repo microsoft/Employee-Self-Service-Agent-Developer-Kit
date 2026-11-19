@@ -37,6 +37,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _mcp_modules import load_org_announcements_modules  # noqa: E402
 
 _ORG_MODULES = load_org_announcements_modules()
+from base_client import LocalCredentialError  # noqa: E402
+
 org_server = _ORG_MODULES["server"]
 org_client = _ORG_MODULES["client"]
 GraphDirectoryError = _ORG_MODULES["graph_directory_client"].GraphDirectoryError
@@ -2430,6 +2432,72 @@ def test_overlapping_opens_do_not_share_an_active_title(fake_clients) -> None:
     assert client.title_ids == ["first-agent", "second-agent"]
 
 
+@pytest.mark.parametrize("tool", ["save_bulletin", "duplicate_bulletin", "transition_bulletin"])
+@pytest.mark.parametrize(
+    "body", [b"PRIVATE_RESPONSE not-json", b'"\xffPRIVATE_RESPONSE"', b'{"private":"PRIVATE_RESPONSE"}']
+)
+@pytest.mark.parametrize("response_phase", ["receipt", "reload"])
+def test_malformed_save_response_preserves_tool_no_repeat_contract(
+    monkeypatch, fake_clients, caplog, tool, body, response_phase
+) -> None:
+    import base64
+
+    token_payload = base64.urlsafe_b64encode(
+        json.dumps({"tid": TENANT_ID, "oid": OBJECT_ID}).encode()
+    ).rstrip(b"=")
+    monkeypatch.setenv("AGENTCONFIG_ACCESS_TOKEN", f"header.{token_payload.decode()}.signature")
+    monkeypatch.delenv("AGENTCONFIG_ACCESS_TOKEN_FILE", raising=False)
+    methods = []
+
+    def handler(request):
+        methods.append(request.method)
+        if request.method == "POST":
+            if response_phase == "receipt":
+                return httpx.Response(200, content=body)
+            return httpx.Response(200, json={"Id": BULLETIN_ID, "Errors": []})
+        if "POST" not in methods:
+            assert tool == "duplicate_bulletin"
+            return httpx.Response(200, json=_odata_config(audience=[]))
+        return httpx.Response(200, content=body)
+
+    client = org_client.OrgAnnouncementsClient(transport=httpx.MockTransport(handler))
+    _, graph = fake_clients(client)
+    arguments = {
+        "save_bulletin": _save_arguments(),
+        "duplicate_bulletin": {"id": BULLETIN_ID},
+        "transition_bulletin": {"id": BULLETIN_ID, "transition": "archive"},
+    }[tool]
+    try:
+        result = _call(tool, arguments)
+        payload = _structured(result)
+        assert payload["status"] == "failure"
+        assert payload["tenantId"] == TENANT_ID
+        assert payload["titleId"] == TITLE_ID
+        expected_codes = (
+            ["CommittedRefreshFailed", "ServiceError"]
+            if response_phase == "reload"
+            else ["ServiceError" if tool == "transition_bulletin" else "IndeterminateWrite"]
+        )
+        assert [error["code"] for error in payload["errors"]] == expected_codes
+        assert all(error["retryable"] is False for error in payload["errors"])
+        if response_phase == "reload":
+            assert "saved" in payload["errors"][0]["message"]
+            assert "do not repeat" in payload["errors"][0]["message"]
+        assert not {"manager", "item", "config"}.intersection(payload)
+        content = result[0] if isinstance(result, tuple) else result.content
+        exposed = json.dumps(payload) + " ".join(item.text for item in content) + caplog.text
+        assert "PRIVATE_RESPONSE" not in exposed
+        assert "decode" not in exposed.lower()
+        assert "Expecting value" not in exposed
+        assert graph.resolve_calls == []
+        expected_methods = ["GET", "POST"] if tool == "duplicate_bulletin" else ["POST"]
+        if response_phase == "reload":
+            expected_methods.append("GET")
+        assert methods == expected_methods
+    finally:
+        asyncio.run(client.aclose())
+
+
 @pytest.mark.parametrize(
     ("tool", "arguments"),
     [
@@ -2566,7 +2634,7 @@ _PRIVATE_CACHE_DETAIL = "/private/msal-cache PRIVATE_CREDENTIAL_DETAIL"
 
 
 def _local_credential_error(message: str) -> Exception:
-    return org_server.LocalCredentialError(message, object())
+    return LocalCredentialError(message, object())
 
 
 def _install_failing_graph_acquisition(monkeypatch, error, *, before_failure=None):
@@ -2677,7 +2745,7 @@ def test_graph_cache_failure_preserves_open_and_search_envelopes(
 
 @pytest.mark.parametrize(
     "error_factory",
-    [LockException, PermissionError, _local_credential_error],
+    [LockException, PermissionError, _local_credential_error, ValueError],
 )
 @pytest.mark.parametrize(
     ("tool", "arguments"),
@@ -2721,7 +2789,7 @@ def test_authoring_cache_failure_preserves_feature_envelopes(
 
 @pytest.mark.parametrize(
     "error_factory",
-    [LockException, PermissionError, _local_credential_error],
+    [LockException, PermissionError, _local_credential_error, ValueError],
 )
 def test_authoring_cache_failure_preserves_its_private_cause(
     monkeypatch, error_factory
@@ -2744,11 +2812,12 @@ def test_authoring_cache_failure_preserves_its_private_cause(
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("error_factory", [_local_credential_error, ValueError])
 def test_discovery_credential_failure_is_a_safe_tool_error(
-    monkeypatch,
+    monkeypatch, error_factory,
 ) -> None:
     def construct():
-        raise _local_credential_error(_PRIVATE_CACHE_DETAIL)
+        raise error_factory(_PRIVATE_CACHE_DETAIL)
 
     monkeypatch.setattr(org_server, "_client", None)
     monkeypatch.setattr(org_server, "OrgAnnouncementsClient", construct)

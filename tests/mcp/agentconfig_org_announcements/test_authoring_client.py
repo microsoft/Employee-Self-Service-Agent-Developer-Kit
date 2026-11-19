@@ -610,26 +610,48 @@ def test_a_partial_error_entry_keeps_its_field_and_gets_a_stable_code(
 @pytest.mark.parametrize(
     "body",
     [
+        b"PRIVATE_RESPONSE not-json",
+        b'"\xffPRIVATE_RESPONSE"',
+        [],
         {"Id": BULLETIN_ID},
         {"Id": BULLETIN_ID, "Errors": "bad"},
         {"Id": None, "Errors": []},
         _config(),
     ],
 )
-def test_invalid_save_receipts_are_rejected(monkeypatch, body) -> None:
-    client = _make_client(
-        monkeypatch, lambda request: httpx.Response(200, json=body)
-    )
+@pytest.mark.parametrize("operation", ["create", "update", "transition"])
+def test_invalid_save_receipts_are_rejected(monkeypatch, body, operation) -> None:
+    methods = []
+
+    def handler(request):
+        methods.append(request.method)
+        if isinstance(body, bytes):
+            return httpx.Response(200, content=body)
+        return httpx.Response(200, json=body)
+
+    client = _make_client(monkeypatch, handler)
 
     async def run() -> None:
-        with pytest.raises(org_client.AgentConfigApiError):
-            await client.save_bulletin(
-                TITLE_ID,
-                {"id": BULLETIN_ID, "status": "draft"},
+        try:
+            expected = (
+                org_client.IndeterminateWriteError
+                if operation == "create" else org_client.InvalidSaveResponseError
             )
-        await client.aclose()
+            with pytest.raises(expected) as caught:
+                if operation == "transition":
+                    await client.transition_bulletin(TITLE_ID, BULLETIN_ID, "retired")
+                else:
+                    payload = {"status": "draft"}
+                    if operation == "update":
+                        payload["id"] = BULLETIN_ID
+                    await client.save_bulletin(TITLE_ID, payload)
+            assert "PRIVATE_RESPONSE" not in str(caught.value)
+            assert not isinstance(caught.value, org_client.CommittedCanonicalReloadError)
+        finally:
+            await client.aclose()
 
     asyncio.run(run())
+    assert methods == ["POST"]
 
 
 def test_an_update_answered_with_a_different_record_is_rejected(
@@ -710,6 +732,39 @@ def test_keyed_reload_failure_is_reported_as_committed_refresh(
         await client.aclose()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("operation", ["save", "transition"])
+@pytest.mark.parametrize("body", [b"PRIVATE_RESPONSE not-json", b'"\xffPRIVATE_RESPONSE"'])
+def test_committed_reload_decode_failure_is_sanitized_without_reposting(
+    monkeypatch, operation, body
+) -> None:
+    methods = []
+
+    def handler(request):
+        methods.append(request.method)
+        if request.method == "POST":
+            return httpx.Response(200, json=_save_result())
+        return httpx.Response(200, content=body)
+
+    client = _make_client(monkeypatch, handler)
+
+    async def run():
+        try:
+            with pytest.raises(org_client.CommittedCanonicalReloadError) as caught:
+                if operation == "save":
+                    await client.save_bulletin(TITLE_ID, {"status": "draft"})
+                else:
+                    await client.transition_bulletin(TITLE_ID, BULLETIN_ID, "retired")
+            assert isinstance(caught.value.cause, org_client.AgentConfigApiError)
+            assert str(caught.value.cause) == (
+                "Org Announcements API returned an invalid canonical response"
+            )
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+    assert methods == ["POST", "GET"]
 
 
 @pytest.mark.parametrize("operation", ["save", "transition"])

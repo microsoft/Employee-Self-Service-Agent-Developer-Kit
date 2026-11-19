@@ -53,7 +53,6 @@ from client import (
     build_manager_state,
     is_deleted_item,
 )
-from base_client import LocalCredentialError
 from agent_title_resolution import (
     AgentTitleResolutionError,
     TitleResolutionCoordinator,
@@ -330,7 +329,7 @@ async def _construct_and_publish_client() -> None:
     try:
         try:
             client = await asyncio.to_thread(OrgAnnouncementsClient)
-        except (LocalCredentialError, LockException, OSError) as error:
+        except (ValueError, LockException, OSError) as error:
             raise _FailureResult(
                 "AuthenticationRequired",
                 "Organization announcement sign-in could not be completed. Try again.",

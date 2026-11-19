@@ -128,6 +128,33 @@ def test_the_authoring_client_is_built_once_and_reused(monkeypatch) -> None:
     assert constructions == [1]
 
 
+def test_plain_sign_in_failure_allows_fresh_construction(monkeypatch) -> None:
+    attempts = []
+    client = _FakeAuthoringClient()
+
+    def construct():
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise ValueError("Private browser callback failure")
+        return client
+
+    monkeypatch.setattr(org_server, "OrgAnnouncementsClient", construct)
+
+    async def run():
+        with pytest.raises(org_server._FailureResult) as caught:
+            await org_server.get_client()
+        assert caught.value.code == "AuthenticationRequired"
+        assert "Private" not in caught.value.message
+        assert org_server._client is None
+        assert org_server._client_construction_task is None
+        assert not org_server._client_lock.locked()
+        assert await org_server.get_client() is client
+        await org_server.release_client(client)
+
+    asyncio.run(run())
+    assert attempts == [True, True]
+
+
 def test_concurrent_first_calls_share_one_construction(monkeypatch) -> None:
     """Two tool calls at once must not race two interactive sign-ins."""
     constructions: list[int] = []
