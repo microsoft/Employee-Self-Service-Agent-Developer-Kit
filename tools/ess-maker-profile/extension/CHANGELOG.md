@@ -198,7 +198,7 @@
   it, but `tabGroups.close(tabs)` does), then opens a fresh chat in
   the editor area, focuses its input, and injects `/setup` via
   clipboard paste (the most reliable way — `chat.open({query,
-location:'editor'})` silently drops the query and the `type`
+  location:'editor'})` silently drops the query and the `type`
   command isn't always honoured by the chat input). Aux bar is then
   hidden for cleanliness.
 - Bumps `APPLIED_KEY` to `v4` so existing installs re-run the layout
@@ -321,7 +321,7 @@ location:'editor'})` silently drops the query and the `type`
   cascade: `chat.open` with `{query, isPartialQuery:false}` →
   `chat.open(query)` → editor variant → focus-then-open, and explicitly
   call `chat.submit` after. On total failure the slash command is
-  copied to the clipboard with a _modal_ warning so the failure is
+  copied to the clipboard with a *modal* warning so the failure is
   impossible to miss.
 
 ## 0.3.0 (POC)
