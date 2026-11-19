@@ -20,7 +20,17 @@ import yaml
 import requests
 
 from auth import authenticate, discover_tenant, load_config
-from agentbuilder import ring_from_environment_host
+from agentbuilder import (
+    AgentBuilderError,
+    ConnectivityClient,
+    authenticate as authenticate_ppapi,
+    connectivity_read_scopes,
+    derive_environment_host,
+    environment_id_from_host,
+    normalize_environment_id,
+    ring_from_environment_host,
+    tenant_id_from_access_token,
+)
 from evaluation_method_policy import (
     EvaluationMethodError,
     load_evaluation_documents,
@@ -35,7 +45,6 @@ from evaluation_review import (
     parse_review_marker,
     parse_review_metadata,
 )
-from flightcheck.pp_admin_client import PPAdminClient
 from flightcheck.powerplatform_client import PowerPlatformClient
 from fetch_and_setup import fetch_components
 from http_errors import APIError
@@ -362,22 +371,50 @@ def _discover_mcs_connections(
     signed_in_username: str | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
     """Return raw Copilot Studio connections and the authenticated username."""
+    return _discover_connector_connections(
+        config, environment_id, MCS_CONNECTOR_NAME, signed_in_username,
+    )
+
+
+def _discover_connector_connections(
+    config: dict[str, Any],
+    environment_id: str,
+    connector_name: str,
+    signed_in_username: str | None = None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Discover created/shared connections without legacy PowerApps access."""
     env_url = str(config["dataverseEndpoint"]).rstrip("/")
-    client = PPAdminClient(discover_tenant(env_url))
-    client.authenticate(
-        include_flow=False,
-        preferred_username=signed_in_username,
-    )
-    connections = client.get_connector_connections(
-        environment_id,
-        MCS_CONNECTOR_NAME,
-    )
-    _raise_api_error(connections, "list Copilot Studio connections")
-    if not isinstance(connections, list):
-        raise EvaluationRunError(
-            "Power Platform API returned an invalid connection list."
+    configured_ring = str(config.get("ring") or "").strip().casefold()
+    endpoint = str(config.get("powerPlatformApiEndpoint") or "").strip()
+    try:
+        inferred_ring = ring_from_environment_host(endpoint) if endpoint else ""
+        ring = configured_ring or inferred_ring or "prod"
+        if configured_ring and inferred_ring and configured_ring != inferred_ring:
+            raise ValueError("Configured ring and endpoint identify different service rings.")
+        expected_environment = normalize_environment_id(environment_id)
+        host = endpoint or derive_environment_host(environment_id, ring)
+        if normalize_environment_id(environment_id_from_host(host, ring)) != expected_environment:
+            raise ValueError("Configured endpoint identifies a different environment.")
+        tenant_id = discover_tenant(env_url)
+        with redirect_stdout(sys.stderr):
+            token, account = authenticate_ppapi(
+                tenant_id,
+                ring,
+                cache_path=Path(".local/.token_cache.bin"),
+                scopes=connectivity_read_scopes(ring),
+                account_hint=signed_in_username,
+                return_account_identity=True,
+                require_account_identity=True,
+            )
+        if tenant_id_from_access_token(token).casefold() != tenant_id.casefold():
+            raise AgentBuilderError("Connection discovery authenticated a different tenant.")
+        client = ConnectivityClient(token, ring=ring, environment_host=host)
+        connections = client.list_connector_connections(
+            environment_id, connector_name, follow_continuations=True,
         )
-    return connections, signed_in_username or client.signed_in_username
+    except (AgentBuilderError, ValueError, requests.RequestException) as exc:
+        raise EvaluationRunError(str(exc)) from exc
+    return connections, account
 
 
 def list_mcs_connections(
@@ -500,23 +537,15 @@ def resolve_tool_connections(
             "incomplete."
         )
 
-    env_url = str(config["dataverseEndpoint"]).rstrip("/")
-    client = PPAdminClient(discover_tenant(env_url))
-    client.authenticate(
-        include_flow=False,
-        preferred_username=signed_in_username,
+    connections, effective_username = _discover_connector_connections(
+        config, environment_id, connector_name, signed_in_username,
     )
-    connections = client.get_connector_connections(
-        environment_id,
-        connector_name,
-    )
-    _raise_api_error(connections, f"list {connector_name} connections")
     connected = connected_mcs_connections(connections)
     if not connected:
         return []
     if len(connected) > 1:
         username = str(
-            signed_in_username or client.signed_in_username or ""
+            signed_in_username or effective_username or ""
         ).casefold()
         matching = [
             connection for connection in connected
@@ -532,7 +561,7 @@ def resolve_tool_connections(
             return []
     selected = select_mcs_connection(
         connections,
-        signed_in_username or client.signed_in_username,
+        signed_in_username or effective_username,
     )
     return [{
         "botId": bot_id,

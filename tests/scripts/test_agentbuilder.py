@@ -261,6 +261,111 @@ def test_connector_connection_listing_fails_closed_on_mismatch(
         )
 
 
+def test_connector_connection_listing_follows_short_and_empty_pages() -> None:
+    url = f"{HOST}/connectivity/connectors/shared_microsoftcopilotstudio/connections"
+    connection = {
+        "name": "shared-profile",
+        "properties": {
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_microsoftcopilotstudio",
+            "environment": {"name": f"Default-{ENVIRONMENT_ID}"},
+            "statuses": [{"status": "Connected"}],
+        },
+    }
+    session = FakeSession([
+        FakeResponse({"value": [], "nextLink": f"{url}?api-version=1&$skiptoken=first"}),
+        FakeResponse({
+            "value": [connection],
+            "nextLink": f"{url}?api-version=1&$skiptoken=second",
+        }),
+        FakeResponse({"value": [], "nextLink": None}),
+    ])
+    client = agentbuilder.ConnectivityClient(
+        "fake-token", ring="test", environment_host=HOST, session=session,
+    )
+
+    assert client.list_connector_connections(
+        f"Default-{ENVIRONMENT_ID}",
+        "shared_microsoftcopilotstudio",
+        follow_continuations=True,
+    ) == [connection]
+    assert [call["url"] for call in session.calls] == [
+        url, f"{url}?api-version=1&$skiptoken=first",
+        f"{url}?api-version=1&$skiptoken=second",
+    ]
+    assert session.calls[0]["params"] == {
+        "api-version": "1", "$filter": f"environment eq 'Default-{ENVIRONMENT_ID}'",
+    }
+    assert all(call["params"] is None for call in session.calls[1:])
+    assert all("x-ms-api-context-type" not in call["headers"] for call in session.calls)
+
+
+@pytest.mark.parametrize(
+    "continuation",
+    [
+        "https://example.invalid/connections",
+        f"http://{HOST.removeprefix('https://')}/connectivity/connectors/shared_test/connections",
+        f"{HOST}/connectivity/connectors/shared_other/connections",
+        f"{HOST}/connectivity/connectors/shared_test/connections#fragment",
+        f"https://user@{HOST.removeprefix('https://')}/connectivity/connectors/shared_test/connections",
+        123,
+        "",
+    ],
+)
+def test_paginated_connector_listing_rejects_unsafe_continuations(continuation) -> None:
+    session = FakeSession([FakeResponse({"value": [], "nextLink": continuation})])
+    client = agentbuilder.ConnectivityClient(
+        "fake-token", ring="test", environment_host=HOST, session=session,
+    )
+    with pytest.raises(agentbuilder.AgentBuilderError, match="continuation"):
+        client.list_connector_connections(
+            ENVIRONMENT_ID, "shared_test", follow_continuations=True,
+        )
+    assert len(session.calls) == 1
+
+
+def test_paginated_connector_listing_rejects_repeated_continuation() -> None:
+    url = f"{HOST}/connectivity/connectors/shared_test/connections?skiptoken=repeated"
+    session = FakeSession([
+        FakeResponse({"value": [], "nextLink": url}),
+        FakeResponse({"value": [], "nextLink": url}),
+    ])
+    client = agentbuilder.ConnectivityClient(
+        "fake-token", ring="test", environment_host=HOST, session=session,
+    )
+    with pytest.raises(agentbuilder.AgentBuilderError, match="repeated"):
+        client.list_connector_connections(
+            ENVIRONMENT_ID, "shared_test", follow_continuations=True,
+        )
+    assert len(session.calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("body", "status", "error"),
+    [
+        ({"error": {"code": "Forbidden"}}, 403, "HTTP 403"),
+        ({"value": "not-a-list"}, 200, "invalid shape"),
+        (
+            {"value": [{"properties": {"apiId": "shared_other"}}]}, 200,
+            "different connector",
+        ),
+    ],
+)
+def test_paginated_connector_listing_never_returns_partial_success(body, status, error) -> None:
+    url = f"{HOST}/connectivity/connectors/shared_test/connections?skiptoken=next"
+    session = FakeSession([
+        FakeResponse({"value": [{"name": "first"}], "nextLink": url}),
+        FakeResponse(body, status_code=status),
+    ])
+    client = agentbuilder.ConnectivityClient(
+        "fake-token", ring="test", environment_host=HOST, session=session,
+    )
+    with pytest.raises(agentbuilder.AgentBuilderError, match=error):
+        client.list_connector_connections(
+            ENVIRONMENT_ID, "shared_test", follow_continuations=True,
+        )
+    assert len(session.calls) == 2
+
+
 def test_connector_error_preserves_safe_diagnostics() -> None:
     response = FakeResponse(
         {"error": {"code": "TooManyRequests"}},
@@ -359,7 +464,8 @@ def _non_auth_headers(call: dict[str, Any]) -> dict[str, str]:
     return headers
 
 
-def test_host_derivation_probes_primary_split_first() -> None:
+@pytest.mark.parametrize("environment_id", [ENVIRONMENT_ID, f"Default-{ENVIRONMENT_ID}"])
+def test_host_derivation_probes_primary_split_first(environment_id) -> None:
     attempted: list[str] = []
 
     def resolver(hostname: str, _port: int) -> list[object]:
@@ -369,7 +475,7 @@ def test_host_derivation_probes_primary_split_first() -> None:
         raise socket.gaierror
 
     host = agentbuilder.derive_environment_host(
-        ENVIRONMENT_ID,
+        environment_id,
         "test",
         resolver=resolver,
     )

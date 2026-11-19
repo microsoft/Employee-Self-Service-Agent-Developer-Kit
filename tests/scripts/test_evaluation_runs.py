@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import sys
 from pathlib import Path
@@ -19,6 +20,69 @@ sys.path.insert(0, str(SCRIPTS))
 
 import evaluation_runs  # noqa: E402
 from evaluation_review import compose_review_description  # noqa: E402
+
+
+MAKER_ENVIRONMENT_ID = "00000000-0000-4000-8000-000000001111"
+MAKER_TENANT_ID = "00000000-0000-4000-8000-000000009999"
+MAKER_HOST = (
+    "https://000000000000400080000000000011."
+    "11.environment.api.powerplatform.com"
+)
+
+
+@pytest.fixture
+def maker_connection_api(monkeypatch, tmp_path):
+    import agentbuilder
+    import requests
+
+    monkeypatch.chdir(tmp_path)
+    observed = {"connections": [], "requests": []}
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"tid": MAKER_TENANT_ID}).encode()
+    ).decode().rstrip("=")
+    observed["auth_result"] = {
+        "access_token": f"header.{payload}.signature",
+        "id_token_claims": {"preferred_username": "maker@example.com"},
+    }
+
+    class FakeApp:
+        def __init__(self, client_id, *, authority, token_cache):
+            observed["client_id"] = client_id
+            observed["authority"] = authority
+
+        def get_accounts(self):
+            return [{"username": "maker@example.com"}]
+
+        def acquire_token_silent(self, scopes, *, account):
+            observed["scopes"] = scopes
+            observed["account"] = account
+            if observed.get("interactive_only"):
+                return None
+            return observed["auth_result"]
+
+        def acquire_token_interactive(self, **kwargs):
+            observed["interactive"] = kwargs
+            return observed["auth_result"]
+
+    class FakeConnectivityClient:
+        def __init__(self, token, *, ring, environment_host):
+            observed["target"] = (token, ring, environment_host)
+
+        def list_connector_connections(self, environment_id, connector_name, **kwargs):
+            observed["requests"].append((environment_id, connector_name, kwargs))
+            if "error" in observed:
+                raise observed["error"]
+            return observed["connections"]
+
+    def no_network(*args, **kwargs):
+        pytest.fail("Connection discovery unit tests must not use the network")
+
+    monkeypatch.setattr(agentbuilder.msal, "PublicClientApplication", FakeApp)
+    monkeypatch.setattr(requests.sessions.Session, "request", no_network)
+    monkeypatch.setattr(evaluation_runs, "ConnectivityClient", FakeConnectivityClient)
+    monkeypatch.setattr(evaluation_runs, "discover_tenant", lambda _: MAKER_TENANT_ID)
+    monkeypatch.setattr(evaluation_runs, "derive_environment_host", lambda *_: MAKER_HOST)
+    return observed
 
 
 def _deployed_components():
@@ -1595,42 +1659,101 @@ def test_select_mcs_connection_validates_explicit_profile_status():
         raise AssertionError("Expected an invalid explicit profile to fail")
 
 
-def test_resolve_mcs_connection_uses_ppapi_signed_in_account(monkeypatch):
-    observed = {}
-
-    class FakeAdminClient:
-        signed_in_username = "maker@example.com"
-
-        def __init__(self, tenant_id):
-            observed["tenantId"] = tenant_id
-
-        def authenticate(self, **kwargs):
-            observed["authenticate"] = kwargs
-
-        def get_connector_connections(self, environment_id, connector_name):
-            return [
-                _connection("other", account_name="other@example.com"),
-                _connection("current", account_name="maker@example.com"),
-            ]
-
-    monkeypatch.setattr(
-        evaluation_runs,
-        "discover_tenant",
-        lambda env_url: "tenant-id",
-    )
-    monkeypatch.setattr(evaluation_runs, "PPAdminClient", FakeAdminClient)
+def test_resolve_mcs_connection_uses_ppapi_signed_in_account(
+    maker_connection_api, capsys,
+):
+    observed = maker_connection_api
+    observed["connections"] = [
+        _connection("other", account_name="other@example.com"),
+        _connection("current", account_name="maker@example.com"),
+    ]
 
     selected = evaluation_runs.resolve_mcs_connection(
         {"dataverseEndpoint": "https://example.crm.dynamics.com"},
-        "environment-id",
+        MAKER_ENVIRONMENT_ID,
         signed_in_username="maker@example.com",
     )
 
     assert selected["id"] == "current"
-    assert observed["authenticate"] == {
-        "include_flow": False,
-        "preferred_username": "maker@example.com",
-    }
+    assert observed["client_id"] == "417219b4-3a7d-42a2-bdb1-972bd8281a02"
+    assert observed["authority"] == f"https://login.microsoftonline.com/{MAKER_TENANT_ID}"
+    assert observed["scopes"] == [
+        "https://api.powerplatform.com/Connectivity.Connections.Read",
+    ]
+    assert observed["account"]["username"] == "maker@example.com"
+    assert observed["target"][1:] == ("prod", MAKER_HOST)
+    assert observed["requests"] == [(
+        MAKER_ENVIRONMENT_ID, "shared_microsoftcopilotstudio",
+        {"follow_continuations": True},
+    )]
+    assert capsys.readouterr().out == ""
+
+
+def test_maker_connection_discovery_keeps_shared_profile_selectable(maker_connection_api):
+    maker_connection_api["connections"] = [
+        _connection("shared", created_by_upn="owner@example.com"),
+    ]
+    selected = evaluation_runs.resolve_mcs_connection(
+        {"dataverseEndpoint": "https://example.crm.dynamics.com"},
+        f"Default-{MAKER_ENVIRONMENT_ID}",
+        requested_id="shared",
+    )
+    assert selected["id"] == "shared"
+    assert maker_connection_api["requests"][0][0] == f"Default-{MAKER_ENVIRONMENT_ID}"
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"ring": "unknown"},
+        {"ring": "preprod", "powerPlatformApiEndpoint": MAKER_HOST},
+        {"powerPlatformApiEndpoint": MAKER_HOST.replace("0011.", "0022.")},
+        {"powerPlatformApiEndpoint": "https://example.invalid"},
+    ],
+)
+def test_maker_connection_discovery_rejects_wrong_target_before_auth(
+    maker_connection_api, config,
+):
+    with pytest.raises(evaluation_runs.EvaluationRunError):
+        evaluation_runs._discover_mcs_connections(
+            {"dataverseEndpoint": "https://example.crm.dynamics.com", **config},
+            MAKER_ENVIRONMENT_ID,
+        )
+    assert "client_id" not in maker_connection_api
+    assert maker_connection_api["requests"] == []
+
+
+@pytest.mark.parametrize("failure", ["wrong_account", "wrong_tenant", "denied"])
+def test_maker_connection_discovery_rejects_auth_failures(maker_connection_api, failure):
+    result = maker_connection_api["auth_result"]
+    if failure == "wrong_account":
+        maker_connection_api["interactive_only"] = True
+        result["id_token_claims"]["preferred_username"] = "other@example.com"
+    elif failure == "wrong_tenant":
+        payload = base64.urlsafe_b64encode(
+            json.dumps({"tid": MAKER_ENVIRONMENT_ID}).encode()
+        ).decode().rstrip("=")
+        result["access_token"] = f"header.{payload}.signature"
+    else:
+        maker_connection_api["auth_result"] = {"error": "invalid_scope"}
+    with pytest.raises(evaluation_runs.EvaluationRunError):
+        evaluation_runs._discover_mcs_connections(
+            {"dataverseEndpoint": "https://example.crm.dynamics.com"},
+            MAKER_ENVIRONMENT_ID,
+            signed_in_username="maker@example.com",
+        )
+    assert maker_connection_api["requests"] == []
+
+
+def test_maker_connection_discovery_surfaces_permission_failure(maker_connection_api):
+    from agentbuilder import AgentBuilderHTTPError
+
+    maker_connection_api["error"] = AgentBuilderHTTPError("Connection listing", 403)
+    with pytest.raises(evaluation_runs.EvaluationRunError, match="HTTP 403"):
+        evaluation_runs._discover_mcs_connections(
+            {"dataverseEndpoint": "https://example.crm.dynamics.com"},
+            MAKER_ENVIRONMENT_ID,
+        )
 
 
 def test_list_mcs_connections_marks_signed_in_profile(monkeypatch):
@@ -1703,6 +1826,7 @@ def test_list_connections_command_prints_selectable_profiles(
 def test_resolve_tool_connections_uses_signed_in_account(
     monkeypatch,
     tmp_path,
+    maker_connection_api,
 ):
     installation = tmp_path / "config.json"
     installation.write_text(
@@ -1720,42 +1844,23 @@ def test_resolve_tool_connections_uses_signed_in_account(
         }),
         encoding="utf-8",
     )
-    observed = {}
-
-    class FakeAdminClient:
-        signed_in_username = "maker@example.com"
-
-        def __init__(self, tenant_id):
-            pass
-
-        def authenticate(self, **kwargs):
-            observed["authenticate"] = kwargs
-
-        def get_connector_connections(self, environment_id, connector_name):
-            assert connector_name == "shared_alchemy"
-            return [
-                _connection("other", account_name="other@example.com"),
-                _connection("current", account_name="maker@example.com"),
-            ]
+    maker_connection_api["connections"] = [
+        _connection("other", account_name="other@example.com"),
+        _connection("current", account_name="maker@example.com"),
+    ]
 
     monkeypatch.setattr(
         evaluation_runs,
         "INSTALLATION_CONFIG_PATH",
         installation,
     )
-    monkeypatch.setattr(
-        evaluation_runs,
-        "discover_tenant",
-        lambda env_url: "tenant-id",
-    )
-    monkeypatch.setattr(evaluation_runs, "PPAdminClient", FakeAdminClient)
 
     result = evaluation_runs.resolve_tool_connections(
         {
             "dataverseEndpoint": "https://example.crm.dynamics.com",
             "agent": {"schemaName": "contoso_agent"},
         },
-        "environment-id",
+        MAKER_ENVIRONMENT_ID,
         "bot-id",
         "maker@example.com",
     )
@@ -1771,14 +1876,16 @@ def test_resolve_tool_connections_uses_signed_in_account(
             ),
         }],
     }]
-    assert observed["authenticate"]["preferred_username"] == (
-        "maker@example.com"
-    )
+    assert maker_connection_api["requests"] == [(
+        MAKER_ENVIRONMENT_ID, "shared_alchemy", {"follow_continuations": True},
+    )]
+    assert maker_connection_api["account"]["username"] == "maker@example.com"
 
 
 def test_resolve_tool_connections_does_not_require_unrelated_profile(
     monkeypatch,
     tmp_path,
+    maker_connection_api,
 ):
     installation = tmp_path / "config.json"
     installation.write_text(
@@ -1797,36 +1904,18 @@ def test_resolve_tool_connections_does_not_require_unrelated_profile(
         encoding="utf-8",
     )
 
-    class FakeAdminClient:
-        signed_in_username = "maker@example.com"
-
-        def __init__(self, tenant_id):
-            pass
-
-        def authenticate(self, **kwargs):
-            pass
-
-        def get_connector_connections(self, environment_id, connector_name):
-            return []
-
     monkeypatch.setattr(
         evaluation_runs,
         "INSTALLATION_CONFIG_PATH",
         installation,
     )
-    monkeypatch.setattr(
-        evaluation_runs,
-        "discover_tenant",
-        lambda env_url: "tenant-id",
-    )
-    monkeypatch.setattr(evaluation_runs, "PPAdminClient", FakeAdminClient)
 
     result = evaluation_runs.resolve_tool_connections(
         {
             "dataverseEndpoint": "https://example.crm.dynamics.com",
             "agent": {"schemaName": "contoso_agent"},
         },
-        "environment-id",
+        MAKER_ENVIRONMENT_ID,
         "bot-id",
         "maker@example.com",
     )

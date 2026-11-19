@@ -111,6 +111,17 @@ automatically. Ask the user to select with the structured question control and
 run command must validate it against this environment and connected status.
 Do not silently choose a profile.
 
+For Dataverse-backed evaluation discovery, the signed-in operator uses the
+ESS-owned client and the PPAPI `Connectivity.Connections.Read` delegated scope
+with `/connectivity/connectors/{connector}/connections` on the environment host.
+Results include only connections created by or shared with that operator,
+including Copilot Studio connections; they are not an administrator inventory.
+Discovery follows continuation pages and fails on denied or incomplete reads
+rather than treating a partial list as complete. No fixed page size is assumed.
+An app grant does not replace connection sharing or the operator's access.
+This maker-path migration does not change legacy admin discovery, BAP, Flow,
+Dataverse authentication, or the native MinimalBot evaluation transport.
+
 If no connected profile is available, explain the actual prerequisite and
 offer **Retry connection discovery** after repair; stop instead of running.
 Missing, disconnected, or unverified selected profiles block both backends.
