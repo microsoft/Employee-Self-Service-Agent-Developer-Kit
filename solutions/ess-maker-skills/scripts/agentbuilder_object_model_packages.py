@@ -42,8 +42,8 @@ PACKAGES = (
     ),
     ObjectModelPackage(
         "Microsoft.Bcl.HashCode",
-        "1.1.0",
-        Path("lib/netcoreapp2.1/Microsoft.Bcl.HashCode.dll"),
+        "6.0.0",
+        Path("lib/netstandard2.0/Microsoft.Bcl.HashCode.dll"),
     ),
 )
 

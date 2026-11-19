@@ -1,5 +1,7 @@
 #### Instructions for the Entra administrator
 
+For the full steps, see [Register an application in Microsoft Entra ID for OIDC integration with ServiceNow](https://learn.microsoft.com/en-us/copilot/employee-self-service/declarative-agent-servicenow-hr-it#task-1-register-an-application-in-microsoft-entra-id-for-oidc-integration-with-servicenow).
+
 Your organization is connecting the Employee Self-Service (ESS) HR or IT agent to ServiceNow, so employees can create and track HR cases and IT tickets while signed in as themselves. This needs an app registration in Microsoft Entra ID that ServiceNow trusts to identify users. You need the **Global Administrator** or **Cloud Application Administrator** role.
 
 If your organization already has an app registration that ServiceNow uses to verify Microsoft Entra sign-in, for example for ServiceNow Knowledge or single sign-on, check with your ServiceNow administrator before creating another one. ServiceNow allows only one OIDC configuration per Microsoft Entra tenant. See [Coexistence with the Microsoft Graph connector for ServiceNow](https://learn.microsoft.com/en-us/microsoft-365/copilot/employee-self-service/declarative-agent-servicenow-hr-it#coexistence-with-the-microsoft-graph-connector-for-servicenow).
@@ -10,7 +12,7 @@ If your organization already has an app registration that ServiceNow uses to ver
 2. Go to **App registrations** and select **New registration**.
 3. Enter a name that shows its purpose, for example *ESS ServiceNow sign-in*. Keep the default account type and leave **Redirect URI** empty.
 4. Select **Register**.
-5. On the app's **Overview** page, copy the **Application (client) ID** and the **Directory (tenant) ID**.
+5. On the app's **Overview** page, copy the **Application (client) ID**.
 
 **Part 2: Add the user claims to the token**
 
@@ -33,4 +35,4 @@ If your organization already has an app registration that ServiceNow uses to ver
 3. Change the claim's format from the default email format to a format that fits the value. If the format stays email, sign-in fails.
 4. If Microsoft Entra returns an error after you add the claim, set `acceptMappedClaims` to `true` in the app's **Manifest** (single-tenant apps), or configure a custom signing key.
 
-**Send back to the maker:** the Application (client) ID, the Directory (tenant) ID, and, if you did Part 4, the claim name. Don't send any secret.
+**Send back to the maker:** the Application (client) ID and, if you did Part 4, the claim name. Don't send any secret.

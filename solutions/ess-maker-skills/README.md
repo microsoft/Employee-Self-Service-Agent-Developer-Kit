@@ -420,15 +420,63 @@ administrator details. Custom-engine Workday guidance is maintained on
 
 ### ServiceNow (HRSD / ITSM)
 
-Run `/connect servicenow` to connect an ESS DA HR (HRSD) or ESS DA IT (ITSM)
-Development agent. Connect shows the supported ServiceNow agents, lets you pick
-one or paste its Copilot Studio link, and resumes the saved progress for the
-selected agent. Settings without a reliable DA-scoped API require explicit
-maker or administrator confirmation. These items are reported as human-verified
+Connect your agent to ServiceNow for HR cases (HRSD) or IT tickets (ITSM). For
+Declarative Agents, this release supports the **ESS DA HR** and **ESS DA IT**
+agents. Run `/connect servicenow` to start. Connect shows the supported
+ServiceNow agents, lets you pick one or paste its Copilot Studio link, and
+resumes the saved progress for the selected agent.
+
+Before you start:
+
+- Open the `solutions/ess-maker-skills` folder in VS Code and start a **new**
+  Copilot chat.
+- Sign in with the Microsoft work account that can access the target Power
+  Platform environment and agent. This is separate from your GitHub Copilot
+  sign-in; see
+  [Authentication prompts](../../setup/README.md#authentication-prompts).
+- You do not need to run `/setup` first. If the workspace or the agent is not
+  prepared yet, Connect hands off to Setup automatically, then returns to the
+  ServiceNow connection without Setup's final summary or menu. `/setup` itself
+  is unchanged.
+- If VS Code asks to approve local commands, you can select **Allow all** for
+  the chat session to avoid repeated prompts. These approvals do not grant
+  Power Platform access.
+
+The guided experience helps you:
+
+- Share requests with your Microsoft Entra and ServiceNow administrators and
+  check their confirmations. Administrators make those changes; the kit does
+  not create Entra applications or ServiceNow sign-in objects for you.
+- Create the ServiceNow connection in Copilot Studio and verify that it is
+  connected and used by the agent.
+- Review and enable the ServiceNow topics, and save the employee portal URL.
+  The skill asks for the full portal URL, never assumes a path such as `/sp` or
+  `/esc`, and asks you to confirm it before saving anything.
+- Run a real request in the Copilot Studio Test pane (for example, "Show my
+  open HR cases" or "Show my open IT tickets"), then tell the skill what it
+  returned: the expected results, an empty result, an error, or finish without
+  testing. Your answer decides pass, fail or untested; an empty result never
+  counts as a pass.
+
+Settings without a reliable DA-scoped API require explicit maker or
+administrator confirmation. These items are reported as human-verified
 ("Confirmed by the administrator", "Confirmed by the Maker") rather than as
 passing Connect checks.
 
-Connecting ServiceNow does not publish the agent.
+**Test and Production:** Test and Production are read-only for topics and the
+portal URL. Publish the Dev agent, deploy it to Test using your organization's
+approved process, copy the Test agent's Copilot Studio link, and paste it into
+`/connect servicenow`. The skill reuses verified administrator setup from Dev
+where it applies, checks that environment's own connection, topics and portal
+URL, and asks you to confirm with a Test pane request. If something needs a
+fix, change it in Dev, publish again, deploy again, then tell the skill
+"Done". Production is a separate run with the Prod agent link.
+
+Connecting ServiceNow does not publish or promote the agent. See the
+[ServiceNow walkthrough](src/skills/connect/servicenow/entry.md) for the guided
+procedure, the [HR](src/skills/connect/servicenow-da-hrsd/SKILL.md) and
+[IT](src/skills/connect/servicenow-da-itsm/SKILL.md) Dev lifecycles, and the
+[Test and Production guide](src/skills/connect/servicenow/realms.md).
 
 ### Developer integration tools
 
