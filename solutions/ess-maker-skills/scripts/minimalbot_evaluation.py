@@ -1330,7 +1330,7 @@ class MinimalBotEvaluationClient:
         *,
         _retry_on_conflict: bool = True,
     ) -> dict[str, Any]:
-        """Update existing dialog components with drift and identity checks."""
+        """Update existing dialogs; requireExpectedDialog pins a reviewed snapshot."""
         if not updates:
             raise MinimalBotEvaluationError(
                 "No MinimalBot dialog updates were requested."
@@ -1410,6 +1410,15 @@ class MinimalBotEvaluationClient:
                 desired_clean = _without_server_generated_fields(
                     desired_dialog
                 )
+                if update.get("requireExpectedDialog") and remote_dialog != expected_clean:
+                    raise ComponentEditError(
+                        "The topic changed after the reviewed snapshot. No write was sent.",
+                        {
+                            "componentId": component_id, "schemaName": schema_name,
+                            "expectedDialog": expected_clean, "remoteDialog": remote_dialog,
+                            "desiredDialog": desired_clean, "writeAttempted": False,
+                        },
+                    )
                 if remote_dialog not in (expected_clean, desired_clean):
                     try:
                         effective_dialog = _reconcile_dialog_update(

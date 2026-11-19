@@ -368,6 +368,140 @@ def instruction_cli(component, monkeypatch, tmp_path, fake_tenant_id):
     )
 
 
+@pytest.mark.parametrize("apply", [False, True])
+def test_instruction_update_reports_baseline_drift_and_blocks_unacknowledged_save(
+    instruction_cli, capsys, apply,
+):
+    fixture = instruction_cli
+    fixture.component["metadata"]["instructions"]["segments"][0]["value"] = "Remote route."
+    cli.main(["read", "--output", str(fixture.expected)])
+    desired = copy.deepcopy(fixture.metadata)
+    desired["instructions"]["segments"][0]["value"] = "Local route."
+    fixture.agent_file.write_text(json.dumps(desired), encoding="utf-8")
+    baseline = fixture.agent_folder / ".baseline" / "agent.mcs.yml"
+    original = (baseline.read_bytes(), fixture.agent_file.read_bytes())
+    capsys.readouterr()
+    args = ["update", "--draft", str(fixture.agent_file), "--expected", str(fixture.expected)]
+
+    if apply:
+        with pytest.raises(native.ComponentEditError, match="changed since") as error:
+            cli.main([*args, "--yes"])
+        result = error.value.evidence
+    else:
+        assert cli.main(args) == 0
+        result = json.loads(capsys.readouterr().out)
+
+    assert result["saveBlocked"] is True
+    assert result["writeAttempted"] is False
+    assert result["baselineComparison"] == {
+        "baseline": fixture.metadata["instructions"],
+        "remote": fixture.component["metadata"]["instructions"],
+        "draft": desired["instructions"],
+    }
+    fixture.transport.update_agent_instructions.assert_not_called()
+    assert (baseline.read_bytes(), fixture.agent_file.read_bytes()) == original
+
+
+@pytest.mark.parametrize("problem", ["missing", "invalid"])
+@pytest.mark.parametrize("acknowledge", [False, True])
+def test_instruction_update_requires_usable_baseline_even_with_acknowledgement(
+    instruction_cli, problem, acknowledge,
+):
+    fixture = instruction_cli
+    baseline = fixture.agent_folder / ".baseline" / "agent.mcs.yml"
+    if problem == "missing":
+        baseline.unlink()
+    else:
+        baseline.write_text("invalid YAML conversion", encoding="utf-8")
+    draft_before = fixture.agent_file.read_bytes()
+    args = [
+        "update", "--draft", str(fixture.agent_file),
+        "--expected", str(fixture.expected), "--yes",
+    ]
+    if acknowledge:
+        args.append("--acknowledge-remote-changes")
+
+    with pytest.raises(native.ComponentEditError, match="baseline") as error:
+        cli.main(args)
+
+    assert error.value.__cause__ is not None
+    assert error.value.evidence["writeAttempted"] is False
+    assert error.value.evidence["baselinePath"] == str(baseline)
+    fixture.transport.update_agent_instructions.assert_not_called()
+    assert fixture.agent_file.read_bytes() == draft_before
+    assert baseline.exists() is (problem != "missing")
+
+
+@pytest.mark.parametrize("drift_stage", ["none", "before-command", "before-write"])
+def test_acknowledged_instruction_drift_pins_reviewed_snapshot(
+    instruction_cli, monkeypatch, drift_stage,
+):
+    fixture = instruction_cli
+    fixture.component["metadata"]["instructions"]["segments"][0]["value"] = "Reviewed route."
+    cli.main(["read", "--output", str(fixture.expected)])
+    desired = copy.deepcopy(fixture.metadata)
+    desired["instructions"] = copy.deepcopy(fixture.component["metadata"]["instructions"])
+    desired["instructions"]["segments"].append(
+        {"$kind": "TextSegment", "value": "Approved addition."}
+    )
+    fixture.agent_file.write_text(json.dumps(desired), encoding="utf-8")
+    baseline = fixture.agent_folder / ".baseline" / "agent.mcs.yml"
+    original = (baseline.read_bytes(), fixture.agent_file.read_bytes())
+    latest = copy.deepcopy(fixture.component)
+    if drift_stage != "none":
+        latest["metadata"]["instructions"]["segments"][0]["value"] = "Changed after review."
+    saved = copy.deepcopy(latest)
+    saved["metadata"]["instructions"] = desired["instructions"]
+    initial = latest if drift_stage == "before-command" else fixture.component
+    client, request = _client(monkeypatch, [
+        _payload(initial), _payload(latest), _payload(saved),
+    ])
+    monkeypatch.setattr(cli, "_native_client", lambda *_args: client)
+    args = [
+        "update", "--draft", str(fixture.agent_file), "--expected", str(fixture.expected),
+        "--acknowledge-remote-changes", "--yes",
+    ]
+
+    if drift_stage == "none":
+        assert cli.main(args) == 0
+        request.assert_called_once()
+        submitted = request.call_args.kwargs["body"]["botComponentChanges"][0]
+        assert submitted["component"]["metadata"]["instructions"] == desired["instructions"]
+        assert yaml.safe_load(baseline.read_text())["instructions"] == desired["instructions"]
+    else:
+        with pytest.raises((ValueError, native.MinimalBotEvaluationError), match="changed"):
+            cli.main(args)
+        request.assert_not_called()
+        assert (baseline.read_bytes(), fixture.agent_file.read_bytes()) == original
+
+
+def test_instruction_already_current_allows_noop_with_older_baseline(
+    instruction_cli, monkeypatch, capsys,
+):
+    fixture = instruction_cli
+    fixture.component["metadata"]["instructions"]["segments"][0]["value"] = "Already saved."
+    fixture.agent_file.write_text(
+        json.dumps(fixture.component["metadata"], indent=4), encoding="utf-8",
+    )
+    fixture.component["metadata"]["unknownSetting"] = {"newer": "remote metadata"}
+    cli.main(["read", "--output", str(fixture.expected)])
+    capsys.readouterr()
+    client, request = _client(
+        monkeypatch, [_payload(fixture.component), _payload(fixture.component)],
+    )
+    monkeypatch.setattr(cli, "_native_client", lambda *_args: client)
+
+    assert cli.main([
+        "update", "--draft", str(fixture.agent_file),
+        "--expected", str(fixture.expected), "--yes",
+    ]) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["saveBlocked"] is False
+    assert result["writeAttempted"] is False
+    request.assert_not_called()
+
+
 def test_cli_uses_agent_yaml_and_acknowledges_only_instruction_section(
     instruction_cli,
 ):

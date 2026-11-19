@@ -505,6 +505,153 @@ def test_read_uses_component_map_identity_and_can_project_yaml(topic_cli):
     assert json.loads(projection.read_text(encoding="utf-8")) == component["dialog"]
 
 
+@pytest.mark.parametrize("apply", [False, True])
+def test_update_reports_baseline_drift_and_blocks_unacknowledged_save(topic_cli, capsys, apply):
+    component = _register_existing(topic_cli)
+    baseline = topic_cli.agent_folder / ".baseline" / "topics" / topic_cli.draft.name
+    component["dialog"]["modelDescription"] = "Newer remote description."
+    expected = topic_cli.root / "expected.json"
+    authoring.main(["read", "--topic", str(topic_cli.draft), "--output", str(expected)])
+    draft = {**topic_cli.dialog, "modelDescription": "Local proposed description."}
+    topic_cli.draft.write_text(json.dumps(draft), encoding="utf-8")
+    original = (baseline.read_bytes(), topic_cli.draft.read_bytes())
+    capsys.readouterr()
+    args = ["update", "--draft", str(topic_cli.draft), "--expected", str(expected)]
+
+    if apply:
+        with pytest.raises(native.ComponentEditError, match="changed since") as error:
+            authoring.main([*args, "--yes"])
+        result = error.value.evidence
+    else:
+        assert authoring.main(args) == 0
+        result = json.loads(capsys.readouterr().out)
+
+    assert result["saveBlocked"] is True
+    assert result["writeAttempted"] is False
+    assert result["baselineComparison"] == {
+        "baseline": topic_cli.dialog, "remote": component["dialog"], "draft": draft,
+    }
+    topic_cli.transport.update_dialog_components.assert_not_called()
+    assert (baseline.read_bytes(), topic_cli.draft.read_bytes()) == original
+
+
+@pytest.mark.parametrize("problem", ["missing", "invalid"])
+@pytest.mark.parametrize("acknowledge", [False, True])
+def test_update_requires_usable_baseline_even_with_acknowledgement(
+    topic_cli, problem, acknowledge,
+):
+    _register_existing(topic_cli)
+    expected = topic_cli.root / "expected.json"
+    authoring.main(["read", "--topic", str(topic_cli.draft), "--output", str(expected)])
+    baseline = topic_cli.agent_folder / ".baseline" / "topics" / topic_cli.draft.name
+    if problem == "missing":
+        baseline.unlink()
+    else:
+        baseline.write_text("invalid YAML conversion", encoding="utf-8")
+    draft_before = topic_cli.draft.read_bytes()
+    args = ["update", "--draft", str(topic_cli.draft), "--expected", str(expected), "--yes"]
+    if acknowledge:
+        args.append("--acknowledge-remote-changes")
+
+    with pytest.raises(native.ComponentEditError, match="baseline") as error:
+        authoring.main(args)
+
+    assert error.value.__cause__ is not None
+    assert error.value.evidence["writeAttempted"] is False
+    assert error.value.evidence["baselinePath"] == str(baseline)
+    topic_cli.transport.update_dialog_components.assert_not_called()
+    assert topic_cli.draft.read_bytes() == draft_before
+    assert baseline.exists() is (problem != "missing")
+
+
+@pytest.mark.parametrize("drift_stage", ["none", "before-command", "before-write"])
+def test_acknowledged_topic_drift_pins_reviewed_snapshot(
+    topic_cli, monkeypatch, drift_stage,
+):
+    component = _register_existing(topic_cli)
+    component["dialog"]["modelDescription"] = "Reviewed remote description."
+    expected = topic_cli.root / "expected.json"
+    authoring.main(["read", "--topic", str(topic_cli.draft), "--output", str(expected)])
+    desired = copy.deepcopy(component["dialog"])
+    desired["beginDialog"]["actions"][0]["activity"]["text"][0]["segments"][0][
+        "value"
+    ] = "Approved local response."
+    topic_cli.draft.write_text(json.dumps(desired), encoding="utf-8")
+    baseline = topic_cli.agent_folder / ".baseline" / "topics" / topic_cli.draft.name
+    original = (baseline.read_bytes(), topic_cli.draft.read_bytes())
+    latest = copy.deepcopy(component)
+    if drift_stage != "none":
+        latest["dialog"]["modelDescription"] = "Changed again after review."
+    if drift_stage == "before-command":
+        component["dialog"] = copy.deepcopy(latest["dialog"])
+    saved = {**latest, "dialog": desired}
+    client = native.MinimalBotEvaluationClient(
+        topic_cli.target["environment"]["id"], topic_cli.target["agent"]["id"],
+        topic_cli.target["environment"]["tenantId"],
+    )
+    client.read_components = Mock(side_effect=[
+        {"changeToken": "before", "botComponentChanges": [{"component": latest}]},
+        {"changeToken": "after", "botComponentChanges": [{"component": saved}]},
+    ])
+    client._request = Mock(return_value=(SimpleNamespace(status_code=200, headers={}), {}))
+    monkeypatch.setattr(authoring, "_native_client", lambda *_args: client)
+    args = [
+        "update", "--draft", str(topic_cli.draft), "--expected", str(expected),
+        "--acknowledge-remote-changes", "--yes",
+    ]
+
+    if drift_stage == "none":
+        assert authoring.main(args) == 0
+        client._request.assert_called_once()
+        submitted = client._request.call_args.kwargs["body"]["botComponentChanges"][0]
+        assert submitted["component"]["dialog"] == desired
+        assert json.loads(baseline.read_text(encoding="utf-8")) == desired
+    else:
+        with pytest.raises(native.ComponentEditError, match="reviewed snapshot") as error:
+            authoring.main(args)
+        assert error.value.evidence["writeAttempted"] is False
+        client._request.assert_not_called()
+        assert (baseline.read_bytes(), topic_cli.draft.read_bytes()) == original
+
+
+@pytest.mark.parametrize("already_current", [False, True])
+def test_topic_baseline_comparison_normalizes_content_and_allows_noop(
+    topic_cli, monkeypatch, capsys, already_current,
+):
+    component = _register_existing(topic_cli)
+    if already_current:
+        component["dialog"]["modelDescription"] = "Already saved remote description."
+    desired = copy.deepcopy(component["dialog"])
+    if not already_current:
+        desired["modelDescription"] = "Approved local description."
+    topic_cli.draft.write_text(json.dumps(desired, indent=4), encoding="utf-8")
+    component["dialog"]["diagnostics"] = []
+    component["dialog"]["beginDialog"]["structuredCondition"] = {"generated": True}
+    expected = topic_cli.root / "expected.json"
+    authoring.main(["read", "--topic", str(topic_cli.draft), "--output", str(expected)])
+    capsys.readouterr()
+    saved = {**component, "dialog": desired}
+    client = native.MinimalBotEvaluationClient(
+        topic_cli.target["environment"]["id"], topic_cli.target["agent"]["id"],
+        topic_cli.target["environment"]["tenantId"],
+    )
+    client.read_components = Mock(side_effect=[
+        {"changeToken": "before", "botComponentChanges": [{"component": component}]},
+        {"changeToken": "after", "botComponentChanges": [{"component": saved}]},
+    ])
+    client._request = Mock(return_value=(SimpleNamespace(status_code=200, headers={}), {}))
+    monkeypatch.setattr(authoring, "_native_client", lambda *_args: client)
+
+    assert authoring.main([
+        "update", "--draft", str(topic_cli.draft), "--expected", str(expected), "--yes",
+    ]) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["saveBlocked"] is False
+    assert result["writeAttempted"] is (not already_current)
+    assert client._request.call_count == (0 if already_current else 1)
+
+
 def test_update_sends_captured_yaml_with_fresh_read_baseline(topic_cli):
     component = _register_existing(topic_cli)
     before = topic_cli.root / "before.json"

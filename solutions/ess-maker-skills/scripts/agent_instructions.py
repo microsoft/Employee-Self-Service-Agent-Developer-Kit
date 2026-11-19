@@ -136,13 +136,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--account")
     parser.add_argument("--draft", type=Path, help="Desired agent.mcs.yml draft.")
     parser.add_argument("--expected", type=Path, help="Fresh AgentBuilder read snapshot.")
+    parser.add_argument(
+        "--acknowledge-remote-changes", action="store_true",
+        help="Save a reviewed reconciliation against the unchanged --expected snapshot.",
+    )
     parser.add_argument("--output", type=Path, help="Reusable JSON result path.")
     parser.add_argument("--yaml-output", type=Path, help="Optional reusable read projection.")
     parser.add_argument("--yes", action="store_true", help="Apply the separately approved save.")
     args = parser.parse_args(argv)
 
-    if args.operation == "read" and (args.yes or args.draft or args.expected):
-        parser.error("read does not accept --yes, --draft, or --expected.")
+    if args.operation == "read" and (
+        args.yes or args.draft or args.expected or args.acknowledge_remote_changes
+    ):
+        parser.error(
+            "read does not accept --yes, --draft, --expected, or --acknowledge-remote-changes."
+        )
     if args.operation == "update" and (args.draft is None or args.expected is None):
         parser.error("update requires --draft and --expected.")
     if args.yaml_output and args.operation != "read":
@@ -211,8 +219,36 @@ def main(argv: list[str] | None = None) -> int:
             "desiredInstructions": desired_instructions,
             "changed": desired_instructions != expected_instructions,
             "saved": False,
+            "writeAttempted": False,
         }
     )
+    baseline_path = agent_folder / ".baseline" / "agent.mcs.yml"
+    result["baselinePath"] = str(baseline_path)
+    try:
+        baseline_instructions = _metadata_from_yaml(
+            baseline_path.read_text(encoding="utf-8"), "agent:baseline",
+        )["instructions"]
+    except (OSError, ValueError, ObjectModelConverterError) as exc:
+        raise ComponentEditError(
+            "The instruction baseline is unavailable or cannot be converted. No write was sent.",
+            {**result, "saveBlocked": True},
+        ) from exc
+    remote_instructions = current["component"]["metadata"]["instructions"]
+    result["baselineComparison"] = {
+        "baseline": baseline_instructions,
+        "remote": remote_instructions,
+        "draft": desired_instructions,
+    }
+    result["saveBlocked"] = (
+        remote_instructions not in (baseline_instructions, desired_instructions)
+        and not args.acknowledge_remote_changes
+    )
+    if args.yes and result["saveBlocked"]:
+        raise ComponentEditError(
+            "Instructions changed since the acknowledged baseline. Review and reconcile "
+            "the draft before using --acknowledge-remote-changes. No write was sent.",
+            result,
+        )
     if args.yes:
         update = native.update_agent_instructions(
             expected_component,

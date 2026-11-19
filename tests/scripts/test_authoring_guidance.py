@@ -86,10 +86,20 @@ def test_retained_drafts_are_reconciled_before_using_fresh_expected_state():
     update = _read("src/skills/topics/update/SKILL.md")
     push = _read("src/skills/topics/push-experience.md")
     for guidance in (update, push):
-        assert "Use the acknowledged baseline or earlier read, when available" in guidance
+        assert "authoring-experience.md#baseline-drift-before-saving" in guidance
+        assert "acknowledged baseline, freshly read remote content and complete proposed draft" in guidance
         assert "Preserve unrelated remote changes in the proposal." in guidance
         assert "Resolve overlapping edits through the existing review" in guidance
         assert "fresh snapshot as `--expected`" in guidance
+    authoring = _read("src/skills/topics/authoring-experience.md")
+    drift = authoring.split("### Baseline drift before saving\n", 1)[1].split("\n### ", 1)[0]
+    assert "`saveBlocked` is true" in drift
+    assert "`baselineComparison`" in drift
+    assert "After the maker approves the reconciled proposal" in drift
+    assert "`--acknowledge-remote-changes`" in drift
+    assert "current content to still match that reviewed snapshot" in drift
+    assert "Do not overwrite or advance the acknowledged baseline" in drift
+    assert "flag does not bypass unavailable baseline evidence" in drift
 
 
 def test_workflow_deletion_stops_without_runnable_mutation_steps():
