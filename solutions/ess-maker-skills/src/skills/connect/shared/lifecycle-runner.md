@@ -94,9 +94,7 @@ For Entra and ServiceNow identity actions, the `resume-handoff` business-group
 availability gate is the only availability question. Do not invoke
 `identity-direct-handoff`, render its ordinary instructions, or ask its data
 questions until that acknowledgement is current. Once current, require
-`decision: instructions-required`, render its `ordinaryReply.text` verbatim
-(it already contains the plain-text lead-in and the Ready-to-send fenced
-block),
+`decision: instructions-required`, render its `ordinaryReply.text` verbatim,
 and ask only its returned data questions. `decision: no-action`
 means current completed/reused evidence skips both availability and
 instructions.
@@ -153,7 +151,7 @@ waiting; Test requires the actual maker result, and any contract-defined
 interactive mutation requires its actual maker choice and validation. Show
 the final `renderBlock.text` only when the controller
 returns complete and every contract phase has a current invocation verified
-marker; its closing sentence states what the Maker-reported Test pane result does and does not cover. Keep these updates short: one current step and one result update, not
+marker. Keep these updates short: one current step and one result update, not
 per-subrequest heartbeats or repeated full tables.
 
 **Files:**
@@ -256,13 +254,8 @@ below.
    records an acknowledgement scoped to that business group, provider,
    profile, agent, environment, contract revision, and group definition.
    Show the newly returned `renderBlock.text` before any action.
-   It is maker-facing wording only: a short lead-in that connects to the
-   previous step, the numbered steps or Ready-to-send message when the
-   phase has one, and nothing else. Show it verbatim. It never renders the
-   target, responsible role, runbook path, expected evidence, or completion
-   boundary; those stay in the controller JSON and the action docs for the
-   agent. The credential lead-in names the saved User Claim and User Field
-   only when both are recorded.
+   It contains the current task's target, responsible role, supported
+   runbook/location, expected non-secret evidence, and completion boundary.
    Availability is acknowledgement only. Continue only from the returned
    lifecycle decision and its separate action completion/evidence question.
 5. On **No**, rerun with the same group ID and context hash plus
@@ -274,16 +267,7 @@ below.
    earlier group. A raw `done` phase in **Rechecking** still enters its group
    until current verification completes. Valid current completed/reused
    groups are skipped through the existing verified-phase path.
-7. For **Maker configuration and validation**, the **Yes** answer asked at the
-   start of that group is also the role attestation for every mutating phase
-   in it (`credential`, `topics`, `portal-url`). The controller records
-   `roleAttestations.{requiredRole}` in the same write as the group
-   acknowledgement (and backfills it for an already-acknowledged group on
-   resume). Do not show `permission-gate.md`'s **Confirm role** question for
-   those phases. If `roleAttestations.{requiredRole}` is missing or invalid at
-   a mutating phase, do not run the action or ask a role question there: rerun
-   `resume-handoff` so the phase-start question is asked first. A **No**
-   answer records nothing and mutates nothing.
+
 Availability means the collaborator is available. It does not authenticate,
 authorize, verify permission, prove admin evidence, grant mutation consent,
 confirm agent binding, or prove Test success. Do not collect names, email
@@ -573,9 +557,7 @@ including after resume.
 - the map key exactly equals the phase's `requiredRole`.
 
 When valid, set `GATE_RESULT = "pass"` without asking again. When absent or
-invalid, apply the normal attested `permission-gate.md` (DA ServiceNow never
-reaches this prompt for its Maker phases; see item 7 of **DA ServiceNow
-business-group availability**). On pass, persist:
+invalid, apply the normal attested `permission-gate.md`. On pass, persist:
 
 ```json
 {

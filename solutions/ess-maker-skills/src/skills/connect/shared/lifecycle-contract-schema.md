@@ -245,12 +245,6 @@ confirmation only:
   lifecycle state, reuse that evidence without asking again.
 - A missing, malformed, non-attested, wrong-provider, wrong-agent, or
   wrong-role entry is invalid and the gate must ask again.
-- Exception for DA ServiceNow (`servicenow-da-hrsd`, `servicenow-da-itsm`):
-  the controller records `roleAttestations.{requiredRole}` when the maker
-  answers **Yes** to the availability question asked at the start of
-  **Maker configuration and validation**. Mutating phases in that group
-  therefore never show **Confirm role**; a missing entry reruns
-  `resume-handoff` instead of prompting mid-phase.
 - Explicit lifecycle reset/reinitialization must remove `roleAttestations`
   together with the lifecycle state. Plan reset alone must not leave a role
   attestation behind.

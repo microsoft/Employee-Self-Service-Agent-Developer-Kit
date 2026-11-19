@@ -203,6 +203,35 @@ Immediately before consuming the result, read the current
 the shared runner; it does not replace L.2 live re-verification, L.4a role and
 rollback gates, action-result handling, or L.5 completion.
 
+## ServiceNow additions to the shared runner
+
+These rules apply only to ServiceNow and extend `lifecycle-runner.md`; no other
+provider uses them.
+
+- **Role attestation.** For **Maker configuration and validation**, the **Yes**
+  answer to the availability question asked at the start of that group is also
+  the role attestation for every mutating phase in it (`credential`, `topics`,
+  `portal-url`). The controller records `roleAttestations.{requiredRole}` in
+  the same write as the group acknowledgement (and backfills it for an
+  already-acknowledged group on resume). Do not show `permission-gate.md`'s
+  **Confirm role** question for those phases, so those phases never show
+  **Confirm role**. If `roleAttestations.{requiredRole}` is missing or invalid
+  at a mutating phase, do not run the action or ask a role question there:
+  rerun `resume-handoff` so the phase-start question is asked first. A **No**
+  answer records nothing and mutates nothing.
+- **Administrator instructions.** Render `ordinaryReply.text` verbatim; it
+  already contains the plain-text lead-in and the Ready-to-send fenced block.
+- **Phase `renderBlock.text`.** After **Yes**, the newly returned
+  `renderBlock.text` is maker-facing wording only: a short lead-in that
+  connects to the previous step, the numbered steps or Ready-to-send message
+  when the phase has one, and nothing else. Show it verbatim. It never renders
+  the target, responsible role, runbook path, expected evidence, or completion
+  boundary; those stay in the controller JSON and the action docs for the
+  agent. The credential lead-in names the saved User Claim and User Field only
+  when both are recorded.
+- **Final `renderBlock.text`.** Its closing sentence states what the
+  Maker-reported Test pane result does and does not cover.
+
 ## Parse the handoff
 
 Parse the returned `servicenow.resume-handoff.v1` object:

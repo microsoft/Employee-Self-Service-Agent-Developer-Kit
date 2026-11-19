@@ -388,6 +388,38 @@ def test_servicenow_connect_guides_require_the_opening_verbatim() -> None:
         ) in text, path.name
 
 
+def test_servicenow_only_runner_rules_live_in_entry_not_shared_runner() -> None:
+    skills = _SOLUTION / "src" / "skills" / "connect"
+    entry = " ".join(
+        (skills / "servicenow" / "entry.md").read_text(encoding="utf-8").split()
+    )
+    section = entry.split("## ServiceNow additions to the shared runner", 1)[
+        1
+    ].split("## Parse the handoff", 1)[0]
+    for phrase in (
+        "the **Yes** answer to the availability question asked at the start of "
+        "that group is also the role attestation for every mutating phase in it",
+        "`roleAttestations.{requiredRole}` in the same write as the group "
+        "acknowledgement",
+        "so those phases never show **Confirm role**",
+        "rerun `resume-handoff` so the phase-start question is asked first",
+        "A **No** answer records nothing and mutates nothing",
+        "Render `ordinaryReply.text` verbatim",
+        "maker-facing wording only",
+        "never renders the target, responsible role, runbook path",
+        "closing sentence states what the Maker-reported Test pane result "
+        "does and does not cover",
+    ):
+        assert phrase in section, phrase
+
+    for name in ("lifecycle-runner.md", "lifecycle-contract-schema.md"):
+        shared = (skills / "shared" / name).read_text(encoding="utf-8")
+        assert "Exception for DA ServiceNow" not in shared, name
+        assert "item 7" not in shared, name
+        assert "maker-facing wording only" not in shared, name
+        assert "closing sentence states" not in shared, name
+
+
 def test_servicenow_connect_guides_require_the_test_ready_message_verbatim() -> None:
     skills = _SOLUTION / "src" / "skills" / "connect"
     for path in (
