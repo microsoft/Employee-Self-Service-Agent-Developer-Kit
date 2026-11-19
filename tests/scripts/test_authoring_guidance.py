@@ -74,9 +74,13 @@ def test_topic_actions_companion_catalog_matches_pinned_git_content():
     reference = SOLUTION / "src" / "reference" / "topic-actions"
     additions = json.loads((reference / "catalog.authoring-additions.json").read_text())
     base = additions["baseCatalog"]
-    content = (reference / base["file"]).read_bytes().replace(b"\r\n", b"\n")
-    blob = hashlib.sha1(f"blob {len(content)}\0".encode() + content).hexdigest()
-    assert blob == base["gitBlob"], base["file"]
+    for filename, expected_blob in (
+        (base["file"], base["gitBlob"]),
+        ("catalog.schema.json", "f20a61ef9fdf8c120f21706712153c509bf014a5"),
+    ):
+        content = (reference / filename).read_bytes().replace(b"\r\n", b"\n")
+        blob = hashlib.sha1(f"blob {len(content)}\0".encode() + content).hexdigest()
+        assert blob == expected_blob, filename
     primary = json.loads((reference / base["file"]).read_text())
     schema = json.loads((reference / "catalog.schema.json").read_text())
     Draft202012Validator(schema).validate(primary)
