@@ -147,7 +147,7 @@ After a change, it reads back the topic states and reports the result.
 | `/manage-topics disable Workday HR Topics and ServiceNow HR Topics` | Review both sets in one request, when both are available |
 
 This changes topic states on the selected agent, not just local files. It does
-not configure ISV connections or publish the agent. See the
+not configure ISV connections. See the
 [Manage topics walkthrough](src/skills/manage-topics/SKILL.md) for the detailed
 flow.
 
