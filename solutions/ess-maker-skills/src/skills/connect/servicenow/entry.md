@@ -20,7 +20,7 @@ command, and substitute it wherever a command shows `python`. If the launcher
 cannot import the kit's dependencies, stop and tell the maker to rerun
 `/setup`; do not repair the runtime from Connect.
 
-**STOP — render before acting.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant message — before any other tool call — must contain `renderBlock.text` verbatim (the grouped phases view; it already ends with the current step line). `renderBlock.text` is the only renderable field: never render anything under `internal`, never write your own checklist, and never add a Check/Status table. Never summarize it or write "render the plan" instead. This overrides the Message-block silence rule above.
+**STOP — render before acting.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant message — before any other tool call — must contain `renderBlock.text` verbatim (the grouped phases view; it already ends with the current step line). `renderBlock.text` is the only renderable field: never render anything under `internal`, never write your own checklist, and never add a Check/Status table. Never summarize it or write "render the plan" instead. At the start of a fresh run `renderBlock.text` begins with the connection opening ("We'll connect ... so employees can ..."); emit it verbatim as part of the same message, and never write your own opening or repeat it later. This overrides the Message-block silence rule above.
 
 **Hard rules.** Read `src/skills/connect/shared/lifecycle-runner.md` before the first action. When `resume-handoff` returns `renderBlock`, emit `renderBlock.text` verbatim as an assistant message; terminal output does not count. Never edit `lifecycle.json` by hand; record results with `record-checkpoint-results`. Run every command with the launcher resolved by `/setup` (`py -3`, `python3`, then `python`), never assuming bare `python`.
 
@@ -598,6 +598,33 @@ configure the ServiceNow Knowledge connector.
 
 Use the [ServiceNow Knowledge connector guidance](https://learn.microsoft.com/en-us/microsoftsearch/servicenow-knowledge-connector)
 for that setup.
+
+**End message.**
+
+**Unclear ServiceNow administrator return.** When the ServiceNow reply says
+the work is done but does not confirm the saved configuration or does not name
+both the **User Claim** and the **User Field**, never infer the missing value
+and never ask the maker to interpret settings. Record nothing, then show the
+Message that matches what is missing (the first when neither value is named,
+the second when the claim is named but the User Field is missing). Statements
+that an existing Knowledge or single sign-on setup "already works" use the
+next block instead:
+
+**Message:**
+
+Thanks. Please ask your ServiceNow administrator to confirm that the
+configuration is saved and name both the **User Claim** and **User Field**.
+
+That will clarify which settings identify the signed-in employee.
+
+**End message.**
+
+**Message:**
+
+We have the saved-configuration confirmation and User Claim `{CLAIM_NAME}`.
+Ask your administrator which **User Field** they selected.
+
+Send that value on its own.
 
 **End message.**
 

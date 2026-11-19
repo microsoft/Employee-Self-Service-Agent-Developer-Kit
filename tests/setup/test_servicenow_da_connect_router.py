@@ -370,6 +370,49 @@ def test_servicenow_entra_guide_reads_claim_from_reply_not_upfront(
     assert "Clarification and recovery Messages" in guide
 
 
+def test_servicenow_connect_guides_require_the_opening_verbatim() -> None:
+    skills = _SOLUTION / "src" / "skills" / "connect"
+    for path in (
+        skills / "servicenow" / "entry.md",
+        skills / "servicenow-da-hrsd" / "SKILL.md",
+        skills / "servicenow-da-itsm" / "SKILL.md",
+    ):
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert (
+            "At the start of a fresh run `renderBlock.text` begins with the "
+            "connection opening"
+        ) in text, path.name
+        assert (
+            "emit it verbatim as part of the same message, and never write "
+            "your own opening or repeat it later"
+        ) in text, path.name
+
+
+def test_servicenow_connect_entry_has_unclear_administrator_return_messages() -> None:
+    raw = (
+        _SOLUTION / "src" / "skills" / "connect" / "servicenow" / "entry.md"
+    ).read_text(encoding="utf-8")
+    section = raw.split("## Clarification and recovery Messages", 1)[1].split(
+        "## ServiceNow rules", 1
+    )[0]
+    normalized = " ".join(section.split())
+
+    for message in (
+        "Thanks. Please ask your ServiceNow administrator to confirm that "
+        "the configuration is saved and name both the **User Claim** and "
+        "**User Field**.",
+        "That will clarify which settings identify the signed-in employee.",
+        "We have the saved-configuration confirmation and User Claim "
+        "`{CLAIM_NAME}`. Ask your administrator which **User Field** they "
+        "selected.",
+        "Send that value on its own.",
+    ):
+        assert message in normalized
+    assert normalized.index("Unclear ServiceNow administrator return") < (
+        normalized.index('Administrator says only "already working"')
+    )
+
+
 def test_servicenow_connect_entry_has_flow_clarification_messages() -> None:
     skills = _SOLUTION / "src" / "skills" / "connect"
     raw = (skills / "servicenow" / "entry.md").read_text(encoding="utf-8")

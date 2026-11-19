@@ -12946,14 +12946,14 @@ def test_phase_progress_final_text_requires_every_current_verified_marker() -> N
     assert portal["status"] == "rechecking"
     final = complete["internal"]["groupedFinalText"]
     assert final.endswith(
-        "Other request types and sign-in for other employees haven't been "
+        "Creating tickets and sign-in for other employees haven't been "
         "verified."
     )
     assert (
-        "Your ServiceNow connection worked for the request "
-        "`List my open IT tickets`. "
+        "**Your ServiceNow connection worked for the IT ticket lookup.** "
+        "Employee Self-Service IT returned the tickets you expected in the "
+        "Test pane."
     ) in final
-    assert "Employee Self-Service (IT) returned the result you expected" in final
     assert "**Phases**" in final
     assert "Responsible role:" in final
     assert "Connection progress:" not in final
@@ -16192,6 +16192,115 @@ def test_resume_handoff_render_block_is_one_ready_to_emit_message(
     )
     assert "assistant message" in block["instruction"]
     assert "Replace the leading `python`" in (result["checkpoints"]["interpreterNote"])
+
+
+@pytest.mark.parametrize(
+    ("profile", "agent", "purpose", "forbidden"),
+    [
+        ("hrsd", "Employee Self-Service HR", "HR cases", "IT"),
+        (
+            "itsm",
+            "Employee Self-Service IT",
+            "ServiceNow IT tickets",
+            "HR",
+        ),
+    ],
+)
+def test_dev_opening_is_rendered_once_at_fresh_start(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    agent: str,
+    purpose: str,
+    forbidden: str,
+) -> None:
+    context, _, profile = _recording_setup(monkeypatch, tmp_path, profile)
+    context["environment"]["display_name"] = "Contoso Dev"
+    with snow.product_profile_context(profile):
+        first = snow.resume_handoff(context, executed_actions=frozenset())
+        second = snow.resume_handoff(context, executed_actions=frozenset())
+        state = snow._load_lifecycle_state(context)
+
+    text = first["renderBlock"]["text"]
+    assert text.startswith(
+        f"We'll connect **{agent}** to ServiceNow in **Contoso Dev** so "
+        f"employees can create and track their own {purpose}."
+    )
+    assert (
+        "You'll need help from your ServiceNow and Microsoft Entra "
+        "administrators. We'll confirm their setup, create the connection "
+        "in Copilot Studio, then test it with your account."
+    ) in text
+    assert (
+        "We're checking whether your account can configure this agent in "
+        "Contoso Dev before setup begins."
+    ) in text
+    assert "**ServiceNow instance:**" not in text
+    assert f"{forbidden} cases" not in text.split("\n\n")[0]
+    assert "We'll connect" not in second["renderBlock"]["text"]
+    assert state["openingShown"]["shownAt"]
+
+
+def test_dev_opening_includes_instance_and_omits_unrecorded_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, _, profile = _recording_setup(monkeypatch, tmp_path, "hrsd")
+    context["environment"].pop("display_name", None)
+    context["environment"].pop("displayName", None)
+    context["environment"].pop("name", None)
+    with snow.product_profile_context(profile):
+        state = snow._load_lifecycle_state(context)
+        state["adminSetup"]["preflight"]["instanceName"] = "dev184242"
+        text = snow._dev_opening_text(context, state)
+
+    assert "to ServiceNow so employees can" in text
+    assert "**ServiceNow instance:** https://dev184242.service-now.com" in text
+    assert "can configure this agent before setup begins." in text
+    assert context["environment"]["id"] not in text
+
+
+def test_dev_opening_is_not_shown_on_resume(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, _, profile = _recording_setup(monkeypatch, tmp_path, "hrsd")
+    context["environment"]["display_name"] = "Contoso Dev"
+    with snow.product_profile_context(profile):
+        state = snow._load_lifecycle_state(context)
+        state["phases"]["preflight"]["status"] = "done"
+        snow._write_lifecycle_state(context, state)
+        result = snow.resume_handoff(
+            context,
+            executed_actions=frozenset({"preflight"}),
+        )
+
+    assert result["progress"]["mode"] == "resume"
+    assert "We'll connect" not in result["renderBlock"]["text"]
+
+
+@pytest.mark.parametrize(
+    ("profile", "lookup", "records"),
+    [("hrsd", "HR case lookup", "cases"), ("itsm", "IT ticket lookup", "tickets")],
+)
+def test_dev_final_message_follows_spec_and_omits_unrecorded_environment(
+    profile: str,
+    lookup: str,
+    records: str,
+) -> None:
+    with snow.product_profile_context(profile):
+        named = snow._dev_final_message("Contoso Dev")
+        unnamed = snow._dev_final_message(None)
+
+    assert named.startswith(
+        f"**Your ServiceNow connection worked for the {lookup} in Contoso Dev.**"
+    )
+    assert f"returned the {records} you expected in the Test pane." in named
+    assert named.endswith(
+        f"Creating {records} and sign-in for other employees haven't been "
+        "verified."
+    )
+    assert f"for the {lookup}.**" in unnamed
 
 
 @pytest.mark.parametrize(

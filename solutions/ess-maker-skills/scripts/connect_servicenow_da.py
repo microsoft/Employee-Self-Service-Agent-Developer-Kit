@@ -9900,6 +9900,23 @@ def _phase_status_icon(status: str) -> str:
         ) from exc
 
 
+_DEV_FINAL_SCOPE = {
+    "hrsd": ("HR case lookup", "cases"),
+    "itsm": ("IT ticket lookup", "tickets"),
+}
+
+
+def _dev_final_message(environment_display_name: str | None) -> str:
+    lookup, records = _DEV_FINAL_SCOPE[ACTIVE_PROFILE.key]
+    in_env = f" in {environment_display_name}" if environment_display_name else ""
+    return (
+        f"**Your ServiceNow connection worked for the {lookup}{in_env}.** "
+        f"{_spec_agent_name()} returned the {records} you expected in the "
+        f"Test pane.\n\nCreating {records} and sign-in for other employees "
+        "haven't been verified."
+    )
+
+
 _STAGE_WAITING_TEXT = {
     "entra-registration": (
         "We're waiting for your Entra administrator's Application (client) ID "
@@ -9925,6 +9942,7 @@ def _build_phase_progress(
     *,
     executed_actions: frozenset[str],
     verified_phases: frozenset[str],
+    environment_display_name: str | None = None,
 ) -> dict[str, Any]:
     phases = contract.get("phases")
     if not isinstance(phases, list) or not phases:
@@ -10043,18 +10061,8 @@ def _build_phase_progress(
         )
 
     grouped = render_grouped()
-    environment_id = (
-        state.get("environmentId") if isinstance(state, dict) else None
-    )
-    environment_clause = (
-        f" in environment `{environment_id}`" if environment_id else ""
-    )
     final_message = (
-        f"Your ServiceNow connection worked for the request "
-        f"`{ACTIVE_PROFILE.test_prompt}`{environment_clause}. "
-        f"{ACTIVE_PROFILE.agent_display_name} returned the result you "
-        "expected in the Test pane. Other request types and sign-in for "
-        "other employees haven't been verified."
+        _dev_final_message(environment_display_name)
         if decision.get("decision") == "complete"
         and completed_count == len(items)
         else None
@@ -10394,6 +10402,83 @@ def _display_environment_name(context: dict[str, Any]) -> str:
     ) or str(context["environment"]["id"])
 
 
+def _recorded_environment_name(context: dict[str, Any]) -> str | None:
+    return _first_text(
+        context.get("environment"),
+        ("display_name", "displayName", "name"),
+    )
+
+
+def _spec_agent_name() -> str:
+    return ACTIVE_PROFILE.agent_display_name.replace("(", "").replace(")", "")
+
+
+_DEV_OPENING_PURPOSE = {
+    "hrsd": "create and track their own HR cases",
+    "itsm": "create and track their own ServiceNow IT tickets",
+}
+
+
+def _dev_opening_text(
+    context: dict[str, Any],
+    state: dict[str, Any] | None,
+) -> str:
+    """Step 1 opening for a fresh Dev run; omits values that are not recorded."""
+    environment = _recorded_environment_name(context)
+    in_bold = f" in **{environment}**" if environment else ""
+    in_plain = f" in {environment}" if environment else ""
+    lines = [
+        f"We'll connect **{_spec_agent_name()}** to ServiceNow{in_bold} so "
+        f"employees can {_DEV_OPENING_PURPOSE[ACTIVE_PROFILE.key]}.",
+        "",
+        "You'll need help from your ServiceNow and Microsoft Entra "
+        "administrators. We'll confirm their setup, create the connection "
+        "in Copilot Studio, then test it with your account.",
+    ]
+    setup = state.get("adminSetup") if isinstance(state, dict) else None
+    preflight = setup.get("preflight") if isinstance(setup, dict) else None
+    instance = (
+        preflight.get("instanceName") if isinstance(preflight, dict) else None
+    )
+    if isinstance(instance, str) and instance.strip():
+        try:
+            instance_name = normalize_instance_name(instance)
+        except ServiceNowConnectError:
+            instance_name = None
+        if instance_name:
+            lines.extend(
+                [
+                    "",
+                    "**ServiceNow instance:** "
+                    f"https://{instance_name}.service-now.com",
+                ]
+            )
+    lines.extend(
+        [
+            "",
+            "We're checking whether your account can configure this agent"
+            f"{in_plain} before setup begins.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _take_dev_opening(
+    context: dict[str, Any],
+    state: dict[str, Any] | None,
+    progress: dict[str, Any],
+) -> str | None:
+    """Return the opening once per lifecycle, only at the start of a fresh run."""
+    if progress.get("mode") != "fresh" or not isinstance(state, dict):
+        return None
+    if state.get("openingShown"):
+        return None
+    text = _dev_opening_text(context, state)
+    state["openingShown"] = {"shownAt": _utc_now()}
+    _write_lifecycle_state(context, state)
+    return text
+
+
 def _current_task_guidance(
     context: dict[str, Any],
     state: dict[str, Any],
@@ -10690,6 +10775,7 @@ def _resume_progress(
         decision,
         executed_actions=executed_actions,
         verified_phases=verified_phases,
+        environment_display_name=_recorded_environment_name(context),
     )
 
 
@@ -11114,6 +11200,13 @@ def resume_handoff(
         availability_group_id=availability_group_id,
         availability_context_sha256=availability_context_sha256,
     )
+    opening = _take_dev_opening(context, state, progress)
+
+    def with_opening(block: dict[str, Any]) -> dict[str, Any]:
+        if opening:
+            block["text"] = f"{opening}\n\n{block['text']}"
+        return block
+
     result: dict[str, Any] = {
         "schemaVersion": "servicenow.resume-handoff.v1",
         "provider": ACTIVE_PROFILE.provider_key,
@@ -11124,10 +11217,12 @@ def resume_handoff(
         "lifecycle": decision,
         "progress": progress,
         "transport": transport,
-        "renderBlock": _resume_render_block(
-            progress,
-            transport,
-            group_changed=group_changed,
+        "renderBlock": with_opening(
+            _resume_render_block(
+                progress,
+                transport,
+                group_changed=group_changed,
+            )
         ),
     }
     if (
@@ -11169,11 +11264,13 @@ def resume_handoff(
     pending_input = _pending_preflight_input(state, decision)
     if pending_input is not None:
         result["pendingInput"] = pending_input
-        result["renderBlock"] = _resume_render_block(
-            progress,
-            transport,
-            group_changed=group_changed,
-            waiting=True,
+        result["renderBlock"] = with_opening(
+            _resume_render_block(
+                progress,
+                transport,
+                group_changed=group_changed,
+                waiting=True,
+            )
         )
         return result
     if decision.get("decision") == "run-action":
