@@ -212,4 +212,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from adk_telemetry import script_error_boundary
+
+    with script_error_boundary("scan_globals"):
+        sys.exit(main())

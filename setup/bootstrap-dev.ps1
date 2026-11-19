@@ -5,13 +5,13 @@
 .DESCRIPTION
     Downloads the installer and runs it with -InstallMode developer, giving
     the maker the default VS Code layout (activity bar, file explorer,
-    status bar visible) plus automatic /setup injection into the Copilot
-    Chat side panel. This is the shortcut for makers who already know they
-    want the developer experience and want to skip the Maker/Developer
-    terminal prompt.
+    status bar visible) plus the rendered README preview. `/setup` is
+    user-driven - run it yourself in Copilot Chat when ready. This is the
+    shortcut for makers who already know they want the developer experience
+    and want to skip the Maker/Developer terminal prompt.
 
     New customers should use bootstrap.ps1, which asks in the terminal
-    which experience to install and defaults to Maker (chat-first) mode.
+    which experience to install and defaults to Maker (guided rail) mode.
 
         iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-dev.ps1)
 

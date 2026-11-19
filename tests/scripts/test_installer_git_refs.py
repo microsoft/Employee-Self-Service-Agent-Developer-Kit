@@ -24,6 +24,15 @@ def test_windows_installer_supports_rerunning_a_pinned_tag() -> None:
     )
 
 
+def test_windows_standalone_stops_when_requested_code_cannot_be_refreshed() -> None:
+    installer = WINDOWS_INSTALLER.read_text(encoding="utf-8")
+    clone = installer.split("# 5. Clone repo", 1)[1].split("# 5a.", 1)[0]
+    assert clone.count("if ($FlightCheckOnly) { throw") == 3
+    for action in ("fetch", "check out", "update"):
+        assert f"Could not {action}" in clone
+    assert "stale diagnostics were not started" in clone
+
+
 def test_macos_installer_supports_rerunning_a_pinned_tag() -> None:
     installer = MACOS_INSTALLER.read_text(encoding="utf-8")
 
@@ -45,19 +54,13 @@ def test_windows_installer_skips_existing_vscode_and_extensions() -> None:
     assert "$installedExtensions -contains $ext.ToLowerInvariant()" in installer
 
 
-def test_installers_skip_matching_maker_profile_version() -> None:
+def test_installers_refresh_matching_maker_profile_version() -> None:
     windows = WINDOWS_INSTALLER.read_text(encoding="utf-8")
     macos = MACOS_INSTALLER.read_text(encoding="utf-8")
 
-    assert "& $codeBin --list-extensions --show-versions" in windows
-    assert (
-        '$installedVersionedExtensions -contains '
-        '"microsoft-ess.ess-maker-profile@$makerVersion"'
-    ) in windows
-    assert "if ($makerProfileCurrent)" in windows
+    assert "& $codeBin --install-extension $vsix.FullName --force" in windows
+    assert "makerProfileCurrent" not in windows
+    assert "already installed) - $modeLabel mode" not in windows
 
-    assert 'INSTALLED_EXTENSIONS_WITH_VERSIONS=$("$CODE_CMD" --list-extensions --show-versions' in macos
-    assert (
-        'grep -Fqix "microsoft-ess.ess-maker-profile@$MAKER_VERSION"'
-        in macos
-    )
+    assert '"$CODE_CMD" --install-extension "$MAKER_VSIX" --force' in macos
+    assert "MAKER_VERSION.*already installed" not in macos

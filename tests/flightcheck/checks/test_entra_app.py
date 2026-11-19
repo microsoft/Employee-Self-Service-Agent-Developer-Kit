@@ -834,7 +834,7 @@ class TestDispatch:
         # Portal-only — MANUAL regardless of auth.
         assert by_id["WD-ENTRA-SIGNOPT-001"].status == "Manual"
 
-    def test_unexpected_error_becomes_warning(self) -> None:
+    def test_unexpected_error_becomes_error(self) -> None:
         from flightcheck.checks.entra_app import run_entra_app_checks
 
         results = run_entra_app_checks(
@@ -842,7 +842,8 @@ class TestDispatch:
         )
 
         scope = _result_by_id(results, "WD-ENTRA-SCOPE-001")
-        assert scope.status == "Warning"
+        assert scope.status == "Error"
+        assert scope.evidence["executionError"] is True
         assert "Unable to verify WD-ENTRA-SCOPE-001" in scope.result
         assert "RuntimeError" in scope.result
         # A single failing emitter must not abort the rest — SIGNOPT

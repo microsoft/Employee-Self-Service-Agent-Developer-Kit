@@ -384,7 +384,11 @@ async def create_agent_config(titleId: str) -> str:
 
 @mcp.tool()
 async def get_agent_config(titleId: str) -> str:
-    """Get an employee agent's complete landing-page configuration."""
+    """Get an employee agent's complete landing-page configuration.
+
+    Insight-card settings expose only insightCardsConfig.isStayUpToDateEnabled.
+    Silently ignore isQuickAccessEnabled in responses; never mention it to the maker.
+    """
     client = await get_client()
     return _format(await client.get_agent_config(titleId))
 
@@ -435,7 +439,12 @@ async def update_agent_config(
     titleId: str,
     config: dict[str, Any],
 ) -> CallToolResult:
-    """Apply the complete value of each provided configuration section."""
+    """Apply the complete value of each provided configuration section.
+
+    For insightCardsConfig, send only isStayUpToDateEnabled. Omit
+    isQuickAccessEnabled and silently ignore it in the response; never mention
+    it to the maker.
+    """
     try:
         client = await get_client()
         result = await client.update_agent_config(titleId, config)

@@ -34,6 +34,7 @@ References:
 
 from __future__ import annotations
 
+import json
 from typing import Any, Iterable, Mapping
 from urllib.parse import quote
 
@@ -312,6 +313,133 @@ def query(
         "url": _query_url(base_url, entity_set, select=select, filter_expr=filter_expr),
         "json": collection(records or [], next_link=next_link),
         "status": status,
+    }
+
+
+def delegated_authorization(
+    *,
+    authorization_id: str = "00000000-0000-0000-0000-000000006666",
+    provider_type: int = 3,
+    bot_id: str = "00000000-0000-0000-0000-000000002222",
+) -> dict[str, Any]:
+    """Build a delegatedauthorization record.
+
+    Source (documented):
+      https://learn.microsoft.com/power-apps/developer/data-platform/
+      reference/entities/delegatedauthorization
+      EntitySetName is ``DelegatedAuthorizations``; selected attributes are
+      DelegatedAuthorizationId, ProviderType, and BotId.
+    """
+    return {
+        "delegatedauthorizationid": authorization_id,
+        "providertype": provider_type,
+        "botid": bot_id,
+    }
+
+
+def delegated_access_team(
+    *,
+    team_id: str = "00000000-0000-0000-0000-000000007777",
+    team_type: int = 1,
+    authorization_id: str = "00000000-0000-0000-0000-000000006666",
+) -> dict[str, Any]:
+    """Build the selected attributes of a Dataverse team row.
+
+    Source (documented):
+      https://learn.microsoft.com/power-apps/developer/data-platform/webapi/
+      reference/team?view=dataverse-latest
+      ``teamid`` is Edm.Guid, ``teamtype`` is Edm.Int32 (1 = Access), and
+      ``_delegatedauthorizationid_value`` is the documented lookup property
+      for the ``delegatedauthorizationid`` navigation property.
+    """
+    return {
+        "teamid": team_id,
+        "teamtype": team_type,
+        "_delegatedauthorizationid_value": authorization_id,
+    }
+
+
+def principal_access(
+    *,
+    owner_id: str = "00000000-0000-0000-0000-000000007777",
+    access_mask: str = "ReadAccess,WriteAccess,ShareAccess",
+) -> dict[str, Any]:
+    """Build one RetrieveSharedPrincipalsAndAccess result row.
+
+    Source (documented):
+      https://learn.microsoft.com/power-apps/developer/data-platform/
+      webapi/reference/retrievesharedprincipalsandaccess
+      The response contract is ``PrincipalAccesses[]``. The concrete principal
+      shape, including the polymorphic ``ownerid``, is additionally captured in
+      tests/fixtures/cassettes/flightcheck_flow_licensing.yaml.
+    """
+    return {
+        "Principal": {
+            "@odata.type": "Microsoft.Dynamics.CRM.team",
+            "ownerid": owner_id,
+        },
+        "AccessMask": access_mask,
+    }
+
+
+def teams_for_delegated_authorization(
+    *,
+    base_url: str,
+    bot_id: str,
+    teams: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Mock the documented lookup-property query used by WD-DA-AUTH-001.
+
+    Source (documented):
+      https://learn.microsoft.com/power-apps/developer/data-platform/webapi/
+      reference/team?view=dataverse-latest
+      The generated reference documents the ``teams`` entity set, selected
+      fields, and ``_delegatedauthorizationid_value`` lookup property.
+      https://learn.microsoft.com/power-apps/developer/data-platform/webapi/
+      query/filter-rows
+      Documents filtering lookup properties by GUID.
+    """
+    records = list(teams)
+    authorization_id = str(
+        next(
+            (
+                team.get("_delegatedauthorizationid_value")
+                for team in records
+                if team.get("_delegatedauthorizationid_value")
+            ),
+            "00000000-0000-0000-0000-000000006666",
+        )
+    )
+    return query(
+        base_url=base_url,
+        entity_set="teams",
+        select="teamid,name,teamtype,_delegatedauthorizationid_value",
+        filter_expr=(
+            f"_delegatedauthorizationid_value eq {authorization_id}"
+        ),
+        records=records,
+    )
+
+
+def retrieve_workflow_shared_principals(
+    *,
+    base_url: str,
+    workflow_id: str,
+    accesses: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Mock RetrieveSharedPrincipalsAndAccess for one workflow record."""
+    target = quote(
+        json.dumps({"@odata.id": f"workflows({workflow_id})"}),
+        safe="",
+    )
+    return {
+        "method": "GET",
+        "url": _api(
+            base_url,
+            f"RetrieveSharedPrincipalsAndAccess(Target=@t)?@t={target}",
+        ),
+        "json": {"PrincipalAccesses": list(accesses)},
+        "status": 200,
     }
 
 

@@ -1,11 +1,13 @@
 <#
 .SYNOPSIS
-    One-liner bootstrap for FlightCheck-only installation.
+    One-liner bootstrap for Declarative Agent FlightCheck installation.
 
 .DESCRIPTION
     Downloads the installer script into a temp folder and runs it with
     -FlightCheckOnly. Installs only Python + Git, pip dependencies, and
-    walks through interactive environment/agent discovery.
+    selects a native Declarative Agent and runs shared maker setup diagnostics.
+    Legacy/custom-engine agents and environment-only runs are not supported
+    by this standalone entry point.
 
     Designed to be invoked from a single command:
 
@@ -20,6 +22,10 @@
 .PARAMETER Branch
     Forwarded to Install-EssAdk.ps1. Defaults to "main".
 
+.PARAMETER Checkpoint
+    Run only this checkpoint ID or family (for example WD-RUN-001).
+    When omitted, runs the full DA setup diagnostics.
+
 .PARAMETER SourceBaseUrl
     Where to fetch the installer files from. Defaults to the raw GitHub URL of
     the setup folder. Override for testing.
@@ -29,8 +35,21 @@
 param(
     [string] $InstallRoot,
     [string] $Branch = 'main',
-    [string] $SourceBaseUrl = 'https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup'
+    [ValidateSet('prod', 'preprod', 'test')]
+    [string] $Ring = 'prod',
+    [string] $SourceBaseUrl,
+    [ValidateNotNullOrEmpty()]
+    [string] $Checkpoint
 )
+
+# Derive SourceBaseUrl from $Branch so that passing -Branch also fetches the
+# installer files from that branch. If we hardcoded the default to `main` the
+# `-Branch <fix>` path would download Install-EssAdk.ps1 from main and never
+# exercise the fix - a footgun for anyone testing a branch end-to-end via the
+# customer-facing one-liner. Explicit -SourceBaseUrl still wins.
+if (-not $SourceBaseUrl) {
+    $SourceBaseUrl = "https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/$Branch/setup"
+}
 
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
@@ -77,7 +96,8 @@ $installer = Join-Path $tempDir 'Install-EssAdk.ps1'
 $scriptContent = [System.IO.File]::ReadAllText($installer, [System.Text.Encoding]::UTF8)
 $scriptBlock = [ScriptBlock]::Create($scriptContent)
 
-$installerArgs = @{ Branch = $Branch; FlightCheckOnly = $true }
+$installerArgs = @{ Branch = $Branch; FlightCheckOnly = $true; Ring = $Ring }
 if ($InstallRoot) { $installerArgs.InstallRoot = $InstallRoot }
+if ($Checkpoint) { $installerArgs.Checkpoint = $Checkpoint }
 
 & $scriptBlock @installerArgs

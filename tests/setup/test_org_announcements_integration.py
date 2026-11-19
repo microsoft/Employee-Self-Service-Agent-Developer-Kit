@@ -146,24 +146,28 @@ def test_shared_title_guidance_pins_native_sources_and_explains_the_choice():
 
 def test_announcements_are_registered_across_current_entry_points() -> None:
     repo_instructions = _REPO_INSTRUCTIONS.read_text(encoding="utf-8")
-    instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
     menu = _MENU.read_text(encoding="utf-8")
     foundation = _FOUNDATION.read_text(encoding="utf-8")
     setup_readme = _SETUP_README.read_text(encoding="utf-8")
     profile_readme = _PROFILE_README.read_text(encoding="utf-8")
     extension = _PROFILE_EXTENSION.read_text(encoding="utf-8")
 
-    assert "`/org-announcements`" in repo_instructions
-    assert '"Create an organization announcement"' in repo_instructions
-    assert '"Post an announcement"' in repo_instructions
-    assert "src/skills/org-announcements/SKILL.md" in instructions
-    assert "`ess-org-announcements` MCP server" in instructions
+    assert "derive its prompt filename from the command" in repo_instructions
+    assert "read the `description` frontmatter" in repo_instructions
+    assert _PROMPT.is_file()
     assert "`/org-announcements`" in menu
     assert "`/org-announcements`" in foundation
-    assert "(Setup, Customize landing page, Post an announcement" in setup_readme
-    assert "**Post an announcement**" in profile_readme
+    assert "**Customization** rail" in setup_readme
+    assert "Post an announcement" in setup_readme
+    assert "| Post an announcement | Create an organization announcement |" in profile_readme
     assert "query: 'Create an organization announcement'" in extension
     assert "label: 'Post an announcement'" in extension
+
+
+def test_announcements_are_registered_in_solution_instructions() -> None:
+    instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
+    assert "src/skills/org-announcements/SKILL.md" in instructions
+    assert "`ess-org-announcements` MCP server" in instructions
 
 
 def test_runtime_dependencies_and_mcp_defaults_cover_announcements() -> None:

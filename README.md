@@ -22,77 +22,38 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 See [`setup/README.md`](setup/README.md) for GitHub Codespaces, FlightCheck-only, and Maker vs Developer mode selection. Prefer to clone and open the repo yourself? See the [maker kit quick start](solutions/ess-maker-skills/README.md#quick-start). A **GitHub Copilot subscription is required** for the in-editor maker experience.
 
+> [!NOTE]
+>
+> **The installer can be run as a normal user; elevated administrator privileges are not required.** After installation, `/setup` and other operations identify any login, environment role, consent, or administrator handoff needed for the requested action.
+
+## New to VS Code?
+
+The installer opens VS Code for you. If this is your first time in VS Code, use the guided view for a friendlier way to navigate the kit. In the **activity bar** along the far-left edge of the window, click the **rocket icon**.
+
+![The rocket icon in the VS Code activity bar](docs/images/adk-extension.jpg)
+
+That opens a simple, point-and-click view of the kit — a **Quick start** panel, a **Customization** list of every skill, and a **Help** tab.
+
+Prefer to drive everything from chat? You can ignore the rocket view entirely and just type commands like `/setup` into Copilot Chat.
+
+## Plan an ESS rollout
+
+Run `/planner` in the `solutions/ess-maker-skills` workspace to turn your employee scenarios into a grounded rollout plan: systems to connect, dependency-ordered tasks, responsible roles, owners, and success criteria. Planning can start **before an ESS environment or agent exists**; unknown systems and owners remain pending decisions.
+
+The draft is saved locally until you explicitly share it. Activate the shared plan when it is ready for execution, use `/roles` to attest who holds each rollout role, and ask `/planner what am I assigned?` to see your work. Role attestation records rollout responsibilities; it does not grant Entra or Power Platform permissions.
+
+See [ESS rollout planning](solutions/ess-maker-skills/README.md#ess-rollout-planning) for examples, plan storage, shared-service requirements, and the handoff to environment setup.
+
 ## Solutions
 
 | Folder | What it does | How to use |
 |---|---|---|
-| [`solutions/ess-maker-skills/`](solutions/ess-maker-skills/) | Customize your ESS agent using GitHub Copilot in VS Code — no deep platform knowledge required. | Open the folder in VS Code, then type `/setup` in Copilot Chat. |
+| [`solutions/ess-maker-skills/`](solutions/ess-maker-skills/) | Plan ESS rollouts, coordinate owners, and customize your agent using GitHub Copilot in VS Code. | Open the folder in VS Code, then type `/setup` or `/planner` in Copilot Chat. |
 | `solutions/ess-flightcheck/` *(planned — see [#69](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/issues/69))* | Validate your ESS deployment readiness. Runs licensing, identity, integration, and configuration checks against your live environment. | Open the folder in VS Code and type `/flightcheck` in Copilot Chat — or run `python cli.py --scope full` standalone (no LLM needed). |
 
 Additional solutions will be added under `solutions/` over time.
 
-## Samples
-
-Reference content used directly by customers — topic YAMLs, template-config XMLs, evaluation test sets, and integration walkthroughs — lives at the root under [`samples/`](samples/), peer to `solutions/`. Samples are first-class reference resources, not implementation details of any single solution.
-
-## Repository structure
-
-```
-.github/                Repo-level CI, CodeQL, Dependabot, issue templates, labels
-solutions/
-  ess-maker-skills/     Maker kit — customize your ESS agent in VS Code with Copilot
-  ess-flightcheck/      (planned) Standalone deployment-readiness validator
-samples/                Reference topics, template configs, evaluation test sets (peer to solutions/)
-LICENSE                 MIT
-SECURITY.md             Microsoft MSRC reporting path
-CODE_OF_CONDUCT.md      Microsoft Open Source Code of Conduct
-CONTRIBUTING.md         Contribution guide, maintenance, privacy posture, validation
-SUPPORT.md              Support model
-```
-
-## Telemetry
-
-The ESS Maker Skills CLI collects pseudonymous usage telemetry (enabled by
-default) to help improve the product. No developer identity, agent content, or
-personal data is collected.
-
-**To opt out**, run either of the following (both are persistent and take effect immediately):
-
-```bash
-# 1. From the solutions/ess-maker-skills directory:
-python scripts/adk_telemetry.py off
-
-# 2. Or set the ESS_ADK_TELEMETRY environment variable to off (any shell / CI).
-#    Syntax varies by shell — set it before running any ADK command.
-```
-
-Setting `ESS_ADK_TELEMETRY=off` inline before a command works in bash / zsh
-(`ESS_ADK_TELEMETRY=off python scripts/...`). To persist it, add it to your
-shell profile:
-
-```bash
-# bash / zsh (~/.bashrc, ~/.zshrc):
-export ESS_ADK_TELEMETRY=off
-```
-
-```powershell
-# PowerShell ($PROFILE) — persistent:
-$env:ESS_ADK_TELEMETRY = "off"
-# ...or for the current session only, run the same line at the prompt.
-```
-
-```cmd
-:: cmd.exe — current session only:
-set ESS_ADK_TELEMETRY=off
-:: For persistence use setx ESS_ADK_TELEMETRY off (takes effect in new shells).
-```
-
-The env var overrides the config-file setting.
-
-Re-enable later with `python scripts/adk_telemetry.py on` or by unsetting the
-env var. See
-[Telemetry & Privacy](solutions/ess-maker-skills/README.md#telemetry--privacy)
-for the full data model and event catalog.
+For samples, repository structure, and telemetry details, see [REFERENCE.md](REFERENCE.md).
 
 ## Contributing
 

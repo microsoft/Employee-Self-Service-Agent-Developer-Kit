@@ -10,8 +10,10 @@ PowerApps APIs for FlightCheck checks (environments, flows, connections, DLP).
 Authentication uses the same MSAL cache as auth.py / graph_client.py.
 """
 
+from datetime import datetime
 import os
 import sys
+import time
 from urllib.parse import urlparse
 
 try:
@@ -34,7 +36,7 @@ except ImportError:
     sys.exit(1)
 
 
-CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
+CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d"
 
 BAP_BASE = "https://api.bap.microsoft.com"
 POWERAPPS_BASE = "https://api.powerapps.com"
@@ -58,15 +60,38 @@ FLOW_SCOPE = "https://service.flow.microsoft.com//.default"
 # enough that a single transient 503 mid-FlightCheck would otherwise blow up
 # the whole readiness report. Read-only verbs only; FlightCheck never mutates
 # tenant state through these clients.
+_RETRY_TOTAL = 2
 _RETRY = Retry(
-    total=3,
+    total=_RETRY_TOTAL,
     backoff_factor=1,
+    backoff_max=2,
     status_forcelist=(429, 500, 502, 503, 504),
     allowed_methods=frozenset(["GET", "HEAD", "OPTIONS"]),
-    respect_retry_after_header=True,
+    # Service-provided Retry-After values are not allowed to turn a bounded
+    # FlightCheck into an arbitrarily long wait.
+    respect_retry_after_header=False,
 )
 _SESSION = requests.Session()
 _SESSION.mount("https://", HTTPAdapter(max_retries=_RETRY))
+_MAX_RETRY_BACKOFF_SECONDS = 3.0
+
+
+def _same_origin_pagination_url(next_url: object, base: str) -> str:
+    """Accept only absolute HTTPS pagination links on the API's own origin."""
+    value = str(next_url or "").strip()
+    parsed = urlparse(value)
+    expected = urlparse(base)
+    if (
+        parsed.scheme.casefold() != "https"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.hostname is None
+        or parsed.hostname.casefold()
+        != str(expected.hostname or "").casefold()
+        or parsed.port not in (None, 443)
+    ):
+        raise ValueError("API pagination link has an unexpected origin.")
+    return value
 
 
 def _policy_env_scope(policy: dict) -> tuple[str | None, list[str]]:
@@ -145,6 +170,26 @@ class PPAdminClient:
         self._flow_token: str | None = None
         self.signed_in_username: str | None = None
 
+    @property
+    def has_flow_token(self) -> bool:
+        return self._flow_token is not None
+
+    @property
+    def has_powerapps_token(self) -> bool:
+        return self._token is not None
+
+    def set_read_tokens(
+        self, *, powerapps_token: str | None = None, flow_token: str | None = None
+    ) -> None:
+        """Use already-authenticated delegated read tokens without another login."""
+        for token in (powerapps_token, flow_token):
+            if token is not None and (not isinstance(token, str) or not token.strip()):
+                raise ValueError("A delegated read token must be a non-empty string.")
+        if powerapps_token is not None:
+            self._token = powerapps_token
+        if flow_token is not None:
+            self._flow_token = flow_token
+
     def authenticate(
         self,
         *,
@@ -217,11 +262,22 @@ class PPAdminClient:
             return result["access_token"], username
 
         pp_token, pp_username = acquire(PP_SCOPE, "PowerApps/BAP")
-        flow_token = (
-            acquire(FLOW_SCOPE, "Power Automate (Flow)")[0]
-            if include_flow
-            else None
-        )
+        flow_token = None
+        flow_username = None
+        if include_flow:
+            flow_token, flow_username = acquire(
+                FLOW_SCOPE,
+                "Power Automate (Flow)",
+            )
+            if (
+                not pp_username
+                or not flow_username
+                or pp_username.casefold() != flow_username.casefold()
+            ):
+                raise RuntimeError(
+                    "Power Platform authentication used different or "
+                    "unverifiable accounts across required API audiences."
+                )
 
         if cache.has_state_changed:
             os.makedirs(".local", exist_ok=True)
@@ -309,7 +365,7 @@ class PPAdminClient:
         resp.raise_for_status()
         return resp.json()
 
-    def _get_all(self, base: str, path: str, params: dict | None = None, *, use_flow_token: bool = False) -> list | dict:
+    def _get_all(self, base: str, path: str, params: dict | None = None, *, use_flow_token: bool = False, strict_collection: bool = False) -> list | dict:
         """Paginate through results.
 
         On 401/403 returns a structured ``{"_error": ...}`` dict (matching
@@ -321,15 +377,47 @@ class PPAdminClient:
         """
         items: list = []
         url = f"{base}{path}"
+        collection_path = urlparse(url).path
+        seen_urls: set[str] = set()
         h = self.flow_headers if use_flow_token else self.headers
         while url:
+            if strict_collection:
+                seen_urls.add(url)
             resp = _SESSION.get(url, headers=h, params=params, timeout=60)
             if resp.status_code in (401, 403):
                 return {"_error": "insufficient_permissions", "_status": resp.status_code}
             resp.raise_for_status()
             data = resp.json()
+            if strict_collection and (
+                not isinstance(data, dict) or not isinstance(data.get("value"), list)
+            ):
+                raise ValueError("Power Platform administration returned an invalid collection.")
             items.extend(data.get("value", []))
-            url = data.get("nextLink") or data.get("@odata.nextLink")
+            if strict_collection:
+                continuations = set()
+                for key in ("nextLink", "@odata.nextLink"):
+                    next_url = data.get(key)
+                    if next_url is None:
+                        continue
+                    if not isinstance(next_url, str) or not next_url.strip():
+                        raise ValueError("Power Platform administration returned an invalid continuation.")
+                    next_url = _same_origin_pagination_url(next_url, base)
+                    parsed = urlparse(next_url)
+                    if parsed.path != collection_path or parsed.fragment:
+                        raise ValueError("Power Platform administration returned an invalid continuation.")
+                    if next_url in seen_urls:
+                        raise ValueError("Power Platform administration returned a repeated continuation.")
+                    continuations.add(next_url)
+                if len(continuations) > 1:
+                    raise ValueError("Power Platform administration returned conflicting continuations.")
+                url = next(iter(continuations), None)
+            else:
+                next_url = data.get("nextLink") or data.get("@odata.nextLink")
+                url = (
+                    _same_origin_pagination_url(next_url, base)
+                    if next_url
+                    else None
+                )
             params = None
         return items
 
@@ -439,7 +527,7 @@ class PPAdminClient:
             use_flow_token=True,
         )
 
-    def get_flow_runs(self, env_id: str, flow_id: str) -> list | dict:
+    def get_flow_runs(self, env_id: str, flow_id: str, *, strict_collection: bool = False) -> list | dict:
         """List recent runs (run history) for a cloud flow.
 
         Uses the Power Automate *runtime* runs endpoint (maker/owner scope) —
@@ -466,16 +554,100 @@ class PPAdminClient:
         )
         if isinstance(resp, dict) and "_error" in resp:
             return resp
+        if strict_collection and (
+            not isinstance(resp, dict) or not isinstance(resp.get("value"), list)
+            or any(not isinstance(row, dict) for row in resp["value"])
+        ):
+            raise ValueError("Flow run history returned an invalid collection.")
         return resp.get("value", [])
+
+    def get_flow_runs_since(
+        self,
+        env_id: str,
+        flow_id: str,
+        since: datetime,
+        *,
+        max_pages: int = 5,
+        max_runs: int = 500,
+        max_elapsed_seconds: float = 45.0,
+    ) -> list | dict:
+        """Read bounded run-history pages until ``since`` is covered."""
+        if max_pages <= 0 or max_runs <= 0:
+            raise ValueError("Run-history limits must be positive.")
+        items: list = []
+        url = (
+            f"{FLOW_BASE}/providers/Microsoft.ProcessSimple/environments/"
+            f"{env_id}/flows/{flow_id}/runs"
+        )
+        params: dict | None = {"api-version": "2016-11-01"}
+        deadline = time.monotonic() + max_elapsed_seconds
+        for _page in range(max_pages):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return {"_error": "run_history_deadline_exceeded"}
+            request_budget = max(
+                0.5,
+                (
+                    remaining - _MAX_RETRY_BACKOFF_SECONDS
+                ) / (2 * (_RETRY_TOTAL + 1)),
+            )
+            resp = _SESSION.get(
+                url,
+                headers=self.flow_headers,
+                params=params,
+                timeout=min(10.0, request_budget),
+            )
+            if time.monotonic() > deadline:
+                return {"_error": "run_history_deadline_exceeded"}
+            if resp.status_code in (401, 403):
+                return {
+                    "_error": "insufficient_permissions",
+                    "_status": resp.status_code,
+                }
+            resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, dict):
+                raise ValueError("Run history returned an invalid response.")
+            page = data.get("value")
+            if not isinstance(page, list):
+                raise ValueError("Run history returned an invalid page.")
+            items.extend(page)
+            if len(items) > max_runs:
+                return {"_error": "run_history_limit_reached"}
+            page_times = []
+            for run in page:
+                if not isinstance(run, dict):
+                    continue
+                properties = run.get("properties")
+                if not isinstance(properties, dict):
+                    continue
+                start_time = str(properties.get("startTime") or "")
+                if not start_time:
+                    continue
+                try:
+                    parsed = datetime.fromisoformat(
+                        start_time.replace("Z", "+00:00")
+                    )
+                except ValueError:
+                    continue
+                if parsed.tzinfo is not None:
+                    page_times.append(parsed)
+            next_url = data.get("nextLink") or data.get("@odata.nextLink")
+            if not next_url or (page_times and min(page_times) <= since):
+                return items
+            url = _same_origin_pagination_url(next_url, FLOW_BASE)
+            params = None
+        return {"_error": "run_history_window_not_covered"}
 
     # ----- Connection APIs -----
 
-    def get_connections(self, env_id: str) -> list:
-        """List all connections in an environment (admin scope)."""
+    def get_connections(self, env_id: str, *, strict_collection: bool = False) -> list:
+        """List connections, optionally rejecting malformed collection responses."""
         return self._get_all(
             POWERAPPS_BASE,
             f"/providers/Microsoft.PowerApps/scopes/admin/environments/{env_id}/connections",
             params={"api-version": "2016-11-01"},
+            strict_collection=strict_collection,
         )
 
     def get_connector_connections(
@@ -495,12 +667,13 @@ class PPAdminClient:
 
     # ----- DLP Policy APIs -----
 
-    def get_dlp_policies(self) -> list:
+    def get_dlp_policies(self, *, strict_collection: bool = False) -> list:
         """List all DLP policies."""
         return self._get_all(
             BAP_BASE,
             "/providers/Microsoft.BusinessAppPlatform/scopes/admin/apiPolicies",
             params={"api-version": "2021-04-01"},
+            strict_collection=strict_collection,
         )
 
     def get_dlp_policies_for_env(self, env_id: str) -> list | dict:

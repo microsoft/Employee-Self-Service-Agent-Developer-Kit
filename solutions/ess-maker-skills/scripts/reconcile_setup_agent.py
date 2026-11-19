@@ -19,8 +19,10 @@ import requests
 from agentbuilder import (
     AgentBuilderClient,
     AgentBuilderError,
+    RING_CONFIG,
     authenticate_flightcheck,
     derive_environment_host,
+    normalize_environment_id,
     validate_environment_host,
 )
 from auth import AuthExpiredError, authenticate, dataverse_get
@@ -43,6 +45,10 @@ _GUID_AT_END = re.compile(
     r"[0-9a-f]{4}-[0-9a-f]{12})$",
     re.IGNORECASE,
 )
+
+
+class NativeIdentityIncomplete(AgentBuilderError):
+    """Raised when exact native lookup cannot prove the product schema."""
 
 
 def _normalize_guid(value: str, label: str) -> str:
@@ -125,7 +131,7 @@ def _probe_native_agent(
     kit_root: Path,
     host: str | None,
     api_version: str,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], str, BaseException | None]:
     cache_path = kit_root / ".local" / ".agentbuilder_token_cache.bin"
     token, tenant_id = authenticate_flightcheck(
         ring,
@@ -133,11 +139,24 @@ def _probe_native_agent(
         account_hint=account,
         include_connectivity=False,
     )
-    service_host = (
-        validate_environment_host(host, ring)
-        if host
-        else derive_environment_host(environment_id, ring)
-    )
+    if host:
+        service_host = validate_environment_host(host, ring)
+        config = RING_CONFIG[ring]
+        compact = normalize_environment_id(environment_id)
+        primary = int(config["primary_split"])
+        splits = {primary, 31 if primary == 30 else 30}
+        suffix = str(config["host_suffix"]).casefold()
+        valid_hosts = {
+            f"https://{compact[:split]}.{compact[split:]}.{suffix}"
+            for split in splits
+        }
+        if service_host.casefold() not in valid_hosts:
+            raise NativeIdentityIncomplete(
+                "The explicit AgentBuilder host does not match the selected "
+                "environment identity."
+            )
+    else:
+        service_host = derive_environment_host(environment_id, ring)
     client = AgentBuilderClient(
         service_host,
         token,
@@ -145,14 +164,125 @@ def _probe_native_agent(
         tenant_id=tenant_id,
         api_version=api_version,
     )
-    return client.get_agent(agent_id)
+    if host:
+        agent = client.get_agent(agent_id)
+        raw_schema_name = agent.get("schemaName")
+        if raw_schema_name is None:
+            raw_schema_name = agent.get("schemaname")
+        if raw_schema_name is not None and not isinstance(
+            raw_schema_name,
+            str,
+        ):
+            raise NativeIdentityIncomplete(
+                "Direct native agent lookup returned an invalid schema-name "
+                "shape."
+            )
+        schema_name = (raw_schema_name or "").strip()
+        normalized_agent = {**agent}
+        if not normalized_agent.get("displayName"):
+            full_bot_name = agent.get("fullBotName")
+            if isinstance(full_bot_name, str) and full_bot_name.strip():
+                normalized_agent["displayName"] = full_bot_name.strip()
+        returned_id = str(
+            agent.get("botId")
+            or agent.get("cdsBotId")
+            or agent.get("componentIdUnique")
+            or ""
+        )
+        try:
+            normalized_returned_id = _normalize_guid(
+                returned_id,
+                "Direct native agent ID",
+            )
+        except ValueError as exc:
+            raise NativeIdentityIncomplete(
+                "Direct native agent lookup did not return a valid exact identity."
+            ) from exc
+        if normalized_returned_id.casefold() != agent_id.casefold():
+            raise NativeIdentityIncomplete(
+                "Direct native agent lookup returned a different agent identity."
+            )
+        realm = agent.get("realm")
+        if realm not in (0, "dev", "Dev"):
+            raise NativeIdentityIncomplete(
+                f"Direct native agent lookup returned non-Dev realm {realm!r}."
+            )
+        if schema_name:
+            return normalized_agent, "minimalbot-direct", None
+
+        try:
+            configuration = client.get_dev_configuration(agent_id)
+        except (
+            AgentBuilderError,
+            OSError,
+            ValueError,
+            requests.RequestException,
+        ) as exc:
+            raise NativeIdentityIncomplete(
+                "Exact native agent lookup succeeded, but its Dev configuration "
+                "could not be read to complete the product identity."
+            ) from exc
+        configured_id = str(configuration.get("cdsBotId") or "")
+        try:
+            normalized_configured_id = _normalize_guid(
+                configured_id,
+                "Configured Dev agent ID",
+            )
+        except ValueError as exc:
+            raise NativeIdentityIncomplete(
+                "Dev configuration did not return a valid exact agent identity."
+            ) from exc
+        if normalized_configured_id.casefold() != agent_id.casefold():
+            raise NativeIdentityIncomplete(
+                "Dev configuration returned a different agent identity."
+            )
+        configuration_realm = configuration.get("realm")
+        if configuration_realm not in (0, "dev", "Dev"):
+            raise NativeIdentityIncomplete(
+                "Dev configuration returned a non-Dev realm "
+                f"{configuration_realm!r}."
+            )
+        configured_schema = configuration.get("schemaName")
+        if configured_schema is not None and not isinstance(
+            configured_schema,
+            str,
+        ):
+            raise NativeIdentityIncomplete(
+                "Dev configuration returned an invalid schema-name shape."
+            )
+        schema_name = (configured_schema or "").strip()
+        if not schema_name:
+            raise NativeIdentityIncomplete(
+                "Exact native agent lookup succeeded, but its Dev configuration "
+                "did not return a schema name."
+            )
+        return (
+            {**normalized_agent, "schemaName": schema_name},
+            "minimalbot-dev-configuration",
+            None,
+        )
+
+    changeset = client.fetch_components(agent_id)
+    bot = changeset.get("bot")
+    if not isinstance(bot, dict):
+        raise ValueError("Component fetch did not return bot identity.")
+    fetched_id = _normalize_guid(
+        str(bot.get("cdsBotId") or ""),
+        "Fetched component agent ID",
+    )
+    if fetched_id.casefold() != agent_id.casefold():
+        raise ValueError(
+            "Component fetch returned identity for a different agent."
+        )
+    return bot, "minimalbot-components", None
 
 
 def _resolve_dataverse_url(
     environment_id: str,
     account: str | None,
+    ring: str = "prod",
 ) -> str | None:
-    client = PowerPlatformClient("organizations")
+    client = PowerPlatformClient("organizations", ring=ring or "prod")
     client.authenticate(preferred_username=account)
     raw_environments = client.list_environments_for_user()
     if isinstance(raw_environments, dict) and "_error" in raw_environments:
@@ -251,39 +381,173 @@ def _failure_result(
     }
 
 
-def _identity_summary(
+def _uncertain_product_identity(
+    evidence: str,
+    observation: str,
+    cause_type: str,
+    message: str,
+) -> dict[str, Any]:
+    return {
+        "outcome": "uncertain",
+        "stage": "schema-identity",
+        "source": evidence,
+        "observation": observation,
+        "error": {
+            "causes": [
+                {
+                    "type": cause_type,
+                    "message": message,
+                }
+            ]
+        },
+    }
+
+
+def _found_identity_result(
     backend: str,
+    evidence: str,
+    identity: dict[str, Any],
+    schema_name: str | None,
+    product_identity: dict[str, Any] | None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "backend": backend,
+        "outcome": "found",
+        "evidence": evidence,
+        "identity": identity,
+    }
+    if product_identity is not None:
+        result["productIdentity"] = product_identity
+    else:
+        result["productFamily"] = classify_schema_name(schema_name)
+    return result
+
+
+def _native_identity_summary(
     agent: dict[str, Any],
     *,
     evidence: str,
 ) -> dict[str, Any]:
-    schema_name = str(
-        agent.get("schemaName") or agent.get("schemaname") or ""
-    ).strip()
-    display_name = str(
-        agent.get("fullBotName")
-        or agent.get("displayName")
-        or agent.get("name")
-        or ""
-    ).strip()
-    managed = agent.get("ismanaged")
-    if managed is None:
-        managed = agent.get("isManaged")
-    if managed is None and isinstance(agent.get("managedProperties"), dict):
-        managed = agent["managedProperties"].get("isManaged")
+    identity: dict[str, Any] = {}
+    display_name = agent.get("displayName")
+    if isinstance(display_name, str) and display_name.strip():
+        identity["displayName"] = display_name.strip()
 
-    identity: dict[str, Any] = {"schemaName": schema_name}
-    if display_name:
-        identity["displayName"] = display_name
+    managed_properties = agent.get("managedProperties")
+    if isinstance(managed_properties, dict):
+        managed = managed_properties.get("isManaged")
+        if isinstance(managed, bool):
+            identity["isManaged"] = managed
+
+    if "schemaName" not in agent:
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "field-absent",
+            "SchemaNameFieldAbsent",
+            "The native BotEntity did not include schemaName.",
+        )
+        return _found_identity_result(
+            "native", evidence, identity, None, product_identity
+        )
+
+    raw_schema_name = agent["schemaName"]
+    if raw_schema_name is None:
+        identity["schemaName"] = None
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "null",
+            "SchemaNameNull",
+            "The native BotEntity returned a null schemaName.",
+        )
+        return _found_identity_result(
+            "native", evidence, identity, None, product_identity
+        )
+    if not isinstance(raw_schema_name, str):
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "invalid-type",
+            "SchemaNameInvalidType",
+            "The native BotEntity returned a non-string schemaName.",
+        )
+        return _found_identity_result(
+            "native", evidence, identity, None, product_identity
+        )
+
+    schema_name = raw_schema_name.strip()
+    identity["schemaName"] = schema_name
+    product_identity = None
+    if not schema_name:
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "empty",
+            "SchemaNameEmpty",
+            "The native BotEntity returned an empty schemaName.",
+        )
+    return _found_identity_result(
+        "native", evidence, identity, schema_name, product_identity
+    )
+
+
+def _dataverse_identity_summary(
+    agent: dict[str, Any],
+    *,
+    evidence: str,
+) -> dict[str, Any]:
+    identity: dict[str, Any] = {}
+    display_name = agent.get("name")
+    if isinstance(display_name, str) and display_name.strip():
+        identity["displayName"] = display_name.strip()
+    managed = agent.get("ismanaged")
     if isinstance(managed, bool):
         identity["isManaged"] = managed
-    return {
-        "backend": backend,
-        "outcome": "found",
-        "evidence": evidence,
-        "productFamily": classify_schema_name(schema_name),
-        "identity": identity,
-    }
+
+    if "schemaname" not in agent:
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "field-absent",
+            "SchemaNameFieldAbsent",
+            "The Dataverse bot record did not include schemaname.",
+        )
+        return _found_identity_result(
+            "dataverse", evidence, identity, None, product_identity
+        )
+
+    raw_schema_name = agent["schemaname"]
+    if raw_schema_name is None:
+        identity["schemaName"] = None
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "null",
+            "SchemaNameNull",
+            "The Dataverse bot record returned a null schemaname.",
+        )
+        return _found_identity_result(
+            "dataverse", evidence, identity, None, product_identity
+        )
+    if not isinstance(raw_schema_name, str):
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "invalid-type",
+            "SchemaNameInvalidType",
+            "The Dataverse bot record returned a non-string schemaname.",
+        )
+        return _found_identity_result(
+            "dataverse", evidence, identity, None, product_identity
+        )
+
+    schema_name = raw_schema_name.strip()
+    identity["schemaName"] = schema_name
+    product_identity = None
+    if not schema_name:
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "empty",
+            "SchemaNameEmpty",
+            "The Dataverse bot record returned an empty schemaname.",
+        )
+    return _found_identity_result(
+        "dataverse", evidence, identity, schema_name, product_identity
+    )
 
 
 def probe_native_identity(
@@ -299,7 +563,7 @@ def probe_native_identity(
     normalized_environment = _normalize_guid(environment_id, "Environment ID")
     normalized_agent = _normalize_guid(agent_id, "Agent ID")
     try:
-        agent = _probe_native_agent(
+        agent, evidence, product_identity_error = _probe_native_agent(
             normalized_environment,
             normalized_agent,
             ring,
@@ -308,6 +572,12 @@ def probe_native_identity(
             host,
             api_version,
         )
+    except NativeIdentityIncomplete as exc:
+        return _failure_result(
+            "native",
+            exc,
+            stage="identity-completion",
+        )
     except (
         AgentBuilderError,
         OSError,
@@ -315,17 +585,24 @@ def probe_native_identity(
         requests.RequestException,
     ) as exc:
         return _failure_result("native", exc)
-    return _identity_summary(
-        "native",
+    result = _native_identity_summary(
         agent,
-        evidence="minimalbot-direct",
+        evidence=evidence,
     )
+    if product_identity_error is not None:
+        result["productIdentity"] = {
+            "outcome": "uncertain",
+            "stage": "component-identity",
+            "error": _exception_evidence(product_identity_error),
+        }
+    return result
 
 
 def probe_dataverse_identity(
     *,
     environment_id: str,
     agent_id: str,
+    ring: str = "prod",
     account: str | None = None,
     dataverse_url: str | None = None,
 ) -> dict[str, Any]:
@@ -337,6 +614,7 @@ def probe_dataverse_identity(
             resolved_url = _resolve_dataverse_url(
                 normalized_environment,
                 account,
+                ring,
             )
         except (
             APIError,
@@ -382,8 +660,7 @@ def probe_dataverse_identity(
         requests.RequestException,
     ) as exc:
         return _failure_result("dataverse", exc)
-    return _identity_summary(
-        "dataverse",
+    return _dataverse_identity_summary(
         agent,
         evidence="dataverse-direct",
     )
@@ -416,6 +693,7 @@ def reconcile_selected_agent(
         return probe_dataverse_identity(
             environment_id=environment_id,
             agent_id=agent_id,
+            ring=ring,
             account=account,
             dataverse_url=dataverse_url,
         )
@@ -424,10 +702,13 @@ def reconcile_selected_agent(
 
 def known_native_identity(schema_name: str) -> dict[str, Any]:
     """Classify identity already proven by a native MinimalBot operation."""
-    return _identity_summary(
+    normalized_schema = schema_name.strip()
+    return _found_identity_result(
         "native",
-        {"schemaName": schema_name},
-        evidence="provided-native",
+        "provided-native",
+        {"schemaName": normalized_schema},
+        normalized_schema,
+        None,
     )
 
 
@@ -508,4 +789,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from adk_telemetry import script_error_boundary
+
+    with script_error_boundary("reconcile_setup_agent"):
+        sys.exit(main())

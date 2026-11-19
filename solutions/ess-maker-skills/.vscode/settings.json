@@ -1,5 +1,8 @@
 {
   "git.openRepositoryInParentFolders": "never",
+  "chat.agent.thinkingStyle": "collapsed",
+  "chat.agent.thinking.collapsedTools": "always",
+  "chat.experimental.persistentProgress": "off",
   "[yaml]": {
     "editor.defaultFormatter": "redhat.vscode-yaml",
     "editor.tabSize": 2

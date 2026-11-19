@@ -17,7 +17,7 @@
         iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-lite.ps1)
 
     All real work happens in Install-EssAdk.ps1; this file just gets the bits
-    onto the customer's machine and pins the mode to maker (the chat-first
+    onto the customer's machine and pins the mode to maker (the guided rail
     experience).
 
 .PARAMETER InstallRoot
@@ -91,7 +91,7 @@ $scriptContent = [System.IO.File]::ReadAllText($installer, [System.Text.Encoding
 $scriptBlock = [ScriptBlock]::Create($scriptContent)
 
 # Maker mode (was "Lite mode" before the rename): pass -InstallMode maker
-# so the ESS Maker Profile applies the chat-first layout without asking the
+# so the ESS Maker Profile applies the guided rail layout without asking the
 # maker. Kept as a compat shim while the single bootstrap.ps1 becomes the
 # recommended entry point.
 $installerArgs = @{ Branch = $Branch; InstallMode = 'maker' }

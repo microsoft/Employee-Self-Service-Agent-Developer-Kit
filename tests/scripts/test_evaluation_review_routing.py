@@ -63,6 +63,24 @@ def test_reviewer_flow_refreshes_configured_agent_automatically():
     assert "unless `fetch_and_setup.py --refresh` already completed successfully in the current turn" in update_skill
 
 
+def test_native_review_discovery_never_routes_to_dataverse():
+    review_skill = _normalized("src/skills/evaluations/review/SKILL.md")
+    review_prompt = _normalized(".github/prompts/review.prompt.md")
+
+    for fragment in (
+        '`releaseLine: "da"`',
+        "`powerPlatformApiEndpoint`",
+        "no `dataverseEndpoint`",
+        "python scripts/evaluation_review.py --list-all",
+        "select rows whose `localStatus` is `review_requested`",
+        "never invoke Dataverse MCP",
+        "A Dataverse authentication prompt in this branch is a routing error",
+    ):
+        assert fragment in review_skill
+    assert "native DA agents use local-inclusive review discovery" in review_prompt
+    assert "must never trigger Dataverse MCP authentication" in review_prompt
+
+
 def test_generic_tag_request_requires_all_sets_and_explicit_selection():
     update_skill = _read("src/skills/evaluations/update/SKILL.md")
 
@@ -73,22 +91,24 @@ def test_generic_tag_request_requires_all_sets_and_explicit_selection():
     assert "structured choice control" in update_skill
 
 
-def test_maker_is_offered_edit_review_or_keep_choices():
-    create_skill = _read("src/skills/evaluations/create/SKILL.md")
-    generate_skill = _read("src/skills/evaluations/generate/SKILL.md")
-    update_skill = _read("src/skills/evaluations/update/SKILL.md")
-    normalized_generate = " ".join(generate_skill.split())
-
-    assert "**Edit the test sets myself**" in create_skill
-    assert "**Send them to a judge or SME for feedback**" in create_skill
-    assert "**Push without requesting review**" in create_skill
-    assert "**Edit the test set myself**" in generate_skill
-    assert "**Prepare it to send to a judge or SME for feedback**" in generate_skill
-    assert "**Edit the test set myself**" in update_skill
-    assert "**Send it to a judge or SME for feedback**" in update_skill
-    assert "**Keep it unchanged**" in update_skill
-    assert "closing question is mandatory" in create_skill
-    assert "closing question is mandatory" in normalized_generate
+def test_maker_is_offered_shared_four_actions():
+    contract = _normalized("src/skills/evaluations/experience-contract.md")
+    for option in (
+        "Do you want to mark this test set ready for review so another user can provide feedback?",
+        "Are you ready to run this test set in Copilot Studio?",
+        "Do you want to further edit this test set?",
+        "Do you want to do another quality review on this test set?",
+    ):
+        assert f"**{option}**" in contract
+    assert "these exact option labels in order" in contract
+    assert "only place these options appear" in contract
+    assert "Do not show a separate Push menu item" in contract
+    assert "never auto-select" in contract
+    for flow in ("create", "generate", "update"):
+        skill = _normalized(f"src/skills/evaluations/{flow}/SKILL.md")
+        assert "src/skills/evaluations/experience-contract.md" in skill
+        assert "Four maker actions" in skill
+        assert "**Push without requesting review**" not in skill
 
 
 def test_reviewer_recommendations_return_ownership_to_maker():
@@ -104,17 +124,21 @@ def test_reviewer_recommendations_return_ownership_to_maker():
 
 def test_evaluation_push_is_scoped_and_warns_about_replacement_deletions():
     update_skill = _read("src/skills/evaluations/update/SKILL.md")
-    normalized_update_skill = " ".join(update_skill.split())
-    assert '--only "evaluations/{set}/*" --dry-run' in update_skill
-    assert '--only "evaluations/{set}/*" --yes' in update_skill
-    assert '--yes --force-delete' in update_skill
-    assert "Never use an unscoped" in update_skill
-    assert ".baseline/evaluations/{set}/" in update_skill
-    assert "pushing a replacement will delete those cases" in update_skill
-    assert "unrelated local topic or workflow deletions" in update_skill
-    assert "evaluation_promotion.py promote" in update_skill
-    assert "evaluation_promotion.py cleanup" in update_skill
-    assert "Do not manually delete promotion paths" in normalized_update_skill
+    deployment = _normalized("src/skills/evaluations/deployment-flow.md")
+    assert "src/skills/evaluations/deployment-flow.md" in update_skill
+    assert '--only "evaluations/{set}/*" --dry-run' in deployment
+    assert '--only "evaluations/{set}/*" --yes' in deployment
+    assert '--yes --force-delete' in deployment
+    assert "Never use an unscoped" in deployment
+    assert ".baseline/evaluations/{set}/" in deployment
+    assert "pushing a replacement will delete those cases" in deployment
+    assert "unrelated local topic or workflow deletions" in deployment
+    assert "evaluation_promotion.py promote" in deployment
+    assert "evaluation_promotion.py cleanup" in deployment
+    assert "Do not manually delete promotion paths" in deployment
+    assert "On Dataverse, explain that pushing a replacement" in deployment
+    assert "new-copy behavior and old-copy retention instead" in deployment
+    assert "not case omissions in a native new copy" in deployment
 
 
 def test_review_requested_update_resolves_review_before_push():
@@ -129,8 +153,11 @@ def test_review_requested_update_resolves_review_before_push():
     assert "completion requires the user's explicit choice" in update_skill
     assert "keeps the review open" in normalized
     assert "review is finished" in update_skill
-    assert "when this push records `review_completed`" in update_skill
+    assert "When this push records `review_completed`" in update_skill
     assert "You can now run this test set" in update_skill
+    assert "on Dataverse and verifies it" in normalized
+    assert "For native success, report the actual deployed ID and local completion" in normalized
+    assert "Do not say completion was published to other users" in normalized
 
 
 def test_review_requested_resume_does_not_imply_review_completion():
@@ -145,6 +172,7 @@ def test_review_requested_resume_does_not_imply_review_completion():
     assert "must resume promotion/push with the existing tag" in normalized
     assert "Do not offer **Mark review complete**" in update_skill
     assert "already `review_requested`, do not ask again" in normalized
+    assert "same scoped push workflow" in normalized
 
 
 def test_review_next_action_reconciles_local_and_deployed_status():
@@ -170,6 +198,8 @@ def test_review_tagging_explains_collaboration_meaning():
     assert "inspect and provide feedback, suggestions, or" in update_skill
     assert "The maker remains responsible for editing the test set" in update_skill
     assert "tag must be pushed to Copilot Studio before it is shared" in normalized
+    assert "Native push uploads the test-set YAML but retains review status" in normalized
+    assert "do not add a native review-persistence or in-place-update prerequisite" in normalized.lower()
 
 
 def test_named_update_filters_candidates_before_selection():
@@ -211,15 +241,47 @@ def test_evaluation_validator_uses_exact_set_folder():
     assert "Automated scoring failed ({reason})" in validator
 
 
+def test_evaluation_validator_recovers_auth_before_manual_fallback():
+    validator = _read("src/skills/evaluations/validate/SKILL.md")
+    normalized = " ".join(validator.split())
+    script = _read("scripts/evaluate_evals.py")
+
+    assert "status=authentication_required" in validator
+    assert "Do not perform manual scoring yet" in normalized
+    assert "Sign in or switch GitHub account and retry automated scoring" in validator
+    assert "Continue with manual scoring" in validator
+    assert "gh auth status --hostname github.com" in validator
+    assert "gh auth switch --hostname github.com --user" in validator
+    assert "gh auth login --hostname github.com --web" in validator
+    assert "gh auth refresh --hostname github.com" in validator
+    assert "gh api --hostname github.com user --jq .login" in validator
+    assert "`authenticationRetry=true`" in validator
+    assert "`manualFallbackAuthorized=true`" in validator
+    assert '`fallbackReason="{reason}"`' in validator
+    assert "Skip Step 1 and begin at Step 2" in normalized
+    assert "explicitly selected manual scoring or declined authentication" in normalized
+    assert "Incomplete login, installation, restart, or identity verification never" in normalized
+    assert "Do not launch either interactive browser command" in normalized
+    assert "restart VS Code and resume the same selected set" in normalized
+    assert "Do not retry in the current agent process" in normalized
+    assert "Never enter an authentication loop" in validator
+    assert "environment variable takes precedence" in validator
+    assert "never unset or replace it without the user's action" in normalized
+    assert "stdout is one JSON object" in normalized
+    assert "Exit code `2` remains argparse usage failure" in normalized
+    assert "AUTHENTICATION_REQUIRED_EXIT = 3" in script
+    assert '"status": "authentication_required"' in script
+
+
 def test_catalogue_generation_mandatorily_invokes_validation_subagent():
     generate_skill = _read("src/skills/evaluations/generate/SKILL.md")
-    copilot_instructions = _read(".github/copilot-instructions.md")
+    experience = _normalized("src/skills/evaluations/experience-contract.md")
 
     assert "Invoke `runSubagent` for each generated set" in generate_skill
     assert "evaluate_evals.py --evaluation-folder" in generate_skill
     assert "do not skip validation" in generate_skill
-    assert "catalogue-grounded eval generate flow" in copilot_instructions
-    assert "whether or not the requested scenario matched" in copilot_instructions
+    assert "Keep the complete quality report separate" in experience
+    assert "quality-fix-flow.md" in experience
 
 
 def test_catalogue_generation_previews_prompts_and_csv_before_validation():
@@ -230,7 +292,8 @@ def test_catalogue_generation_previews_prompts_and_csv_before_validation():
     )
     validation = generate_skill.index("## Step 7: Quality validation")
     assert preview < validation
-    assert "show the generated golden prompts grouped" in generate_skill
+    assert "Prompt / Expected Response" in generate_skill
+    assert 'evaluation_presentation.py --evaluation-folder "{set-folder}" --list-rows' in generate_skill
     assert "CSV is provided for preview and sharing" in generate_skill
     assert "{YYYYMMDD}_{Confirmed_Set_Name}.csv" in generate_skill
 
@@ -256,11 +319,14 @@ def test_run_ux_sets_duration_and_evidence_based_result_analysis():
     evaluate_prompt = _read(".github/prompts/evaluate.prompt.md")
     normalized_run_skill = " ".join(run_skill.split())
 
-    assert "return in 10-15 minutes" in run_skill
+    assert "This may take 10-15" in normalized_run_skill
+    assert "Return here to view the results" in normalized_run_skill
+    assert "you don't" in normalized_run_skill
+    assert "need to open Copilot Studio" in normalized_run_skill
     assert "Copy `userGuidance` verbatim" in normalized_run_skill
     assert "hard postcondition" in normalized_run_skill
     assert "copy its `userGuidance` field verbatim" in run_prompt
-    assert "10-15-minute wait notice is mandatory" in evaluate_prompt
+    assert "direction to return to chat are mandatory" in evaluate_prompt
     assert "do not route results to a separate" in run_skill
     assert "**Results by scenario group**" in run_skill
     assert "rather than inventing categories" in normalized_run_skill
@@ -276,17 +342,12 @@ def test_all_evaluation_flows_use_date_first_csv_names():
     assert "{YYYYMMDD}_{Evaluation_Set_Display_Name}.csv" in update_skill
 
 
-def test_unpushed_evaluation_sets_require_reviewer_handoff_reminder():
-    generate_skill = _read("src/skills/evaluations/generate/SKILL.md")
-    update_skill = _read("src/skills/evaluations/update/SKILL.md")
-    create_skill = _read("src/skills/evaluations/create/SKILL.md")
-
-    reminder = "To make this test set available to an authorized judge or SME"
-    assert reminder in generate_skill
-    assert reminder in update_skill
-    assert "Copying the set into the configured agent's local" in generate_skill
-    assert "Remove it only after" in update_skill
-    assert "not available to another authorized" in create_skill
-    assert "available to authorized judges and SMEs" in create_skill
-    assert "initial setup" not in generate_skill
-    assert "next refresh" not in update_skill
+def test_unpushed_sets_explain_state_without_requiring_separate_push():
+    experience = _normalized("src/skills/evaluations/experience-contract.md")
+    assert "saved locally, but are not shared" in experience
+    assert "Run or Request Review will publish" in experience
+    assert "Do not claim local save, promotion, dry run, push, or run are equivalent" in experience
+    for flow in ("create", "generate", "update"):
+        skill = _normalized(f"src/skills/evaluations/{flow}/SKILL.md")
+        assert "local-only reminder" in skill
+        assert '**"push {set name}"** when you are ready' not in skill

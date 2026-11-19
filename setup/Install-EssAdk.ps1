@@ -16,8 +16,9 @@
          (GitHub.copilot, GitHub.copilot-chat, ms-python.python).
       5. Clones the Employee-Self-Service-Agent-Developer-Kit repo to a known
          location (default: $env:USERPROFILE\source\Employee-Self-Service-Agent-Developer-Kit).
-      6. Opens the ess-maker-skills workspace in VS Code and automatically
-         requests `/setup` in Copilot Chat (requires VS Code 1.102+).
+      6. Opens the ess-maker-skills workspace in VS Code. `/setup` is
+         user-driven - run it yourself in Copilot Chat when ready
+         (requires VS Code 1.102+).
 
     The script is idempotent: re-run to repair a partial install.
 
@@ -50,13 +51,18 @@
 .PARAMETER FlightCheckOnly
     Install only the minimal toolchain needed to run FlightCheck (Python + Git +
     pip dependencies). Skips VS Code, extensions, and the full maker kit setup.
-    Prompts for your Dataverse environment URL and creates a minimal
-    .local/config.json so FlightCheck can authenticate without running /setup.
+    Selects and verifies a native Declarative Agent and runs shared maker setup
+    diagnostics without /setup. Legacy/custom-engine agents are not supported
+    by this standalone mode.
+
+.PARAMETER Checkpoint
+    With -FlightCheckOnly, run only this checkpoint ID or family (for example
+    WD-RUN-001). When omitted, runs the full DA setup diagnostics.
 
 .PARAMETER InstallMode
-    Selects the VS Code experience: 'maker' (chat-first, hidden developer
-    chrome - was 'lite'), 'developer' (default VS Code layout with /setup
-    injection - was 'standard'), or 'prompt' (default: this installer
+    Selects the VS Code experience: 'maker' (guided rail layout - was
+    'lite'), 'developer' (default VS Code layout with the rendered README
+    - was 'standard'), or 'prompt' (default: this installer
     asks the maker in the terminal, defaulting to 'maker' under a
     non-interactive shell). The ESS Maker Profile extension is installed
     in every mode; only the layout and /setup delivery differ. Explicit
@@ -93,15 +99,30 @@ param(
     [switch] $SkipLaunch,
     [switch] $UseDsc,
     [switch] $FlightCheckOnly,
+    [ValidateSet('prod', 'preprod', 'test')]
+    [string] $Ring = 'prod',
     [ValidateSet('maker', 'developer', 'prompt', 'lite', 'standard')]
     [string] $InstallMode = 'prompt',
-    [switch] $SkipMakerProfile
+    [switch] $SkipMakerProfile,
+    [ValidateNotNullOrEmpty()]
+    [string] $Checkpoint
 )
+
+if ($Checkpoint -and -not $FlightCheckOnly) {
+    throw '-Checkpoint requires -FlightCheckOnly.'
+}
 
 # Back-compat: -SkipMakerProfile forces developer mode even when
 # -InstallMode is passed. This preserves the old behaviour where the
-# switch was the only way to say "no chat-first layout".
+# switch was the only way to say "no guided rail layout".
 if ($SkipMakerProfile) { $InstallMode = 'developer' }
+
+# Normalize -Ring casing before forwarding: [ValidateSet] on the param
+# is case-insensitive so `-Ring Prod` binds, but `flightcheck/cli.py`
+# uses argparse `choices=["prod","preprod","test"]` (case-sensitive)
+# and would reject the mixed-case value. Lowercase up-front so the
+# forwarded --ring literal always matches cli.py's contract.
+$Ring = $Ring.ToLowerInvariant()
 
 # Back-compat: legacy value aliases from the pre-rename installer
 # (bootstrap-lite.ps1 previously pinned 'lite'; -SkipMakerProfile alias
@@ -116,6 +137,14 @@ if ($InstallMode -eq 'standard') { $InstallMode = 'developer' }
 # choice deterministic: the answer is applied to essMaker.mode before
 # any editor UI appears, so there's no race with the theme picker or
 # GitHub Copilot sign-in that VS Code renders on first launch.
+#
+# FlightCheck-only mode skips VS Code entirely (see step 5c guard on
+# $FlightCheckOnly and the `if (-not $FlightCheckOnly)` around the
+# workspace launch), so the maker/developer choice has no effect there.
+# Suppressing the prompt keeps the FlightCheck-only path a single
+# straight-through experience for customers who just want the readiness
+# check.
+if ($FlightCheckOnly -and $InstallMode -eq 'prompt') { $InstallMode = 'maker' }
 if ($InstallMode -eq 'prompt') {
     $nonInteractive = $env:CI -or $env:TF_BUILD -or $env:GITHUB_ACTIONS -or [Console]::IsInputRedirected
     if ($nonInteractive) {
@@ -126,9 +155,9 @@ if ($InstallMode -eq 'prompt') {
         Write-Host ""
         Write-Host "==> Choose your ESS Maker experience" -ForegroundColor Cyan
         Write-Host "  [1] Maker (recommended)"
-        Write-Host "      Chat-first layout; hides file tree, tabs, and status bar;"
-        Write-Host "      big-button Quick Actions rail. Best if you mostly work in"
-        Write-Host "      chat and want a focused HR/IT admin surface."
+        Write-Host "      Guided rail layout: a focused activity-bar rail with a"
+        Write-Host "      Getting started walkthrough and a Customization task list."
+        Write-Host "      Best if you want a focused HR/IT admin surface."
         Write-Host ""
         Write-Host "  [2] Developer"
         Write-Host "      Default VS Code layout with GitHub Copilot Chat in the"
@@ -199,6 +228,51 @@ function Invoke-Native {
         return $output
     } finally {
         $ErrorActionPreference = $prevEAP
+    }
+}
+
+# Close VS Code before installing the bundled profile and launching the
+# workspace. VS Code can keep the previous extension instance alive while the
+# installer updates the VSIX/settings, so the new guided layout may not appear
+# until the old processes exit. Never close it silently: unsaved editor state
+# may be lost when the operator confirms.
+function Confirm-StopRunningCode {
+    $running = @(Get-Process -Name 'Code', 'Code-insiders' -ErrorAction SilentlyContinue)
+    if (-not $running) { return }
+
+    Write-Host ''
+    Write-Warn2 "VS Code is running (PIDs: $($running.Id -join ', '))."
+    Write-Warn2 'Close/save any unsaved files before continuing.'
+    $answer = Read-Host 'VS Code needs to restart to launch the Maker workspace. Close all running VS Code instances now? [Y/N]'
+    if ($answer -notmatch '^(?i:y|yes)$') {
+        Write-Warn2 'Leaving existing VS Code instances open. Launching the Maker workspace may require a manual VS Code restart.'
+        return
+    }
+
+    foreach ($process in $running) {
+        # Re-query immediately before stopping: VS Code often exits its renderer
+        # and helper processes while the parent process list is being enumerated.
+        $current = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+        if (-not $current -or $current.ProcessName -notin @('Code', 'Code-insiders')) {
+            continue
+        }
+        try {
+            Stop-Process -Id $current.Id -Force -ErrorAction Stop
+        } catch {
+            # A normal shutdown can win this race between the re-query and
+            # Stop-Process. Only report a failure if the PID is still alive.
+            if (Get-Process -Id $current.Id -ErrorAction SilentlyContinue) {
+                Write-Warn2 "Could not close VS Code PID $($current.Id): $($_.Exception.Message)"
+            }
+        }
+    }
+
+    # Wait briefly for child processes to exit before launching the new window.
+    # Do not print stale-PID warnings for processes that disappear naturally.
+    for ($attempt = 0; $attempt -lt 10; $attempt++) {
+        $remaining = @(Get-Process -Name 'Code', 'Code-insiders' -ErrorAction SilentlyContinue)
+        if (-not $remaining) { break }
+        Start-Sleep -Milliseconds 250
     }
 }
 
@@ -898,6 +972,7 @@ if (-not $SkipClone) {
             $gitOutput = Invoke-Native { & git fetch --quiet --tags origin }
             foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
             if ($LASTEXITCODE -ne 0) {
+                if ($FlightCheckOnly) { throw 'Could not fetch the requested FlightCheck revision. Resolve the Git error and rerun; stale diagnostics were not started.' }
                 Write-Warn2 "git fetch failed (exit $LASTEXITCODE). Continuing with local copy."
             } else {
                 $currentRef = Invoke-Native { & git branch --show-current } |
@@ -912,6 +987,7 @@ if (-not $SkipClone) {
                 $gitOutput = Invoke-Native { & git checkout --quiet $Branch }
                 foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
                 if ($LASTEXITCODE -ne 0) {
+                    if ($FlightCheckOnly) { throw "Could not check out '$Branch'. Resolve the Git error and rerun; stale diagnostics were not started." }
                     # Loud, actionable: silent fallback to stale code is what
                     # caused the "env types showing Unknown" / "browser doesn't
                     # open" regression reports for users who first installed
@@ -932,6 +1008,7 @@ if (-not $SkipClone) {
                         }
                         foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
                         if ($LASTEXITCODE -ne 0) {
+                            if ($FlightCheckOnly) { throw "Could not update '$Branch'. Resolve the Git error and rerun; stale diagnostics were not started." }
                             Write-Warn2 "git pull failed (exit $LASTEXITCODE). Continuing with local copy (may be behind '$Branch')."
                             Write-Warn2 "If you see stale behavior, delete '$repoPath' and re-run."
                         }
@@ -1026,24 +1103,25 @@ if (-not $FlightCheckOnly) {
 }
 
 # ---------------------------------------------------------------------------
-# 5c. ESS Maker Profile (chat-first VS Code layout)
+# 5c. ESS Maker Profile (guided rail VS Code layout)
 # ---------------------------------------------------------------------------
-# The bundled extension at tools/ess-maker-profile/extension/ hides developer
-# chrome and surfaces a big-button "Quick actions" rail tied to the kit's
+# The bundled extension at tools/ess-maker-profile/extension/ applies a guided
+# rail layout and surfaces a "Customization" task list tied to the kit's
 # slash commands. We install it from the cloned repo (not the marketplace -
 # this is a POC build that isn't published) so it auto-activates the next
-# time `code` launches. When the maker profile is installed, the extension
-# itself opens chat and injects /setup (section 7 just opens the workspace).
+# time `code` launches. When the profile is installed, the extension reads
+# essMaker.mode and applies the mode-specific layout (Maker: guided rail;
+# Developer: README preview). /setup is user-driven (section 7 just opens
+# the workspace).
 #
 # Skipped in FlightCheckOnly mode (no VS Code launch) and when the user
 # passes -SkipExtensions (IT-locked-down boxes that block VSIX installs).
 if (-not $FlightCheckOnly -and -not $SkipExtensions) {
     # Install the ESS Maker Profile extension in every mode. In maker mode
-    # it applies the chat-first layout; in developer mode it only handles
-    # /setup injection after the welcome wizard closes (no visual
-    # changes). $modeLabel is always 'maker' or 'developer' by this
-    # point - the CLI prompt above resolves 'prompt' before we reach any
-    # of the install steps.
+    # it applies the guided layout; in developer mode it shows the rendered
+    # README preview (/setup is user-driven in both). $modeLabel is always
+    # 'maker' or 'developer' by this point - the CLI prompt above resolves
+    # 'prompt' before we reach any of the install steps.
     Write-Step "Installing ESS Maker Profile ($modeLabel mode)"
 
     $code = Resolve-CodeCommand
@@ -1066,39 +1144,33 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions) {
             Write-Warn2 "No ess-maker-profile-*.vsix found under $vsixDir. Skipping extension install."
         } else {
             $makerVersion = if ($vsix.BaseName -match '^ess-maker-profile-(.+)$') { $Matches[1] } else { $null }
-            $installedVersionedExtensions = @(Invoke-Native { & $codeBin --list-extensions --show-versions })
-            $makerProfileCurrent = $makerVersion -and
-                $LASTEXITCODE -eq 0 -and
-                ($installedVersionedExtensions -contains "microsoft-ess.ess-maker-profile@$makerVersion")
+            # Reinstall even when the version is unchanged: branch builds can
+            # update the VSIX contents without bumping the version, and VS Code
+            # otherwise retains the old extension payload.
+            $out = $null
+            $vsix_exit = 0
+            try {
+                $prevEAP = $ErrorActionPreference
+                $ErrorActionPreference = 'Continue'
+                $out = & $codeBin --install-extension $vsix.FullName --force 2>&1
+                $vsix_exit = $LASTEXITCODE
+            } catch {
+                $out = $_.Exception.Message
+                $vsix_exit = if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 }
+            } finally {
+                $ErrorActionPreference = $prevEAP
+            }
 
-            if ($makerProfileCurrent) {
-                Write-Ok "ESS Maker Profile $makerVersion (already installed) - $modeLabel mode"
+            if ($vsix_exit -eq 0) {
+                Write-Ok "ESS Maker Profile installed/refreshed ($($vsix.Name)) - $modeLabel mode"
             } else {
-                $out = $null
-                $vsix_exit = 0
-                try {
-                    $prevEAP = $ErrorActionPreference
-                    $ErrorActionPreference = 'Continue'
-                    $out = & $codeBin --install-extension $vsix.FullName --force 2>&1
-                    $vsix_exit = $LASTEXITCODE
-                } catch {
-                    $out = $_.Exception.Message
-                    $vsix_exit = if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 }
-                } finally {
-                    $ErrorActionPreference = $prevEAP
-                }
-
-                if ($vsix_exit -eq 0) {
-                    Write-Ok "ESS Maker Profile installed ($($vsix.Name)) - $modeLabel mode"
-                } else {
-                    Write-Warn2 "ess-maker-profile vsix install returned exit $vsix_exit (non-fatal)"
-                    ($out | Out-String).TrimEnd() -split "`r?`n" | ForEach-Object { Write-Warn2 "  $_" }
-                }
+                Write-Warn2 "ess-maker-profile vsix install returned exit $vsix_exit (non-fatal)"
+                ($out | Out-String).TrimEnd() -split "`r?`n" | ForEach-Object { Write-Warn2 "  $_" }
             }
         }
 
         # Write the mode setting so the extension knows whether to apply
-        # the maker (chat-first) layout or inject /setup (developer mode).
+        # the guided maker layout or show the README preview (developer mode).
         # Uses string manipulation to preserve JSONC comments in settings.json.
         $settingsDir = Join-Path $env:APPDATA 'Code\User'
         if (-not (Test-Path $settingsDir)) { New-Item -ItemType Directory -Path $settingsDir -Force | Out-Null }
@@ -1162,12 +1234,11 @@ if (-not $FlightCheckOnly) {
 # 6. FlightCheck config generation (FlightCheckOnly mode)
 # ---------------------------------------------------------------------------
 if ($FlightCheckOnly) {
-    Write-Step 'Configuring FlightCheck environment'
+    Write-Step 'Configuring FlightCheck environment (DA)'
 
     $localDir = Join-Path $workspace '.local'
     $configPath = Join-Path $localDir 'config.json'
 
-    # Resolve python command early - needed for both discovery and fetch
     $pythonExe = Resolve-Python
     if (-not $pythonExe) {
         throw 'Python not found on PATH or known locations. Cannot run FlightCheck.'
@@ -1180,279 +1251,45 @@ if ($FlightCheckOnly) {
         $pyCmd = $pythonExe; $pyBaseArgs = @()
     }
 
-    if (Test-Path $configPath) {
-        Write-Host ''
-        Write-Host "    Config already exists at $configPath" -ForegroundColor White
-        Write-Host '    Would you like to reconfigure? (Y/N)' -ForegroundColor Gray
-        Write-Host ''
-        $reconfigure = Read-Host '    Reconfigure'
-        if ($reconfigure -notmatch '^[Yy]') {
-            Write-Ok 'Keeping existing config'
-        } else {
-            Remove-Item $configPath -Force
-            Write-Ok 'Removed existing config - starting fresh'
-        }
+    $setupPy = Join-Path $workspace 'scripts\flightcheck_setup.py'
+    if (-not (Test-Path -LiteralPath $setupPy)) {
+        throw "DA FlightCheck setup is missing from '$Branch'. Update the checkout; legacy diagnostics were not started."
     }
-
-    # --- Account selection: offer to clear cached MSAL tokens ---
-    # Runs before BOTH the discover.py auth (when reconfiguring) and the
-    # FlightCheck run (which also authenticates via cli.py), so a single
-    # prompt covers every code path that hits the MSAL cache.
-    # All FlightCheck clients share .local/.token_cache.bin. The cached
-    # tokens silently sign the next run in as whichever user authenticated
-    # last - desirable most of the time, but bites users who installed
-    # under one account and now need to FlightCheck a different tenant /
-    # different user (e.g. customer-engineer scenarios). Offer an explicit
-    # switch rather than making them hunt for the cache file.
-    $tokenCacheFile = Join-Path $localDir '.token_cache.bin'
-    if (Test-Path $tokenCacheFile) {
-        # Force array context with @(...) - Get-CachedUsernames returns a
-        # [string[]] guarded by the unary comma operator, but belt-and-
-        # suspenders here in case the function output ever changes.
-        $cachedUsers = @(Get-CachedUsernames -CachePath $tokenCacheFile)
-        Write-Host ''
-        if ($cachedUsers.Count -eq 1) {
-            Write-Host "    Existing sign-in detected: $($cachedUsers[0])" -ForegroundColor White
-        } elseif ($cachedUsers.Count -gt 1) {
-            Write-Host '    Existing sign-in detected for:' -ForegroundColor White
-            foreach ($u in $cachedUsers) {
-                Write-Host "      - $u" -ForegroundColor White
-            }
+    Push-Location $workspace
+    $prevEAP = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $pyCmd @pyBaseArgs $setupPy --ring $Ring
+        $setupExit = $LASTEXITCODE
+        $ErrorActionPreference = $prevEAP
+        if ($setupExit -ne 0) {
+            throw 'DA selection did not complete. FlightCheck was not started; any prior report is unchanged.'
+        }
+        $configState = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+        if ($configState.releaseLine -ne 'da' -or -not $configState.agent.botId -or -not $configState.activeAgent) {
+            throw 'Standalone FlightCheck requires a verified selected DA; legacy diagnostics were not started.'
+        }
+        $cliArgs = @(
+            'scripts\flightcheck\cli.py',
+            '--invocation-source', 'installer', '--select-targets', 'never',
+            '--agent-slug', $configState.activeAgent,
+            '--tenant-id', $configState.tenantId,
+            '--preferred-username', $configState.account,
+            '--ring', $configState.ring
+        )
+        if ($Checkpoint) {
+            Write-Step "Running FlightCheck checkpoint $Checkpoint"
+            $cliArgs += @('--checkpoint', $Checkpoint)
         } else {
-            # Cache present but couldn't read the username (corrupt JSON,
-            # schema change, etc.). Fall back to the generic message.
-            Write-Host '    Existing sign-in detected from a previous session.' -ForegroundColor White
+            Write-Step 'Running FlightCheck DA setup diagnostics'
+            $cliArgs += @('--scope', 'full')
         }
-        Write-Host '    Sign in as a different account? (y/N)' -ForegroundColor Gray
-        $switchAccount = Read-Host '    Switch account'
-        if ($switchAccount -match '^[Yy]') {
-            try {
-                Remove-Item $tokenCacheFile -Force
-                Write-Ok 'Cleared sign-in cache - you will be prompted to sign in fresh'
-                Write-Host '    Tip: your browser may auto-SSO into the previous account.' -ForegroundColor DarkGray
-                Write-Host '          If so, sign out at https://login.microsoftonline.com' -ForegroundColor DarkGray
-                Write-Host '          or use an InPrivate/Incognito browser window.' -ForegroundColor DarkGray
-            } catch {
-                Write-Warn2 "Could not remove token cache at $tokenCacheFile - $($_.Exception.Message)"
-                Write-Warn2 'Continuing with cached sign-in.'
-            }
-        } else {
-            Write-Ok 'Using cached sign-in'
-        }
-    }
-
-    if (-not (Test-Path $configPath)) {
-        $scriptsDir = Join-Path $workspace 'scripts'
-        $discoverPy = Join-Path $scriptsDir 'discover.py'
-
-        if (-not (Test-Path $discoverPy)) {
-            throw "discover.py not found at $discoverPy. Was the repo cloned correctly?"
-        }
-
-        # --- Step 1: List environments and let user pick ---
-        Write-Host ''
-        Write-Host '    Listing Power Platform environments in your tenant...' -ForegroundColor White
-        Write-Host '    A browser window will open for sign-in.' -ForegroundColor Gray
-        Write-Host ''
-
-        # Run discover.py --list-environments (interactive - shows table to user)
-        Push-Location $workspace
-        try {
-            $discoverArgs = $pyBaseArgs + @($discoverPy, '--list-environments')
-            $output = Invoke-Native { & $pyCmd @discoverArgs }
-            foreach ($line in $output) { Write-Host $line }
-            if ($LASTEXITCODE -ne 0) {
-                throw 'Environment listing failed.'
-            }
-
-            Write-Host ''
-            $envChoice = Read-Host '    Select environment number from the list above'
-            if ($envChoice) { $envChoice = $envChoice.Trim() }
-            if (-not $envChoice -or $envChoice -notmatch '^\d+$') {
-                throw 'Invalid selection. Please re-run and pick a number from the list.'
-            }
-
-            # Re-run with --select to get machine-parseable JSON
-            $selectArgs = $pyBaseArgs + @($discoverPy, '--list-environments', '--select', $envChoice)
-            $envOutput = Invoke-Native { & $pyCmd @selectArgs }
-            if ($LASTEXITCODE -ne 0) {
-                throw "Environment selection failed: $envOutput"
-            }
-            $envJsonLine = ($envOutput | Where-Object { $_ -match '^SELECTED_ENV_JSON:' }) -replace '^SELECTED_ENV_JSON:', ''
-            if (-not $envJsonLine) {
-                throw 'Could not parse environment selection output.'
-            }
-            $selectedEnv = $envJsonLine | ConvertFrom-Json
-            $envUrl = $selectedEnv.instanceUrl.TrimEnd('/')
-
-            if (-not $envUrl) {
-                throw 'Selected environment has no linked Dataverse URL.'
-            }
-            Write-Ok "Environment: $($selectedEnv.displayName)"
-            Write-Ok "URL: $envUrl"
-
-            # --- Step 2: List agents and let user pick ---
-            Write-Host ''
-            Write-Host '    Discovering agents in this environment...' -ForegroundColor White
-            Write-Host ''
-
-            $agentListArgs = $pyBaseArgs + @($discoverPy, '--url', $envUrl)
-            $output = Invoke-Native { & $pyCmd @agentListArgs }
-            foreach ($line in $output) { Write-Host $line }
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warn2 'Agent discovery failed. Config will be created without a bot ID.'
-                $botId = ''
-                $agentName = 'FlightCheck-only (no agent selected)'
-                $schemaName = ''
-                $isManaged = $true
-            } else {
-                Write-Host ''
-                $agentChoice = Read-Host '    Select agent number (or press Enter to run environment-wide checks only)'
-                if ($agentChoice) { $agentChoice = $agentChoice.Trim() }
-
-                if ($agentChoice -and $agentChoice -match '^\d+$') {
-                    $agentSelectArgs = $pyBaseArgs + @($discoverPy, '--url', $envUrl, '--select', $agentChoice)
-                    $agentOutput = Invoke-Native { & $pyCmd @agentSelectArgs }
-                    if ($LASTEXITCODE -ne 0) {
-                        Write-Warn2 "Agent selection failed. Continuing without bot ID."
-                        $botId = ''
-                        $agentName = 'FlightCheck-only (no agent selected)'
-                        $schemaName = ''
-                        $isManaged = $true
-                    } else {
-                        $agentJsonLine = ($agentOutput | Where-Object { $_ -match '^SELECTED_AGENT_JSON:' }) -replace '^SELECTED_AGENT_JSON:', ''
-                        if ($agentJsonLine) {
-                            $selectedAgent = $agentJsonLine | ConvertFrom-Json
-                            $botId = $selectedAgent.botid
-                            $agentName = $selectedAgent.name
-                            $schemaName = $selectedAgent.schemaname
-                            $isManaged = [bool]$selectedAgent.ismanaged
-                            Write-Ok "Agent: $agentName"
-                        } else {
-                            $botId = ''
-                            $agentName = 'FlightCheck-only (no agent selected)'
-                            $schemaName = ''
-                            $isManaged = $true
-                        }
-                    }
-                } else {
-                    Write-Warn2 'Skipping agent selection. Some agent-specific checks will be skipped.'
-                    $botId = ''
-                    $agentName = 'FlightCheck-only (no agent selected)'
-                    $schemaName = ''
-                    $isManaged = $true
-                }
-            }
-        } finally { Pop-Location }
-
-        # Create .local directory
-        if (-not (Test-Path $localDir)) {
-            New-Item -ItemType Directory -Path $localDir -Force | Out-Null
-        }
-
-        # Write minimal config.json sufficient for FlightCheck
-        $slug = 'flightcheck-only'
-        $agentEntry = @{
-            name       = $agentName
-            botId      = $botId
-            schemaName = $schemaName
-            isManaged  = $isManaged
-            slug       = $slug
-            folder     = ''
-        }
-
-        # Match the structure setup.py produces: agents array + activeAgent slug
-        if ($botId) {
-            $agentsList = [System.Collections.ArrayList]@()
-            $agentsList.Add($agentEntry) | Out-Null
-        } else {
-            $agentsList = [System.Collections.ArrayList]@()
-        }
-
-        $config = @{
-            configVersion      = 1
-            setup              = 'flightcheck-only'
-            dataverseEndpoint  = $envUrl
-            flightCheckOnly    = $true
-            agent              = $agentEntry
-            agents             = $agentsList
-            activeAgent        = if ($botId) { $slug } else { '' }
-        }
-
-        $json = $config | ConvertTo-Json -Depth 4 -Compress:$false
-        [System.IO.File]::WriteAllText($configPath, $json, (New-Object System.Text.UTF8Encoding $false))
-        Write-Ok "Created $configPath"
-    }
-
-    # --- Read config values if they came from an existing file ---
-    if (-not $botId -and (Test-Path $configPath)) {
-        $existingConfig = Get-Content $configPath -Raw | ConvertFrom-Json
-        $envUrl = $existingConfig.dataverseEndpoint
-        $botId = $existingConfig.agent.botId
-        $agentName = $existingConfig.agent.name
-        $schemaName = $existingConfig.agent.schemaName
-        $isManaged = $existingConfig.agent.isManaged
-    }
-
-    # --- Fetch solution snapshot for local file checks ---
-    if ($botId) {
-        Write-Step 'Fetching agent solution from Dataverse'
-        $fetchPy = Join-Path $workspace 'scripts\fetch_and_setup.py'
-        if (Test-Path $fetchPy) {
-            Push-Location $workspace
-            try {
-                $fetchArgs = $pyBaseArgs + @(
-                    $fetchPy,
-                    '--url', $envUrl,
-                    '--bot-id', $botId,
-                    '--name', $agentName,
-                    '--schema', $schemaName
-                )
-                if ($isManaged) { $fetchArgs += '--managed' }
-
-                Start-Spinner "fetching agent solution"
-                $fetchOutput = & $pyCmd @fetchArgs 2>&1
-                $fetchExit = $LASTEXITCODE
-                Stop-Spinner "fetching agent solution"
-
-                if ($fetchExit -eq 0) {
-                    Write-Ok 'Agent solution fetched and extracted'
-                } else {
-                    Write-Warn2 'fetch_and_setup.py exited with errors. Local file checks may be skipped.'
-                    foreach ($line in $fetchOutput) { Write-Host "      $line" }
-                }
-            } finally { Pop-Location }
-        } else {
-            Write-Warn2 "fetch_and_setup.py not found at $fetchPy. Local file checks will be skipped."
-        }
-    } else {
-        Write-Host ''
-        Write-Host '    [info] No agent selected - skipping solution fetch (local file checks will be skipped).' -ForegroundColor Gray
-    }
-
-    # --- Run FlightCheck ---
-    Write-Step 'Running FlightCheck'
-    $pythonExe = Resolve-Python
-    if ($pythonExe) {
-        Push-Location $workspace
-        try {
-            # Run FlightCheck with EAP=Continue so stderr doesn't terminate,
-            # but let output stream directly to console (FlightCheck is interactive)
-            $prevEAP = $ErrorActionPreference
-            $ErrorActionPreference = 'Continue'
-            if ($pythonExe -eq 'py -3.12') {
-                & py -3.12 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always
-            } elseif ($pythonExe -eq 'py -3') {
-                & py -3 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always
-            } else {
-                & $pythonExe scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always
-            }
-            $ErrorActionPreference = $prevEAP
-        } finally { Pop-Location }
-    } else {
-        Write-Warn2 'Python not found. Open a new terminal and run:'
-        Write-Warn2 "  cd $workspace"
-        Write-Warn2 '  python scripts/flightcheck/cli.py --scope full --select-targets always'
+        $ErrorActionPreference = 'Continue'
+        & $pyCmd @pyBaseArgs @cliArgs
+        $flightCheckExit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEAP
+        Pop-Location
     }
     # Record the FlightCheck-only install as a success HERE, before the early
     # return below. This branch returns from inside the top-level try well
@@ -1464,6 +1301,7 @@ if ($FlightCheckOnly) {
     # outcome has been emitted. (The FlightCheck run's own pass/fail verdict is
     # separate telemetry emitted by cli.py; this outcome is the install's.)
     Complete-EssInstallTelemetry -Outcome 'success'
+    $global:LASTEXITCODE = $flightCheckExit
     # ``return`` (not ``exit 0``) so the script ends without terminating
     # the PowerShell host. When this installer is invoked via
     # ``iex (irm .../bootstrap-flightcheck.ps1)`` from an interactive
@@ -1473,47 +1311,49 @@ if ($FlightCheckOnly) {
     return
 }
 
+# VS Code can retain the previous extension host while the installer updates
+# the bundled profile. Close it before relaunching the Maker workspace.
+if (-not $FlightCheckOnly -and -not $SkipLaunch) {
+    Confirm-StopRunningCode
+}
+
 # ---------------------------------------------------------------------------
 # 7. Launch
 # ---------------------------------------------------------------------------
+function Write-AuthenticationGuidance {
+    Write-Host "When VS Code asks you to sign in to GitHub Copilot, use the GitHub account that has your Copilot access. This enables Copilot Chat, where you run /setup." -ForegroundColor Yellow
+    Write-Host "When /setup connects your agent, a separate browser window may ask you to sign in with the Microsoft work account that can access the target Power Platform environment and agent. GitHub sign-in does not grant Power Platform access." -ForegroundColor Yellow
+}
+
 if (-not $SkipLaunch) {
     $code = Resolve-CodeCommand
     $codePath = if ($code.Source) { $code.Source } elseif ($code.FullName) { $code.FullName } else { $null }
     if ($codePath) {
-        # Launch strategy depends on mode:
-        # - Maker mode: just open the workspace. The ESS Maker Profile extension
-        #   handles layout + /setup injection after the welcome wizard closes.
-        # - Developer mode: use `code chat '/setup'` which opens Copilot Chat in
-        #   the sidebar panel on the right (the standard chat experience).
+        # Launch strategy: open the workspace in VS Code. The ESS Maker Profile
+        # extension reads essMaker.mode and applies the mode-specific layout
+        # (Maker: guided rail + walkthrough; Developer: rendered README preview).
+        # /setup is user-driven in both modes - neither the installer nor the
+        # extension runs it automatically.
         # By the time we get here $modeLabel is always 'maker' or 'developer'
         # (the CLI prompt above resolves 'prompt' before we reach any launch
         # code), so there is no third fall-through branch to handle.
         Push-Location $workspace
         try {
             if ($modeLabel -eq 'developer') {
-                # Developer mode - use code chat to open /setup in sidebar panel
-                Write-Step 'Opening workspace in VS Code and requesting /setup in Copilot Chat'
-                $chatOutput = Invoke-Native { & $codePath chat '/setup' }
-                $chatExit = $LASTEXITCODE
-                foreach ($line in $chatOutput) { if ($line) { Write-Host "      $line" } }
-                if ($chatExit -ne 0) {
-                    Write-Warn2 "'code chat' failed or is unsupported (exit $chatExit). Falling back to opening the workspace only."
-                    Write-Warn2 "If you have an older VS Code (pre-1.102 / June 2025), update VS Code and re-run, or run /setup manually in Copilot Chat."
-                    Start-Process -FilePath $codePath -ArgumentList @($workspace) | Out-Null
-                    Write-Ok "Launched VS Code at $workspace"
-                    Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect an editable DA Dev agent." -ForegroundColor Green
-                } else {
-                    Write-Ok "Requested /setup in Copilot Chat at $workspace"
-                    Write-Host "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts and /setup will run." -ForegroundColor Yellow
-                    Write-Host "If /setup does not start after trust/sign-in, open Copilot Chat manually and run /setup." -ForegroundColor Yellow
-                }
-            } else {
-                # Maker mode - extension handles /setup after welcome wizard
+                # Developer mode - open the workspace; the extension shows the
+                # rendered README preview. /setup is user-driven.
                 Write-Step 'Opening workspace in VS Code'
                 Start-Process -FilePath $codePath -ArgumentList @('.') | Out-Null
                 Write-Ok "Launched VS Code at $workspace"
-                Write-Host "The ESS Maker Profile will run /setup in Copilot Chat after the welcome screen closes." -ForegroundColor Yellow
-                Write-Host "If VS Code prompts you to trust the workspace, accept the prompt." -ForegroundColor Yellow
+                Write-Host "Developer mode opens the rendered README. When you're ready, open Copilot Chat and run /setup to connect an editable DA Dev agent." -ForegroundColor Yellow
+                Write-Host "Review the VS Code workspace trust prompt before accepting it." -ForegroundColor Yellow
+            } else {
+                # Maker mode - extension opens the guided view; /setup is user-driven
+                Write-Step 'Opening workspace in VS Code'
+                Start-Process -FilePath $codePath -ArgumentList @('.') | Out-Null
+                Write-Ok "Launched VS Code at $workspace"
+                Write-Host "The ESS Maker Profile opens the guided Agent Developer Kit view. Click 'Start set up' in the Quick start panel (or the Tutorial) to run /setup in Copilot Chat." -ForegroundColor Yellow
+                Write-Host "Review the VS Code workspace trust prompt before accepting it." -ForegroundColor Yellow
             }
         } finally { Pop-Location }
     } else {
@@ -1524,6 +1364,8 @@ if (-not $SkipLaunch) {
     Write-Warn2 'Skipping launch per -SkipLaunch'
     Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect an editable DA Dev agent." -ForegroundColor Green
 }
+
+Write-AuthenticationGuidance
 
 Write-Host "`nDone. Workspace: $workspace" -ForegroundColor Green
 

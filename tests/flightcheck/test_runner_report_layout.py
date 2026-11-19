@@ -19,9 +19,9 @@ triage buckets (used to order the action panel and sort cards):
   - MANUAL:           Warning, Manual, NotConfigured
   - PASSED:           Passed, Skipped
 
-Warnings live under MANUAL (not ACTION) because they're "should I
-worry?" questions the kit can't answer — the verification path is
-the operator's. Skipped lives under PASSED because the kit chose
+Warnings share the legacy MANUAL bucket internally, but the report
+directs them to warning review, not manual verification.
+Skipped lives under PASSED because the kit chose
 not to run the check (didn't apply / precondition not met); from a
 triage perspective the row needs no action.
 """
@@ -31,6 +31,8 @@ from __future__ import annotations
 import json
 import re
 import sys
+from copy import deepcopy
+from html import escape
 from pathlib import Path
 
 import pytest
@@ -69,6 +71,54 @@ def _make_result(checkpoint_id, status, priority="High", category="Test"):
             else ""
         ),
     )
+
+
+@pytest.mark.parametrize("output", [None, "reports with spaces/nested", "absolute"])
+def test_saved_result_messages_show_full_native_paths(tmp_path, monkeypatch, capsys, output):
+    from flightcheck.runner import FlightCheckRunner, save_results
+
+    monkeypatch.chdir(tmp_path)
+    runner = FlightCheckRunner()
+    result = runner.run()
+    capsys.readouterr()
+    if output is None:
+        destination = tmp_path / "workspace" / "flightcheck"
+        save_results(result)
+    else:
+        destination = tmp_path / output
+        save_results(result, str(destination) if output == "absolute" else output)
+    messages = capsys.readouterr().out
+    for filename, label in (("results.json", "Results"), ("report.html", "Report")):
+        path = destination / filename
+        assert path.is_file()
+        assert f"{label} saved to {path}\n" in messages
+
+
+@pytest.mark.parametrize("diagnostic_only", [False, True])
+@pytest.mark.parametrize("tags", [
+    [], ["Workday Litmus Test"], ["Customer alias", '<script>alert("tag")</script>'],
+])
+def test_check_defined_custom_tags_render_safely_and_round_trip(tmp_path, diagnostic_only, tags):
+    from flightcheck.runner import CheckResult, FlightCheckRunner, save_results
+
+    row = _make_result("CUSTOM-001", "Manual")
+    row.custom_tags = tags
+    runner = FlightCheckRunner()
+    runner.register("Test", lambda _: [row])
+    result = runner.run()
+    result.diagnostic_only = diagnostic_only
+    before = deepcopy(result)
+    save_results(result, str(tmp_path))
+
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    assert re.findall(r'<li class="custom-tag">(.*?)</li>', html) == [escape(tag) for tag in tags]
+    assert ('aria-label="Custom tags"' in html) is bool(tags)
+    assert '<script>alert("tag")</script>' not in html
+    payload = json.loads((tmp_path / "results.json").read_text(encoding="utf-8"))
+    assert payload["results"][0]["custom_tags"] == tags
+    assert payload["contract"]["results"][0]["customTags"] == tags
+    assert CheckResult(**payload["results"][0]) == row
+    assert result == before
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +234,29 @@ def _build_run_with(results):
     return runner.run()
 
 
+@pytest.mark.parametrize("scope,profile,command,expected", [
+    ("full", "", "", "/flightcheck"),
+    ("authentication", "", "", "/flightcheck --scope authentication"),
+    ("checkpoint:AUTH-PROFILE-001", "", "", "/flightcheck --checkpoint AUTH-PROFILE-001"),
+    ("profile:entra:test", "", "", "/flightcheck --profile entra:test"),
+    ("profile", "entra:test", "", "/flightcheck --profile entra:test"),
+    (
+        "checkpoint:AUTH-PROFILE-001", "", "python flightcheck.py --checkpoint AUTH-PROFILE-001",
+        "python flightcheck.py --checkpoint AUTH-PROFILE-001",
+    ),
+])
+def test_report_rerun_command_preserves_the_invocation_kind(tmp_path, scope, profile, command, expected):
+    from flightcheck.runner import save_results
+
+    result = _build_run_with([_make_result("TEST-001", "Passed")])
+    result.scope, result.profile, result.rerun_command = scope, profile, command
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    assert f"Re-run: <code>{escape(expected)}</code>" in html
+    assert "--scope checkpoint:" not in html
+    assert "--scope profile:" not in html
+
+
 def test_verdict_banner_ready_when_all_passed(tmp_path):
     from flightcheck.runner import save_results
     result = _build_run_with([_make_result("OK-1", "Passed")])
@@ -242,13 +315,8 @@ def test_verdict_ready_subline_mentions_manual_count_when_present(tmp_path):
     assert "need manual verification" in html
 
 
-def test_verdict_warnings_subline_points_at_manual_section_not_action(tmp_path):
-    """READY_WITH_WARNINGS subline must direct the operator to
-    \"Needs manual verification\" \u2014 where warnings actually live
-    under the new bucketing. The old wording \"Action required\" was
-    a stale pointer once warnings moved out of that section, and
-    operators would scroll to an empty Action Required and miss the
-    warnings entirely."""
+def test_verdict_warnings_subline_points_at_warning_review_not_manual_verification(tmp_path):
+    """Automated warnings direct operators to actual warning findings and next steps."""
     from flightcheck.runner import save_results
     result = _build_run_with([_make_result("W-1", "Warning")])
     save_results(result, output_dir=str(tmp_path))
@@ -265,17 +333,16 @@ def test_verdict_warnings_subline_points_at_manual_section_not_action(tmp_path):
     assert m is not None, "verdict-warnings block not found"
     verdict_block = m.group(0)
 
-    assert "Needs manual verification" in verdict_block, verdict_block
-    # The old wording must not regress \u2014 it would point the
-    # operator at an empty section.
+    assert "non-blocking warning" in verdict_block, verdict_block
+    assert "Warnings tab" in verdict_block, verdict_block
+    assert "next steps" in verdict_block, verdict_block
+    assert "manual verification" not in verdict_block, verdict_block
     assert "Action required" not in verdict_block, verdict_block
+    assert "remediation for W-1" in html
 
 
-def test_verdict_not_ready_subline_separates_action_from_verification(tmp_path):
-    """When the run is NOT_READY and also has warnings, the subline
-    must say BOTH where to act (Action required) AND where to
-    verify (Needs manual verification). Bundling them under one
-    section name misroutes the operator."""
+def test_verdict_not_ready_subline_separates_blocking_action_from_warning_review(tmp_path):
+    """Blocking findings and non-blocking warnings have distinct next steps."""
     from flightcheck.runner import save_results
     result = _build_run_with([
         _make_result("F-1", "Failed"),
@@ -294,9 +361,25 @@ def test_verdict_not_ready_subline_separates_action_from_verification(tmp_path):
     verdict_block = m.group(0)
 
     assert "1 failing/errored" in verdict_block, verdict_block
-    assert "1 warning" in verdict_block, verdict_block
+    assert "1 non-blocking warning" in verdict_block, verdict_block
     assert "need action" in verdict_block, verdict_block
-    assert "need manual verification" in verdict_block, verdict_block
+    assert "need review" in verdict_block, verdict_block
+    assert "Action items" in verdict_block and "Warnings tab" in verdict_block
+    assert "manual verification" not in verdict_block, verdict_block
+
+
+def test_mixed_warning_and_manual_findings_keep_separate_banner_guidance(tmp_path):
+    from flightcheck.runner import save_results
+
+    result = _build_run_with([
+        _make_result("W-1", "Warning"), _make_result("M-1", "Manual"),
+    ])
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    note = re.search(r'<span class="verdict-note">(.*?)</span>', html, re.S).group(1)
+    assert "1 non-blocking warning" in note
+    assert "1 item(s) also need manual verification" in note
+    assert "2 item(s)" not in note
 
 
 def test_verdict_not_ready_headline_counts_failures_only_not_warnings(tmp_path):

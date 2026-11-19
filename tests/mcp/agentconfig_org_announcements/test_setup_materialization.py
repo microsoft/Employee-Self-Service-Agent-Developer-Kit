@@ -61,7 +61,8 @@ def test_registering_announcements_keeps_the_existing_default_servers() -> None:
     config = json.loads(MCP_DEFAULTS_PATH.read_text(encoding="utf-8"))
 
     assert "ess-landing-page-config" in config["servers"]
-    assert "ess-planner" not in config["servers"]
+    assert "ess-planner" in config["servers"]
+    assert "workiq-preview" in config["servers"]
 
 
 def _materialize(tmp_path: Path) -> dict:

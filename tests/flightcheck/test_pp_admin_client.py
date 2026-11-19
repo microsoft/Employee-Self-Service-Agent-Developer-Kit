@@ -18,6 +18,8 @@ codified it has been removed.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import json
 from unittest.mock import Mock
 
 import pytest
@@ -30,6 +32,30 @@ require_validated_mock(pp)
 
 
 class TestAuthenticationScope:
+    def test_delegated_read_tokens_are_added_without_clearing_other_audiences(self):
+        from flightcheck.pp_admin_client import PPAdminClient
+
+        client = PPAdminClient("tenant")
+        assert not client.has_flow_token and not client.has_powerapps_token
+
+        client.set_read_tokens(flow_token="flow-read-token")
+        client.set_read_tokens(powerapps_token="powerapps-read-token")
+
+        assert client.has_flow_token and client.has_powerapps_token
+        assert client._flow_token == "flow-read-token"
+        assert client._token == "powerapps-read-token"
+
+    @pytest.mark.parametrize("value", ["", "   ", False, 0])
+    def test_invalid_delegated_token_is_rejected(self, value):
+        from flightcheck.pp_admin_client import PPAdminClient
+
+        client = PPAdminClient("tenant")
+
+        with pytest.raises(ValueError, match="non-empty string"):
+            client.set_read_tokens(flow_token=value)
+
+        assert not client.has_flow_token
+
     def test_bap_only_auth_skips_flow_token(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -47,7 +73,12 @@ class TestAuthenticationScope:
 
         def acquire_interactive(scopes, prompt):
             acquired_scopes.append((scopes, prompt))
-            return {"access_token": f"token-{len(acquired_scopes)}"}
+            return {
+                "access_token": f"token-{len(acquired_scopes)}",
+                "id_token_claims": {
+                    "preferred_username": "maker@example.com",
+                },
+            }
 
         app.acquire_token_interactive.side_effect = acquire_interactive
         monkeypatch.setattr(
@@ -87,7 +118,12 @@ class TestAuthenticationScope:
 
         def acquire_interactive(scopes, prompt):
             acquired_scopes.append((scopes, prompt))
-            return {"access_token": f"token-{len(acquired_scopes)}"}
+            return {
+                "access_token": f"token-{len(acquired_scopes)}",
+                "id_token_claims": {
+                    "preferred_username": "maker@example.com",
+                },
+            }
 
         app.acquire_token_interactive.side_effect = acquire_interactive
         monkeypatch.setattr(
@@ -110,6 +146,45 @@ class TestAuthenticationScope:
         ]
         assert client._flow_token == "token-2"
 
+    def test_auth_rejects_different_accounts_across_api_audiences(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        from flightcheck import pp_admin_client
+
+        monkeypatch.chdir(tmp_path)
+        cache = Mock()
+        cache.has_state_changed = False
+        app = Mock()
+        app.get_accounts.return_value = []
+        usernames = iter(("maker@example.com", "admin@example.com"))
+
+        def acquire_interactive(_scopes, **_kwargs):
+            return {
+                "access_token": "token",
+                "id_token_claims": {
+                    "preferred_username": next(usernames),
+                },
+            }
+
+        app.acquire_token_interactive.side_effect = acquire_interactive
+        monkeypatch.setattr(
+            pp_admin_client.msal,
+            "SerializableTokenCache",
+            lambda: cache,
+        )
+        monkeypatch.setattr(
+            pp_admin_client.msal,
+            "PublicClientApplication",
+            lambda *args, **kwargs: app,
+        )
+
+        client = pp_admin_client.PPAdminClient("organizations")
+
+        with pytest.raises(RuntimeError, match="different or unverifiable"):
+            client.authenticate()
+
 
 @pytest.fixture
 def pp_client(fake_token: str):
@@ -122,6 +197,107 @@ def pp_client(fake_token: str):
     # exercise either need this set or `flow_headers` raises.
     client._flow_token = fake_token
     return client
+
+
+@responses.activate
+def test_flow_runs_since_follows_pages_until_window_is_covered(
+    pp_client,
+) -> None:
+    from flightcheck import pp_admin_client
+
+    flow_id = "00000000-0000-0000-0000-000000007101"
+    first_url = (
+        f"{pp_admin_client.FLOW_BASE}/providers/Microsoft.ProcessSimple/"
+        f"environments/{pp.MOCK_ENV_ID}/flows/{flow_id}/runs"
+    )
+    next_url = f"{first_url}?api-version=2016-11-01&$skiptoken=next"
+    responses.add(
+        "GET",
+        first_url,
+        match=[
+            responses.matchers.query_param_matcher({
+                "api-version": "2016-11-01",
+            })
+        ],
+        json={
+            "value": [{
+                "name": "newer",
+                "properties": {
+                    "startTime": "2026-06-01T00:10:00Z",
+                },
+            }],
+            "nextLink": next_url,
+        },
+        status=200,
+    )
+    responses.add(
+        "GET",
+        next_url,
+        json={
+            "value": [{
+                "name": "covered",
+                "properties": {
+                    "startTime": "2026-06-01T00:00:00Z",
+                },
+            }],
+        },
+        status=200,
+    )
+
+    runs = pp_client.get_flow_runs_since(
+        pp.MOCK_ENV_ID,
+        flow_id,
+        datetime(2026, 6, 1, 0, 1, tzinfo=timezone.utc),
+    )
+
+    assert [run["name"] for run in runs] == ["newer", "covered"]
+
+
+@responses.activate
+def test_flow_runs_since_rejects_cross_origin_next_link(pp_client) -> None:
+    from flightcheck import pp_admin_client
+
+    flow_id = "00000000-0000-0000-0000-000000007101"
+    first_url = (
+        f"{pp_admin_client.FLOW_BASE}/providers/Microsoft.ProcessSimple/"
+        f"environments/{pp.MOCK_ENV_ID}/flows/{flow_id}/runs"
+    )
+    responses.add(
+        "GET",
+        first_url,
+        json={
+            "value": [{
+                "name": "newer",
+                "properties": {
+                    "startTime": "2026-06-01T00:10:00Z",
+                },
+            }],
+            "nextLink": "https://attacker.example/runs?page=2",
+        },
+        status=200,
+    )
+
+    with pytest.raises(ValueError, match="unexpected origin"):
+        pp_client.get_flow_runs_since(
+            pp.MOCK_ENV_ID,
+            flow_id,
+            datetime(2026, 6, 1, 0, 1, tzinfo=timezone.utc),
+        )
+
+    assert len(responses.calls) == 1
+
+
+def test_flow_runs_since_honors_exhausted_deadline(pp_client) -> None:
+    flow_id = "00000000-0000-0000-0000-000000007101"
+
+    result = pp_client.get_flow_runs_since(
+        pp.MOCK_ENV_ID,
+        flow_id,
+        datetime(2026, 6, 1, 0, 1, tzinfo=timezone.utc),
+        max_elapsed_seconds=0,
+    )
+
+    assert result == {"_error": "run_history_deadline_exceeded"}
 
 
 class TestPermissionHandling:
@@ -142,6 +318,74 @@ class TestPermissionHandling:
         assert isinstance(result, dict)
         assert result["_error"] == "insufficient_permissions"
         assert result["_status"] == 403
+
+
+class TestStrictConnectionPagination:
+    @pytest.mark.parametrize("field", ["nextLink", "@odata.nextLink"])
+    @pytest.mark.parametrize("value", [False, 0, "", "   ", [], {}])
+    @responses.activate
+    def test_malformed_continuation_is_not_complete_inventory(self, pp_client, field, value):
+        request = pp.list_connections(env_id=pp.MOCK_ENV_ID, connections=[])
+        request["json"][field] = value
+        responses.add(**request)
+
+        with pytest.raises(ValueError, match="invalid continuation"):
+            pp_client.get_connections(pp.MOCK_ENV_ID, strict_collection=True)
+
+    @pytest.mark.parametrize("field", ["nextLink", "@odata.nextLink"])
+    @responses.activate
+    def test_complete_pages_preserve_inventory(self, pp_client, field):
+        rows = [pp.workday_connection(), pp.servicenow_connection()]
+        request = pp.list_connections(env_id=pp.MOCK_ENV_ID, connections=rows[:1])
+        next_url = request["url"] + "?api-version=2016-11-01&$skiptoken=page2"
+        request["match"] = [
+            responses.matchers.query_param_matcher({"api-version": "2016-11-01"})
+        ]
+        request["json"][field] = next_url
+        responses.add(**request)
+        responses.add("GET", next_url, json=pp.collection(rows[1:]))
+
+        assert pp_client.get_connections(pp.MOCK_ENV_ID, strict_collection=True) == rows
+        assert len(responses.calls) == 2
+
+    @responses.activate
+    def test_repeated_page_is_rejected(self, pp_client):
+        request = pp.list_connections(env_id=pp.MOCK_ENV_ID, connections=[])
+        request["json"]["nextLink"] = request["url"]
+
+        def page(_request):
+            assert not responses.calls, "A repeated page must not be requested."
+            return 200, {}, json.dumps(request["json"])
+
+        responses.add_callback("GET", request["url"], callback=page)
+
+        with pytest.raises(ValueError, match="repeated continuation"):
+            pp_client.get_connections(pp.MOCK_ENV_ID, strict_collection=True)
+
+        assert len(responses.calls) == 1
+
+    @pytest.mark.parametrize("invalid_target", ["environment", "fragment"])
+    @responses.activate
+    def test_wrong_collection_or_fragment_is_rejected(self, pp_client, invalid_target):
+        request = pp.list_connections(env_id=pp.MOCK_ENV_ID, connections=[])
+        request["json"]["nextLink"] = (
+            request["url"].replace(pp.MOCK_ENV_ID, "other-environment")
+            if invalid_target == "environment" else request["url"] + "#page2"
+        )
+        responses.add(**request)
+
+        with pytest.raises(ValueError, match="invalid continuation"):
+            pp_client.get_connections(pp.MOCK_ENV_ID, strict_collection=True)
+
+    @responses.activate
+    def test_conflicting_continuations_are_not_complete_inventory(self, pp_client):
+        request = pp.list_connections(env_id=pp.MOCK_ENV_ID, connections=[])
+        request["json"]["nextLink"] = request["url"] + "?$skiptoken=page2"
+        request["json"]["@odata.nextLink"] = request["url"] + "?$skiptoken=other-page"
+        responses.add(**request)
+
+        with pytest.raises(ValueError, match="conflicting continuations"):
+            pp_client.get_connections(pp.MOCK_ENV_ID, strict_collection=True)
 
 
 class TestFindEnvironmentIdByDataverseUrl:

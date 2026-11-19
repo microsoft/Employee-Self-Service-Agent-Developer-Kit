@@ -32,6 +32,7 @@ def _write(path, bot_id=BOT_ID, environment_id=ENVIRONMENT_ID):
             "environmentId": environment_id, "powerPlatformApiEndpoint": HOST,
         },
         environment_id=environment_id, host=HOST, ring="test",
+        tenant_id="cccccccc-0000-4000-8000-000000006666", account=None,
         api_version="2024-10-01", component_counts=Counter(),
     )
     return json.loads(path.read_text(encoding="utf-8"))

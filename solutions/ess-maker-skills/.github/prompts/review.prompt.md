@@ -12,7 +12,9 @@ First determine what the user wants to review:
   as a judge/SME -> read
   `src/skills/evaluations/review/SKILL.md` and follow it. Do this before any
   setup gate. Workspace-level evaluation sets can be reviewed without a
-  configured agent.
+  configured agent. Apply that skill's backend gate before any MCP call:
+  native DA agents use local-inclusive review discovery and must never trigger
+  Dataverse MCP authentication.
 - **Topics**, including a whole module's topics -> continue with the topic
   review flow below.
 - If the user did not specify, ask whether they want to review **topics** or

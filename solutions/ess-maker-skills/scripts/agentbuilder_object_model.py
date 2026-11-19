@@ -230,3 +230,52 @@ def object_models_to_yaml(
         except Exception as exc:
             results.append(_error_result(key, exc))
     return results
+
+
+def yaml_to_object_models(
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Convert canonical Copilot Studio YAML to Object Model JSON elements."""
+    if not items:
+        return []
+
+    types = _load_object_model()
+    options = types.element_serializer.CreateOptions(False)
+    results: list[dict[str, Any]] = []
+    for item in items:
+        key = item.get("key")
+        if not isinstance(key, str) or not key.strip():
+            raise ObjectModelConverterError(
+                "Each item key must be a non-empty string."
+            )
+        yaml_content = item.get("yaml")
+        if not isinstance(yaml_content, str) or not yaml_content.strip():
+            raise ObjectModelConverterError("yaml must be a non-empty string.")
+
+        try:
+            element = types.yaml_serializer.Deserialize[types.bot_element](
+                yaml_content
+            )
+            if element is None:
+                raise ValueError(
+                    "The Copilot Studio YAML did not contain a BotElement."
+                )
+            serialized = types.json_serializer.Serialize[
+                types.bot_element
+            ](element, options)
+            object_model = json.loads(str(serialized))
+            if not isinstance(object_model, dict):
+                raise ValueError(
+                    "The converted Object Model JSON was not an object."
+                )
+            results.append(
+                {
+                    "key": key,
+                    "success": True,
+                    "elementType": element.GetType().Name,
+                    "objectModel": object_model,
+                }
+            )
+        except Exception as exc:
+            results.append(_error_result(key, exc))
+    return results

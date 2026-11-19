@@ -713,8 +713,7 @@ class TestSkippedFlavorStaysNonInteractive:
     """Regression: the WD-CONN-102 setup-flow freeze.
 
     A Graph-only single-checkpoint run — ``--checkpoint WD-CONN-102`` /
-    ``WD-CONN-010``, driven by skill-3
-    (src/skills/setup/workday/provision-workday-entra-app.md) — authenticates
+    ``WD-CONN-010`` — authenticates
     ONLY Microsoft Graph, so ``_check_package_flavor`` (WD-PKG-001) has no
     Dataverse token and sets ``runner._workday_package_flavor = "skipped"``.
 

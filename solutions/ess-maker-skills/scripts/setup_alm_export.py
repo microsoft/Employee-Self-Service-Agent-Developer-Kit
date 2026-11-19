@@ -267,7 +267,7 @@ def main(argv: list[str] | None = None) -> int:
             and source.get("source") != "copilot-studio-url"
         ):
             raise AlmExportSetupError(
-                "The source must be a recognized Copilot Studio agent URL."
+                "The source must be a recognized Microsoft Copilot Studio URL."
             )
         client = _client_from_args(
             args,
@@ -307,4 +307,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from adk_telemetry import script_error_boundary
+
+    with script_error_boundary("setup_alm_export"):
+        raise SystemExit(main())

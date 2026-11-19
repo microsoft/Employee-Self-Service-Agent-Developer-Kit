@@ -246,7 +246,10 @@ def invoke_workday_connector_probe(
 
     Cited consumers:
       - flightcheck/live_egress_probe.py:build_connector_probe_clientdata
-      - flightcheck/checks/workday.py:_check_workday_active_run_health
+      (The Workday active-probe consumer in flightcheck/checks/workday.py was
+      removed: the connector is invoker-scoped and cannot run headlessly, so
+      WD-RUN-001 is passive-only. This builder is retained for the INFRA-003
+      egress probe's connector-bound path.)
 
     Source (validated):
       tests/fixtures/cassettes/flightcheck_wd_connector_probe.yaml plus the
