@@ -120,14 +120,24 @@ def test_unverified_or_legacy_agent_never_replaces_saved_target(
     assert "DA selection failed" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("answers", [("", ""), ("", "2"), ("", "1", "")])
-def test_picker_cannot_skip_into_legacy_checks(selection, monkeypatch, answers, capsys):
+@pytest.mark.parametrize("answers", [("", "", "x", "9", "1", "1"), ("", "1", "2", "1", "1")])
+def test_picker_reprompts_on_invalid_or_back_and_never_skips(selection, monkeypatch, answers):
     _answer(monkeypatch, *answers)
     monkeypatch.setattr(setup, "list_environments", lambda *a, **k: [{"id": ENV_ID}])
     monkeypatch.setattr(AgentBuilderClient, "list_minimal_bots", lambda _: [native.agent()])
+    with responses.RequestsMock() as http:
+        _lookup(http)
+        config = setup.configure_standalone(selection.root, "prod")
+    assert config["agent"]["botId"] == AGENT_ID
+
+
+def test_environments_without_da_agents_are_not_offered(selection, monkeypatch, capsys):
+    _answer(monkeypatch, "")
+    monkeypatch.setattr(setup, "list_environments", lambda *a, **k: [{"id": ENV_ID}])
+    monkeypatch.setattr(AgentBuilderClient, "list_minimal_bots", lambda _: [])
     assert setup.main(["--kit-root", str(selection.root)]) == 1
     assert not selection.config.exists()
-    assert "selection cannot be skipped" in capsys.readouterr().err
+    assert "No environment visible" in capsys.readouterr().err
 
 
 def test_existing_maker_workspace_is_not_overwritten(selection, capsys):
