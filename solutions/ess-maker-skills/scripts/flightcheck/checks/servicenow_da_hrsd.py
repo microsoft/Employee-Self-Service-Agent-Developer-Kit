@@ -236,11 +236,12 @@ _RECOVERY_GUIDANCE = {
         ),
     },
     "CREDENTIAL": {
-        "step": "ServiceNow physical connection",
-        "owner": "Power Platform Maker/Admin",
+        "step": "ServiceNow connection and agent binding",
+        "owner": "ESS Maker / Agent Developer",
         "where": (
-            "Power Automate or Power Apps -> exact environment -> Connections "
-            "-> Microsoft-published ServiceNow connector"
+            "Copilot Studio -> the exact selected agent -> Settings -> "
+            "Connection Settings -> ServiceNow -> Connect -> Create new "
+            "connection (or select the existing connection), then save"
         ),
         "values": (
             "Authentication Type: Microsoft Entra ID User Login "
@@ -248,29 +249,15 @@ _RECOVERY_GUIDANCE = {
             "instance. Resource URI: the verified App A Application client ID. "
             "If either value is missing, resume its owning phase; never use an "
             "old failed connection value. The current maker signs in with "
-            "their own Microsoft account."
+            "their own Microsoft account. Select that same connection for "
+            "this agent's ServiceNow row and save the agent settings. Do not "
+            "copy or return a connection ID, and do not impersonate another "
+            "connection owner."
         ),
         "success": (
-            "A freshly discovered exact connection is Connected and matches "
-            "the current environment, auth mode, Instance Name, and verified "
-            "App A client ID."
-        ),
-    },
-    "AGENT-CONNECTION": {
-        "step": "agent connection binding",
-        "owner": "ESS Maker / Agent Developer",
-        "where": (
-            "Copilot Studio -> the exact selected agent -> Settings -> "
-            "Connection settings -> ServiceNow"
-        ),
-        "values": (
-            "Bind the current maker's freshly verified exact ServiceNow "
-            "connection. Do not copy or return a connection ID, and do not "
-            "impersonate another connection owner."
-        ),
-        "success": (
-            "The ServiceNow row shows Connected for the selected connection "
-            "and the attestation is bound to the current saved draft."
+            "A freshly discovered exact connection is Connected, matches the "
+            "current environment, auth mode, Instance Name, and verified App "
+            "A client ID, and the agent's saved draft references it."
         ),
     },
     "TEST": {
@@ -726,7 +713,6 @@ def _run_checks(runner, profile: CheckProfile) -> list[CheckResult]:
         )
     needs_inventory = target in {
         profile.cid("CREDENTIAL"),
-        profile.cid("AGENT-CONNECTION"),
         profile.cid("TEST"),
         None,
     }
@@ -864,12 +850,9 @@ def _run_checks(runner, profile: CheckProfile) -> list[CheckResult]:
         require_handoff=not target_mode,
         profile=profile,
     )
-    if target == profile.cid("CREDENTIAL"):
-        return [credential_result]
-
     needs_draft_identity = (
         target in {
-            profile.cid("AGENT-CONNECTION"),
+            profile.cid("CREDENTIAL"),
             profile.cid("TEST"),
             None,
         }
@@ -961,8 +944,13 @@ def _run_checks(runner, profile: CheckProfile) -> list[CheckResult]:
             profile=profile,
         )
     )
-    if target == profile.cid("AGENT-CONNECTION"):
-        return [agent_connection_result]
+    credential_result = _merge_connection_and_binding(
+        credential_result,
+        agent_connection_result,
+        profile=profile,
+    )
+    if target == profile.cid("CREDENTIAL"):
+        return [credential_result]
 
     topics_result = _topics_result(summary, evidence, component_hash, profile=profile)
     portal_result = _portal_result(components, admin_setup, state, profile=profile)
@@ -974,7 +962,6 @@ def _run_checks(runner, profile: CheckProfile) -> list[CheckResult]:
                     topics_result,
                     portal_result,
                     credential_result,
-                    agent_connection_result,
                     profile=profile,
                 )
             ]
@@ -986,7 +973,6 @@ def _run_checks(runner, profile: CheckProfile) -> list[CheckResult]:
                 topics_result,
                 portal_result,
                 credential_result,
-                agent_connection_result,
                 profile=profile,
             )
         ]
@@ -1010,7 +996,6 @@ def _run_checks(runner, profile: CheckProfile) -> list[CheckResult]:
             topics_result,
             portal_result,
             credential_result,
-            agent_connection_result,
             profile=profile,
         )
     )
@@ -1025,7 +1010,6 @@ def _run_checks(runner, profile: CheckProfile) -> list[CheckResult]:
         _entra_setup_result(admin_setup, state, profile=profile),
         _oidc_result(admin_setup, state, profile=profile),
         credential_result,
-        agent_connection_result,
         topics_result,
         portal_result,
         test_result,
@@ -1048,7 +1032,6 @@ def _all_unavailable(
         "ENTRA-SETUP",
         "OIDC",
         "CREDENTIAL",
-        "AGENT-CONNECTION",
         "TOPICS",
         "PORTAL",
         "TEST",
@@ -2060,59 +2043,95 @@ def _agent_connection_result(
     profile: CheckProfile,
 ) -> CheckResult:
     record = evidence.get("agentConnection")
+    binding_evaluation = "binding-missing"
+    proof_recorded = (
+        isinstance(record, dict)
+        and record.get("kind") == "binding-proof"
+        and record.get("bindingVerified") is True
+    )
     if credential_check.status not in {
         Status.PASSED.value,
     }:
         status = credential_check.status
         result = credential_check.result
-    elif not isinstance(record, dict) or not record.get("makerAttested"):
+    elif not proof_recorded:
         status = Status.NOT_CONFIGURED.value
-        result = "Current maker evidence for the agent's ServiceNow row is absent."
+        result = (
+            "The agent's saved draft has no verified reference to the "
+            "selected ServiceNow connection."
+        )
     else:
         binding_evaluation = _binding_evaluation(
             record,
             binding_identity_sha256,
             str((evidence.get("credential") or {}).get("connectionId") or ""),
         )
-    if (
-        credential_check.status == Status.PASSED.value
-        and isinstance(record, dict)
-        and record.get("makerAttested")
-        and binding_evaluation != "valid"
-    ):
-        status = Status.NOT_CONFIGURED.value
-        if binding_evaluation == "binding-identity-stale":
+        if binding_evaluation == "valid":
+            status = Status.PASSED.value
             result = (
-                "The prior Agent Connect attestation is stale because the "
-                "agent, environment, physical connection, or ServiceNow "
-                "connection-reference binding identity changed."
-            )
-        elif binding_evaluation == "connection-conflict":
-            result = (
-                "The Agent Connect evidence contains conflicting connection "
-                "identities."
-            )
-        elif binding_evaluation == "connection-mismatch":
-            result = (
-                "The Agent Connect evidence belongs to a different selected "
-                "credential."
+                "The agent's saved draft references the selected Connected "
+                "ServiceNow connection."
             )
         else:
-            result = (
-                "The Agent Connect evidence does not identify the selected "
-                "credential."
-            )
-    elif credential_check.status == Status.PASSED.value and isinstance(
-        record, dict
-    ) and record.get("makerAttested"):
-        status = Status.MANUAL.value
-        result = "Maker attested that the ServiceNow row currently shows Connected."
+            status = Status.NOT_CONFIGURED.value
+            if binding_evaluation == "binding-identity-stale":
+                result = (
+                    "The prior binding proof is stale because the agent, "
+                    "environment, physical connection, or ServiceNow "
+                    "connection-reference binding identity changed."
+                )
+            elif binding_evaluation == "connection-conflict":
+                result = (
+                    "The binding proof contains conflicting connection "
+                    "identities."
+                )
+            elif binding_evaluation == "connection-mismatch":
+                result = (
+                    "The binding proof belongs to a different selected "
+                    "connection."
+                )
+            else:
+                result = (
+                    "The binding proof does not identify the selected "
+                    "connection."
+                )
     return _result(
         profile.cid("AGENT-CONNECTION"),
         status,
-        "ServiceNow credential connected to the selected agent",
+        "ServiceNow connection selected for the agent",
         result,
-        "Confirm the ServiceNow row in Copilot Studio Connection settings.",
+        (
+            "Select the connection for this agent's ServiceNow row in "
+            "Connection Settings and save the agent settings."
+        ),
+        profile=profile,
+    )
+
+
+def _merge_connection_and_binding(
+    credential_check: CheckResult,
+    binding_check: CheckResult,
+    *,
+    profile: CheckProfile,
+) -> CheckResult:
+    """Return one CREDENTIAL-001 result that requires both proofs."""
+    if credential_check.status != Status.PASSED.value:
+        return credential_check
+    if binding_check.status in {Status.PASSED.value, Status.MANUAL.value}:
+        credential_check.result = (
+            f"{credential_check.result} {binding_check.result}"
+        )
+        credential_check.evidence = {
+            **credential_check.evidence,
+            "agentBinding": "verified",
+        }
+        return credential_check
+    return _result(
+        credential_check.checkpoint_id,
+        binding_check.status,
+        f"{profile.product} credential health",
+        binding_check.result,
+        binding_check.remediation,
         profile=profile,
     )
 
@@ -2200,7 +2219,6 @@ def _target_test_result(
     topics_check: CheckResult,
     portal_check: CheckResult,
     credential_check: CheckResult,
-    agent_connection_check: CheckResult,
     *,
     profile: CheckProfile,
 ) -> CheckResult:
@@ -2208,7 +2226,6 @@ def _target_test_result(
         topics_check,
         portal_check,
         credential_check,
-        agent_connection_check,
         profile=profile,
     )
     if prerequisite is not None:
@@ -2298,7 +2315,6 @@ def _test_result(
     topics_check: CheckResult,
     portal_check: CheckResult,
     credential_check: CheckResult,
-    agent_connection_check: CheckResult,
     *,
     profile: CheckProfile,
 ) -> CheckResult:
@@ -2306,7 +2322,6 @@ def _test_result(
         topics_check,
         portal_check,
         credential_check,
-        agent_connection_check,
         profile=profile,
     )
     if prerequisite is not None:
@@ -2393,7 +2408,6 @@ def _test_prerequisite_gate(
     topics_check: CheckResult,
     portal_check: CheckResult,
     credential_check: CheckResult,
-    agent_connection_check: CheckResult,
     *,
     profile: CheckProfile,
 ) -> CheckResult | None:
@@ -2405,11 +2419,6 @@ def _test_prerequisite_gate(
             {Status.PASSED.value, Status.MANUAL.value},
         ),
         ("portal Base URI", portal_check, {Status.PASSED.value}),
-        (
-            "Agent Connect",
-            agent_connection_check,
-            {Status.MANUAL.value},
-        ),
     )
     passthrough = {
         Status.FAILED.value,

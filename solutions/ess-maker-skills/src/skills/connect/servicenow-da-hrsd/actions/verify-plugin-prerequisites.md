@@ -40,7 +40,11 @@ verification.
 Return this exact compact canonical payload to the shared lifecycle runner's
 `adapt-question` path.
 Render the target link and complete instructions above in the ordinary
-current-task reply first. The native question carries only the required
+current-task reply first. After the target lines it has a short plain-text
+lead-in, then a Ready-to-send fenced block, which is the message the
+Maker forwards to the ServiceNow administrator (instance URL, the Plugins
+path, and what to send back); it is already in the controller text, so render
+it verbatim. The native question carries only the required
 evidence summary and completion decision:
 
 <!-- visible-handoff-question:v1 -->
@@ -48,7 +52,7 @@ evidence summary and completion decision:
 [
   {
     "header": "HR Service Delivery Core",
-    "question": "Required evidence for the selected ServiceNow instance:\n- Title: `Human Resources Scoped App: Core`\n- Plugin id: `com.sn_hr_core`\n- Version Details: `Installed`\n- Message: `Your application is installed and ready for you to use on your instance`\n\nHas the ServiceNow administrator confirmed that all of this HR Service Delivery Core evidence is present?",
+    "question": "Your ServiceNow administrator should see **Human Resources Scoped App: Core** (`com.sn_hr_core`) listed as Installed, with the message `Your application is installed and ready for you to use on your instance`.\n\nHas the ServiceNow administrator confirmed that all of this HR Service Delivery Core evidence is present?",
     "options": [
       { "label": "Yes, all listed installed-and-ready evidence is present" },
       { "label": "No, one or more required items are missing" },
@@ -66,7 +70,14 @@ Leave the selection unset.
   administrator completed the installation.
 - **No, one or more required items are missing** / **Not sure, the
   administrator still needs to check:** show the direct link and identifiers
-  above, return `ACTION_RESULT = "waiting"`, and do not record completion.
+  above, then show this fixed waiting text verbatim (do not paraphrase it),
+  return `ACTION_RESULT = "waiting"`, and do not record completion:
+
+  ```text
+  HR setup is waiting for your ServiceNow administrator to confirm that the HR Service Delivery Core plugin is installed and active.
+
+  Bring back that confirmation when it's ready, and we'll continue with the Entra handoff. You won't need to restart.
+  ```
 
 After **Yes**, record the single phase handoff:
 

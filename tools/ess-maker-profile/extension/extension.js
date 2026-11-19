@@ -107,6 +107,7 @@ const GUIDED_LAYOUT = {
 // `requires` records setup prerequisites; Customization keeps every action clickable.
 const ACTIONS = [
     { id: 'setup',       icon: '🔌', label: 'Setup',                  sub: 'Sign in to your environment',  query: '/setup',                    requires: [] },
+    { id: 'announcements', icon: '📢', label: 'Post an announcement', sub: 'Reach audiences in the selected agent', query: 'Create an organization announcement', requires: ['setup'] },
     { id: 'create',      icon: '✨', label: 'Create a topic (Coming Soon)', sub: 'Describe a new conversation', query: 'Create a topic',            requires: ['setup'] },
     { id: 'update',      icon: '✏️', label: 'Update a topic (Coming Soon)', sub: 'Tweak an existing topic',     query: 'Update a topic',            requires: ['setup'] },
     { id: 'scan',        icon: '🔍', label: 'Scan for issues',        sub: 'Find broken bindings',         query: '/scan',                     requires: ['setup'] },
@@ -546,6 +547,7 @@ function getTutorialHtml() {
     <nav>
         <a href="#how">How it works</a><span class="sep">·</span>
         <a href="#connect">Setup</a><span class="sep">·</span>
+        <a href="#announcements">Announcements</a><span class="sep">·</span>
         <a href="#create">Create</a><span class="sep">·</span>
         <a href="#update">Update</a><span class="sep">·</span>
         <a href="#scan">Scan</a><span class="sep">·</span>
@@ -561,6 +563,7 @@ function getTutorialHtml() {
         <h3>The workflow</h3>
         <ol>
             <li><strong>Setup</strong> \u2014 Sign in to your Power Platform environment.</li>
+            <li><strong>Post an announcement</strong> \u2014 Publish a notice for the selected ESS agent and its audiences.</li>
             <li><strong>Create a topic (Coming Soon)</strong> \u2014 Describe what you want in plain English. The kit generates everything.</li>
             <li><strong>Update a topic (Coming Soon)</strong> \u2014 Modify an existing topic by describing the change.</li>
             <li><strong>Scan</strong> \u2014 Check for broken references and configuration issues.</li>
@@ -583,6 +586,18 @@ function getTutorialHtml() {
         </ul>
         <p>When you click <strong>Start setup</strong>, a chat opens with the <code>/setup</code> command \u2014 just answer the prompts (environment URL, then sign-in).</p>
         <blockquote><p>First time? You\u2019ll see a browser pop-up asking you to sign in with your work account. That\u2019s expected.</p></blockquote>
+    </section>
+
+    <section id="announcements">
+        <h2>\u{1f4e2} Post an announcement</h2>
+        <p>The <strong>Post an announcement</strong> button opens a guided chat for publishing a notice within the selected deployed ESS agent.</p>
+        <ul>
+            <li><strong>Agent-scoped</strong> \u2014 announcements and the 100-current/50-archived window are separate for each agent in your signed-in tenant.</li>
+            <li><strong>Standard or alert</strong> \u2014 standard notices carry a priority and up to two actions; alerts carry a single link.</li>
+            <li><strong>Audiences (optional)</strong> \u2014 target security groups, mail-enabled security groups, or distribution lists by name, or leave the audience empty for all users of this agent.</li>
+            <li><strong>Scheduling</strong> \u2014 set a start and end date, and republish an expired announcement with a new window.</li>
+        </ul>
+        <blockquote><p>Describe the announcement in plain English and the kit opens a pre-filled editor. Nothing is published until you choose <strong>Publish</strong> there.</p></blockquote>
     </section>
 
     <section id="create">
@@ -1113,6 +1128,7 @@ async function openGettingStarted(stepId, { required = false } = {}) {
 
 // Customization actions stay clickable; the walkthrough explains setup prerequisites.
 const CUSTOMIZATION_ITEMS = [
+    { id: 'announcements', label: 'Post an announcement', run: 'essMaker.run_announcements', icon: 'megaphone', requires: ['setup'], desc: 'Create or manage announcements for the selected ESS agent.' },
     { id: 'create',      label: 'Create a topic (Coming Soon)', run: 'essMaker.runCreate', icon: 'add',  requires: ['setup'], desc: 'Topic creation is not yet available.' },
     { id: 'update',      label: 'Update a topic (Coming Soon)', run: 'essMaker.runUpdate', icon: 'edit', requires: ['setup'], desc: 'Topic updates are not yet available.' },
     { id: 'scan',        label: 'Scan for issues',        run: 'essMaker.runScan',         icon: 'search',    requires: ['setup'], desc: 'Scan your agent for errors and common configuration problems.' },

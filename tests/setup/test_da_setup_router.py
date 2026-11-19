@@ -690,6 +690,7 @@ def test_global_and_command_gates_require_canonical_da_foundation() -> None:
         "backup-template-configs.prompt.md",
         "create.prompt.md",
         "delete.prompt.md",
+        "discover.prompt.md",
         "evaluate.prompt.md",
         "restore-template-configs.prompt.md",
         "review.prompt.md",
@@ -876,6 +877,7 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
         "src/skills/foundation-setup/alm-enrollment.md",
         "src/skills/foundation-setup/permission-guidance.md",
         "src/skills/foundation-setup/product-line-reconciliation.md",
+        "src/skills/planner/SKILL.md",
     }
     assert "not a setup option to advertise or recommend" in normalized
     assert "Begin a downstream playbook only when a maker whose setup is complete" in (
@@ -1906,6 +1908,9 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
     assert text.count("\n{POST_SETUP_COMMAND_REMINDERS}\n") == 2
     assert "{SUPPORTED_INTEGRATION_SHORTCUTS}" in completion_choices
     assert text.count("- Type `/menu` to see all available capabilities.") == 3
+    assert text.count(
+        "- Run `/org-announcements` to create or manage announcements for this agent."
+    ) == 3
     assert "{APPLICABLE_LOCAL_CLEANUP_BLOCKS}" in completion_choices
     assert "body of every unresolved local-cleanup block" in normalized
     assert (

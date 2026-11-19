@@ -1006,6 +1006,8 @@ class TestHermeticRun:
 
         class _Plan:
             clients = frozenset({registry.GRAPH})
+            graph_scopes = None
+            graph_permission_optional = False
             requires_config = True
             requires_dataverse_endpoint = False
             ordered_fns = [(
@@ -1067,6 +1069,8 @@ class TestHermeticRun:
 
         class _Plan:
             clients = frozenset({registry.GRAPH})
+            graph_scopes = None
+            graph_permission_optional = False
             requires_config = True
             requires_dataverse_endpoint = False
             ordered_fns = [(
@@ -1125,6 +1129,8 @@ class TestHermeticRun:
 
         class _Plan:
             clients = frozenset({registry.GRAPH})
+            graph_scopes = None
+            graph_permission_optional = False
             requires_config = True
             requires_dataverse_endpoint = False
             ordered_fns = [(
@@ -1190,6 +1196,8 @@ class TestHermeticRun:
 
         class _Plan:
             clients = frozenset({registry.GRAPH})
+            graph_scopes = None
+            graph_permission_optional = False
             requires_config = True
             requires_dataverse_endpoint = False
             ordered_fns = [(
@@ -2000,6 +2008,8 @@ class TestCheckpointTelemetry:
 
         class _Plan:
             clients = frozenset({_reg.GRAPH})
+            graph_scopes = None
+            graph_permission_optional = False
             requires_config = False
             requires_dataverse_endpoint = False
 
@@ -2173,7 +2183,7 @@ def test_servicenow_lifecycle_targets_cover_both_profiles() -> None:
     assert "SN-DA-HRSD-ADMIN-PREFLIGHT-001" in targets
     assert "SN-DA-ITSM-ADMIN-PREFLIGHT-001" in targets
     assert "SN-DA-ITSM-PLUGIN-001" not in targets
-    assert len(targets) >= 19
+    assert len(targets) >= 17
 
 
 @pytest.mark.parametrize(("profile", "target"), _SERVICENOW_LIFECYCLE_TARGETS)
