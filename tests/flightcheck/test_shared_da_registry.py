@@ -114,6 +114,7 @@ def test_entra_coverage_has_full_checkpoint_and_profile_parity(
             "consent": "Own profile only", "neither": "Not checked",
         }[access] in row["result"]
         assert "not a deployment blocker" in row["remediation"]
+        assert row["doc_link"] == "https://learn.microsoft.com/en-us/graph/people-data-sources"
         assert "manualVerificationSteps" not in row["evidence"]
         assert row["evidence"]["coverageVerified"] is (access == "tenant")
         if access != "tenant":

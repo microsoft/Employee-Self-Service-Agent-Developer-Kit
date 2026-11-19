@@ -378,6 +378,9 @@ def test_real_cli_reports_beta_coverage_and_nonblocking_access_limits(
     assert row["status"] == "Warning"
     assert "not a deployment blocker" in row["remediation"]
     assert "Mock title" not in json.dumps(row["evidence"])
+    if access in {"tenant", "ambiguous", "own"}:
+        assert row["doc_link"] == "https://learn.microsoft.com/en-us/graph/people-data-sources"
+        assert f'href="{row["doc_link"]}"' in html
     if access in {"tenant", "ambiguous"}:
         assert row["evidence"]["usersChecked"] == 2
         assert "profiles checked" in row["result"]

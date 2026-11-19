@@ -65,7 +65,7 @@ def run_entra_profile_checks(runner) -> list[CheckResult]:
                     "AUTH-PROFILE-001 with existing approved User.Read.All access."
                 ),
                 roles=roles, evidence=report,
-                doc_link="https://learn.microsoft.com/en-us/microsoft-365-apps/org-data-service/import/orgdata-attributes",
+                doc_link="https://learn.microsoft.com/en-us/graph/people-data-sources",
             )]
         if report.get("reason") == "permission_unavailable":
             return [CheckResult(
@@ -123,5 +123,5 @@ def run_entra_profile_checks(runner) -> list[CheckResult]:
             "of missing data. Optional fields need not be populated; do not use placeholder values."
         ) if warning else "",
         roles=roles, evidence=report,
-        doc_link="https://learn.microsoft.com/en-us/microsoft-365-apps/org-data-service/import/orgdata-attributes",
+        doc_link="https://learn.microsoft.com/en-us/graph/people-data-sources",
     )]
