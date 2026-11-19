@@ -280,15 +280,11 @@ class TestTransitiveRequirements:
         assert portal is not None
         assert portal.clients == frozenset({registry.AGENTBUILDER})
         assert portal.prereqs == ("SN-DA-HRSD-TOPICS-001",)
-        assert registry.resolve(
-            "SN-DA-HRSD-AGENT-CONNECTION-001"
-        ).prereqs == (
-            "SN-DA-HRSD-CREDENTIAL-001",
-            "SN-DA-HRSD-PORTAL-001",
-        )
+        assert registry.resolve("SN-DA-HRSD-AGENT-CONNECTION-001") is None
         assert registry.resolve("SN-DA-HRSD-TEST-001").prereqs == (
             "SN-DA-HRSD-TOPICS-001",
-            "SN-DA-HRSD-AGENT-CONNECTION-001",
+            "SN-DA-HRSD-CREDENTIAL-001",
+            "SN-DA-HRSD-PORTAL-001",
         )
 
         preflight = registry.transitive_requirements(

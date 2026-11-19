@@ -57,7 +57,6 @@ SUFFIXES = (
     "ENTRA-SETUP",
     "OIDC",
     "CREDENTIAL",
-    "AGENT-CONNECTION",
     "TOPICS",
     "PORTAL",
     "TEST",

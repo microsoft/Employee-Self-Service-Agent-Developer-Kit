@@ -73,9 +73,12 @@ The selected entry point owns any metadata checks and missing-state handling.
   configuration is available. Deleting deployed sets still requires setup.
 - If the user typed `/flightcheck` or explicitly asked to validate setup or
   environment readiness, follow the **FlightCheck entry contract** below.
-- If the user typed `/topic-actions`, explicitly asked to enable or disable
-  whole ESS topic sets, list their current states, or undo earlier Topic Actions changes,
-  re-read `src/skills/topic-actions/SKILL.md` from disk for this invocation.
+- If the user typed `/manage-topics` or its compatibility alias `/topic-actions`,
+  explicitly asked to manage ESS topic-set states, enable or disable whole ESS
+  topic sets, list their current states, or undo earlier Manage topics changes,
+  re-read `src/skills/manage-topics/SKILL.md` from disk for this invocation.
+  Use **Manage topics** as the skill name. Both commands enter the same flow;
+  do not ask the maker to repeat the request or confirm the rename.
   That entry verifies canonical selected-agent identity and workspace
   preparation without requiring connection health or `connect_ready: true`.
   It never starts setup or repairs a connection automatically. Native
@@ -139,7 +142,7 @@ The selected entry point owns any metadata checks and missing-state handling.
   failure heading, repeated inventory or unchanged-topic footer.
   Put that guidance under a standalone **NEXT STEPS** heading, not an inline
   "Next step:" label; do not invent unrelated setup or connection suggestions.
-  Use this pattern for all Topic Actions next-step guidance, including partial
+  Use this pattern for all Manage topics next-step guidance, including partial
   and unverified outcomes. Do not add unsolicited next steps to other responses.
   Use explicit bold table headers. Normal listing, preview, review
   and apply commands use `--chat-output`; capture its envelope without echoing
@@ -436,8 +439,8 @@ Order of grounding sources (highest to lowest):
    microsoft/CopilotStudioSamples Employee Self-Service Agent samples.
 3. `src/skills/` - kit-shipped skill instructions for /create, /update,
    /delete, /test, /scan, /evaluate, /push, /flightcheck,
-   /backup-template-configs, /restore-template-configs, and landing-page
-   configuration.
+   /backup-template-configs, /restore-template-configs, /org-announcements,
+   and landing-page configuration.
 4. `src/reference/` (other subfolders) - additional kit-shipped guidance.
 5. Web fetch / general knowledge - only when none of the above answer the
    question and only after telling the user you're falling back.
@@ -637,6 +640,8 @@ the normal supported publication path and its separate approval.
 | Restore or re-apply hybrid Workday HCM template configs                                                 | `src/skills/restore-template-configs/SKILL.md`                                          |
 | View or configure ESS landing-page branding, quick links, starter prompts, insight cards, name, or icon | `src/skills/landing-page-config/SKILL.md`                                               |
 | Invoke any tool from the `ess-landing-page-config` MCP server                                           | `src/skills/landing-page-config/SKILL.md`                                               |
+| Create, edit, republish, archive, or manage organization announcements or bulletins                     | `src/skills/org-announcements/SKILL.md`                                                 |
+| Invoke any tool from the `ess-org-announcements` MCP server                                             | `src/skills/org-announcements/SKILL.md`                                                 |
 
 **Trigger phrases for connect:** "connect Workday", "set up Workday".
 
@@ -674,6 +679,18 @@ to configure the whole landing page or mentions branding, accent colors, quick
 links, starter prompts, Stay Up to Date, Quick Access, the agent name, or the
 agent icon, or asks what any landing-page setting controls for employees. Do
 not call an AgentConfiguration MCP tool from a generic flow.
+
+**Org Announcements invocation:** Before invoking ANY tool from the
+`ess-org-announcements` MCP server, read and follow
+`src/skills/org-announcements/SKILL.md`. Its own `list_agent_configs` and
+`search_agents` tools resolve missing deployed titleIds; do not start or call
+the landing-page server for announcement discovery. This applies whether the user asks to
+see, create, edit, republish, archive, or delete an announcement, mentions
+announcements, org announcements, bulletins, or alerts, or asks who an
+announcement reaches. Org Announcements are scoped to the authenticated tenant
+and selected deployed agent's required `titleId`. The tenant is token-derived;
+the title is not an audience group or author permission. Do not call an Org
+Announcements MCP tool from a generic flow.
 
 **FlightCheck results rendering:** When presenting `/flightcheck` results (Step 3
 of `src/skills/flightcheck/SKILL.md`), read `results.json` from the executed run's
