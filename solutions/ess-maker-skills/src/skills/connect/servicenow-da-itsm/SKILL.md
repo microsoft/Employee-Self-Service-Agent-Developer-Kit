@@ -115,7 +115,9 @@ does not enable ServiceNow topics before this check passes.
 
 **Topics and Portal:** After the connection check passes, Connect reads the topic
 states for Maker review and saves only approved changes. It also saves the
-administrator-provided portal URL after Maker confirmation. FlightCheck
+administrator-provided portal URL after Maker confirmation. The confirmation
+question comes from `portal-url-confirmation`: show its `question` and
+`options` verbatim, and save nothing before the Maker selects Yes. FlightCheck
 verifies the resulting topic states and portal value.
 
 **Dev Test:** After topic and portal configuration is complete, the Maker runs

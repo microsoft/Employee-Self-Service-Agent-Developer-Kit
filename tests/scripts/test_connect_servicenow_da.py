@@ -10287,6 +10287,171 @@ def test_test_connection_docs_hr_and_it_are_identical_except_domain_nouns() -> N
     assert it == hr
 
 
+PORTAL_CONFIRMATION_OPTIONS = [
+    {"label": "Yes, that's the portal URL"},
+    {"label": "No, use a different URL"},
+]
+
+
+@pytest.mark.parametrize("profile", ("hrsd", "itsm"))
+@pytest.mark.parametrize(
+    ("typed", "shown"),
+    (
+        ("https://dev123.service-now.com/esc/", "https://dev123.service-now.com/esc"),
+        ("dev123.service-now.com/esc", "https://dev123.service-now.com/esc"),
+        ("  https://DEV123.service-now.com  ", "https://dev123.service-now.com"),
+    ),
+)
+def test_portal_url_confirmation_shows_normalized_url_and_saves_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    typed: str,
+    shown: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, path = _write_shared_target_state(
+        tmp_path,
+        profile=profile,
+        agent_id=AGENT_ID,
+        agent_slug="employee-self-service-hr",
+        instance_name="dev123",
+    )
+    before = path.read_bytes()
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: pytest.fail("Confirmation must not call the service."),
+    )
+
+    with snow.product_profile_context(profile):
+        result = snow.portal_url_confirmation(context, typed)
+
+    assert result["portalUrl"] == shown
+    assert result["question"] == f"Is **{shown}** the employee portal URL?"
+    assert result["options"] == PORTAL_CONFIRMATION_OPTIONS
+    assert result["allowFreeformInput"] is False
+    assert result["savedMessage"] == "We'll save that portal URL."
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("profile", ("hrsd", "itsm"))
+@pytest.mark.parametrize(
+    "typed",
+    (
+        "http://dev123.service-now.com/esc",
+        "https://other.service-now.com/esc",
+        "https://dev123.service-now.com/esc?x=1",
+    ),
+)
+def test_portal_url_confirmation_rejects_invalid_urls_like_set_portal_url(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    typed: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _path = _write_shared_target_state(
+        tmp_path,
+        profile=profile,
+        agent_id=AGENT_ID,
+        agent_slug="employee-self-service-hr",
+        instance_name="dev123",
+    )
+    with snow.product_profile_context(profile):
+        with pytest.raises(snow.ServiceNowConnectError) as confirm_error:
+            snow.portal_url_confirmation(context, typed)
+        with pytest.raises(snow.ServiceNowConnectError) as expected_error:
+            snow.normalize_portal_url(typed, expected_instance_name="dev123")
+
+    assert str(confirm_error.value) == str(expected_error.value)
+
+
+def test_portal_url_confirmation_requires_confirmed_instance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _path = _write_shared_target_state(
+        tmp_path,
+        profile="hrsd",
+        agent_id=AGENT_ID,
+        agent_slug="employee-self-service-hr",
+    )
+    with snow.product_profile_context("hrsd"):
+        with pytest.raises(snow.ServiceNowConnectError, match="confirmed"):
+            snow.portal_url_confirmation(context, "https://dev123.service-now.com")
+
+
+def test_portal_url_confirmation_cli_and_phase_mapping() -> None:
+    args = snow.build_parser().parse_args(
+        [
+            "--provider",
+            "servicenow-da-itsm",
+            "portal-url-confirmation",
+            "--portal-url",
+            "dev123.service-now.com",
+        ]
+    )
+    assert args.command == "portal-url-confirmation"
+    assert args.portal_url == "dev123.service-now.com"
+    with pytest.raises(SystemExit):
+        snow.build_parser().parse_args(["portal-url-confirmation"])
+
+
+def test_portal_url_confirmation_hr_and_it_are_identical() -> None:
+    results = {}
+    for profile in ("hrsd", "itsm"):
+        context = _profile_context(
+            profile,
+            agent_id=AGENT_ID,
+            agent_slug="employee-self-service-hr",
+        )
+        with snow.product_profile_context(profile):
+            state = snow._state_base(context, _components())
+            state["adminSetup"]["preflight"]["instanceName"] = "dev123"
+            path = snow._lifecycle_state_path(context)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(state), encoding="utf-8")
+            results[profile] = snow.portal_url_confirmation(
+                context, "https://dev123.service-now.com/esc"
+            )
+    assert results["hrsd"] == results["itsm"]
+
+
+def test_portal_url_docs_require_confirmation_before_save_hr_and_it() -> None:
+    root = snow.SOLUTION_ROOT / "src" / "skills" / "connect"
+    docs = {
+        profile: (
+            root / f"servicenow-da-{profile}" / "actions" / "configure-portal-url.md"
+        ).read_text(encoding="utf-8")
+        for profile in ("hrsd", "itsm")
+    }
+    for text in docs.values():
+        assert "portal-url-confirmation --portal-url" in text
+        assert "Is **{NORMALIZED_PORTAL_URL}** the employee portal URL?" in text
+        assert "Yes, that's the portal URL" in text
+        assert "No, use a different URL" in text
+        assert "Nothing is saved before the Maker selects **Yes**." in text
+        assert text.index("portal-url-confirmation --portal-url") < text.index(
+            "set-portal-url --portal-url"
+        )
+    def confirmation_block(text: str) -> str:
+        start = text.index("portal-url-confirmation --portal-url")
+        end = text.index("Nothing is saved before the Maker selects **Yes**.")
+        return text[start:end].replace("itsm", "hrsd")
+
+    assert confirmation_block(docs["itsm"]) == confirmation_block(docs["hrsd"])
+    skill_root = root / "servicenow"
+    entry = (skill_root / "entry.md").read_text(encoding="utf-8")
+    assert "`portal-url-confirmation`" in entry
+    for profile in ("hrsd", "itsm"):
+        skill = (root / f"servicenow-da-{profile}" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        assert "`portal-url-confirmation`" in skill
+
+
 def test_record_test_cli_accepts_empty_result() -> None:
     args = snow.build_parser().parse_args(
         [

@@ -9197,6 +9197,37 @@ def _rollback_portal_transaction(
     return transaction
 
 
+def portal_url_confirmation(
+    context: dict[str, Any],
+    portal_url: str,
+) -> dict[str, Any]:
+    state = _load_lifecycle_state(context)
+    instance_name = _admin_setup(state)["preflight"].get("instanceName")
+    if not isinstance(instance_name, str) or not instance_name:
+        raise ServiceNowConnectError(
+            "The lifecycle has no confirmed ServiceNow instance."
+        )
+    typed_url = portal_url.strip()
+    if "://" not in typed_url:
+        typed_url = f"https://{typed_url}"
+    normalized_url = normalize_portal_url(
+        typed_url,
+        expected_instance_name=instance_name,
+    )
+    return {
+        "schemaVersion": "servicenow.portal-url-confirmation.v1",
+        "portalUrl": normalized_url,
+        "header": "Confirm employee portal URL",
+        "question": f"Is **{normalized_url}** the employee portal URL?",
+        "options": [
+            {"label": "Yes, that's the portal URL"},
+            {"label": "No, use a different URL"},
+        ],
+        "allowFreeformInput": False,
+        "savedMessage": "We'll save that portal URL.",
+    }
+
+
 def set_portal_url(
     context: dict[str, Any],
     portal_url: str,
@@ -13034,6 +13065,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Restore the original value after a successful guarded readback.",
     )
+    portal_confirmation_parser = subparsers.add_parser(
+        "portal-url-confirmation",
+        help=(
+            "Normalize a Maker-supplied portal URL and return the "
+            "confirmation question without changing state."
+        ),
+    )
+    portal_confirmation_parser.add_argument("--portal-url", required=True)
 
     publish_parser = subparsers.add_parser(
         "publish",
@@ -13252,6 +13291,7 @@ def _command_error_recovery(
         in {
             "inspect-portal-url",
             "set-portal-url",
+            "portal-url-confirmation",
             "portal-reuse-handoff",
             "record-portal-reuse",
         }
@@ -13738,6 +13778,8 @@ def main(argv: list[str] | None = None) -> int:
                 results=list(args.result),
                 maker_acknowledged=list(args.maker_acknowledged),
             )
+        elif args.command == "portal-url-confirmation":
+            result = portal_url_confirmation(context, args.portal_url)
         elif args.command == "set-portal-url":
             result = set_portal_url(
                 context,

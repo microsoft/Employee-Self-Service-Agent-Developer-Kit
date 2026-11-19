@@ -81,11 +81,27 @@ Validate that the answer:
 - is exactly the administrator-supplied root or path URL, without inference;
 - has no credentials, query, or fragment.
 
-Then run:
+Then run the read-only confirmation command, which applies the same
+normalization as `set-portal-url` (HTTPS, no trailing slash) and saves nothing:
 
 ```text
-python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} set-portal-url --portal-url <full-url> --yes
+python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} portal-url-confirmation --portal-url <typed-url>
 ```
+
+Show the returned `question` and `options` verbatim, with no free-form input.
+The question is "Is **{NORMALIZED_PORTAL_URL}** the employee portal URL?" and
+the options are "Yes, that's the portal URL" and "No, use a different URL".
+- **No, use a different URL**: save nothing and ask the URL question above
+  again.
+- **Yes, that's the portal URL**: show the returned `savedMessage` verbatim
+  ("We'll save that portal URL."). Do not announce topic changes in this step;
+  topics were handled in the earlier Topics step. Then run:
+
+```text
+python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} set-portal-url --portal-url <returned-portalUrl> --yes
+```
+
+Nothing is saved before the Maker selects **Yes**.
 
 On `committed` or `already-configured`, return
 `ACTION_RESULT = "applied"`. `already-configured` is successful only because
