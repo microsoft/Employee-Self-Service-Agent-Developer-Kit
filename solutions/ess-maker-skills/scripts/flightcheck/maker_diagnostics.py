@@ -20,6 +20,7 @@ from agentbuilder import (
 )
 
 from .agent_scope import active_agent, validate_agent_slug
+from .graph_client import authenticate_self_profile
 from .checks._connection_dependencies import _Access, _sap_only_topic, audit_connections
 from .checks.environment import _env004_workday_configured
 from .checks.local_files import run_da_local_file_checks
@@ -76,6 +77,7 @@ def _configure(runner, args):
     version = runner.config.get("agentBuilderApiVersion", DEFAULT_API_VERSION)
     runner.env_id, runner.tenant_id, runner.ring = env_id, tenant_id, ring
     runner.authenticated_account = account
+    runner.self_profile_graph = partial(authenticate_self_profile, tenant_id, account)
     runner.agentbuilder = AgentBuilderClient(host, token, ring=ring, tenant_id=tenant_id, api_version=version)
     runner.connectivity = ConnectivityClient(token, ring=ring, api_version=version)
     runner.connection_agent_ids = (agent_id,)
