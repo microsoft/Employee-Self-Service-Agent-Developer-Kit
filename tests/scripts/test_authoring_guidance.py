@@ -22,7 +22,7 @@ def _read(relative: str) -> str:
 
 
 def test_authoring_catalog_union_covers_only_the_pinned_da_ga_template_families():
-    reference = SOLUTION / "src" / "reference" / "topic-actions"
+    reference = SOLUTION / "src" / "reference" / "manage-topics"
     catalogs = {
         path.name: json.loads(path.read_text(encoding="utf-8"))
         for path in sorted(reference.glob("catalog.*.json"))
@@ -70,8 +70,8 @@ def test_authoring_catalog_union_covers_only_the_pinned_da_ga_template_families(
         assert primary_names.isdisjoint(added_names)
 
 
-def test_topic_actions_companion_catalog_matches_pinned_git_content():
-    reference = SOLUTION / "src" / "reference" / "topic-actions"
+def test_manage_topics_companion_catalog_matches_pinned_git_content():
+    reference = SOLUTION / "src" / "reference" / "manage-topics"
     additions = json.loads((reference / "catalog.authoring-additions.json").read_text())
     base = additions["baseCatalog"]
     for filename, expected_blob in (
@@ -161,6 +161,8 @@ def test_planner_routes_coexist_with_native_topic_authoring():
         ("Plan a rollout", "src/skills/planner/SKILL.md"),
         ("Assign/attest", "src/skills/roles/SKILL.md"),
         ("Discover / crawl", "src/skills/discover/SKILL.md"),
+        ("Create, edit, republish", "src/skills/org-announcements/SKILL.md"),
+        ("ess-org-announcements", "src/skills/org-announcements/SKILL.md"),
         ("Create a topic", "src/skills/topics/create/SKILL.md"),
         ("Update/modify a topic", "src/skills/topics/update/SKILL.md"),
     ):
@@ -171,6 +173,7 @@ def test_planner_routes_coexist_with_native_topic_authoring():
         text = _read(path)
         assert "| `/planner`" in text
         assert "| `/roles`" in text
+        assert "| `/org-announcements`" in text
         assert "Draft and approve a topic save" in text
         assert "Inspect pending changes" in text
 

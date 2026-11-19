@@ -101,16 +101,29 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-sl
 ```
 
 Require `decision: instructions-required`. Render `ordinaryReply.text`
-verbatim, then pass every returned `askUserArguments` object verbatim through
+verbatim; it already contains the plain-text lead-in before the
+Ready-to-send fenced block, so do not rewrap or edit either part. Then pass every returned `askUserArguments` object verbatim through
 the active `ask_user` tool. The returned question list intentionally excludes
-availability because `resume-handoff` owns and deduplicates that gate. Record
-the non-secret values only after the administrator answers the separate Client
-ID and User Claim prompts. Keep an accepted Client ID in the current
-conversation turn; if the handoff must be regenerated before the claim answer,
-pass `--client-id "<application-client-id-guid>"` so the next returned
-question is the claim rather than asking for Client ID again. This hint is
-validated but not persisted, so a new chat without an atomic receipt may ask
-for Client ID again.
+availability because `resume-handoff` owns and deduplicates that gate. Do not
+ask the maker for the claim up front: the maker answers one prompt by pasting
+the Entra administrator's non-sensitive reply or the Client ID. Read the claim
+name only from that reply: a custom claim name the administrator states, or
+`email` or `upn` when the administrator states that the standard email or UPN
+claim applies. Never guess a name from a phrase such as "payroll claim", never
+default one, and never accept `aud`. When the reply has a Client ID but no
+claim name, keep the Client ID in the current conversation turn and rerun the
+handoff with `--client-id "<application-client-id-guid>"`; it returns the
+single claim follow-up question, which begins with an acknowledgement of the
+Client ID. Show the returned question verbatim. This hint is validated but not
+persisted, so a new chat without an atomic receipt may ask for Client ID again.
+Record the non-secret values only after the reply supplies both.
+
+For a reply that proposes a custom claim without configuring it, names two
+claims, gives a name without completion confirmation, reports missing
+attributes, an email format, or an Entra error, or that the maker is waiting
+for the claim, show the matching Message in `Clarification and recovery
+Messages` of `src/skills/connect/servicenow/entry.md`. Record nothing until
+the administrator's reply supplies the Client ID and a confirmed claim name.
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-identity-direct --stage entra --client-id "<application-client-id-guid>" --claim-name "<selected-claim-name>" --yes
