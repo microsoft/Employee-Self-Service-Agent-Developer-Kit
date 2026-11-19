@@ -388,6 +388,24 @@ def test_servicenow_connect_guides_require_the_opening_verbatim() -> None:
         ) in text, path.name
 
 
+def test_servicenow_connect_guides_require_the_test_ready_message_verbatim() -> None:
+    skills = _SOLUTION / "src" / "skills" / "connect"
+    for path in (
+        skills / "servicenow" / "entry.md",
+        skills / "servicenow-da-hrsd" / "SKILL.md",
+        skills / "servicenow-da-itsm" / "SKILL.md",
+    ):
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert (
+            "The Test-pane ready message in the current-task lead-in is "
+            "controller-built: show it verbatim and never reword it"
+        ) in text, path.name
+        assert (
+            "when `record-test --result untested` returns `message`, show "
+            "that `message` verbatim and never claim the integration works"
+        ) in text, path.name
+
+
 def test_servicenow_connect_entry_has_unclear_administrator_return_messages() -> None:
     raw = (
         _SOLUTION / "src" / "skills" / "connect" / "servicenow" / "entry.md"
@@ -766,7 +784,8 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "record-agent-connection" not in credential
     assert not (actions / "configure-parameter-sharing.md").exists()
     assert 'ACTION_RESULT = "recorded"' in test
-    assert "List my open HR cases" in test
+    assert "Show my open HR cases" in test
+    assert "record `--result untested`" in test
     assert "--prompt-category list-my-open-hr-cases" in test
     assert "--failure-category" not in test
     assert "Never store response text, case/ticket data, URLs" in test
@@ -774,15 +793,9 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "--details" not in test
     assert "save the current authored draft" in test
     assert "selected ServiceNow connection" in test
-    assert (
-        '"label": "Pass, the ServiceNow HRSD capability worked correctly"'
-        in test
-    )
-    assert (
-        '"label": "Not pass, it failed or could not be verified"' in test
-    )
-    assert '"recommended": true' not in test
-    assert "Do not require a non-empty case result" in test
+    assert '"label": "It returned the cases I expected"' in test
+    assert '"label": "It returned an empty result or an error"' in test
+    assert '"label": "Finish without testing"' in test
     assert 'ACTION_RESULT = "waiting"' in test
     assert "Do not ask a second failure-classification question" in (
         " ".join(test.split())
@@ -1111,15 +1124,11 @@ def test_da_servicenow_itsm_skill_uses_isolated_shared_lifecycle() -> None:
     assert "Only ServiceNow ITSM topics in this inventory" in topics
     assert "Set ServiceNow Portal Base URI" in portal
     assert "Global.ServiceNowITSMPortalBaseURI" in portal
-    assert "List my open IT tickets" in test
-    assert (
-        '"label": "Pass, the ServiceNow ITSM capability worked correctly"'
-        in test
-    )
-    assert (
-        '"label": "Not pass, it failed or could not be verified"' in test
-    )
-    assert '"recommended": true' not in test
+    assert "Show my open IT tickets" in test
+    assert "record `--result untested`" in test
+    assert '"label": "It returned the tickets I expected"' in test
+    assert '"label": "It returned an empty result or an error"' in test
+    assert '"label": "Finish without testing"' in test
     assert "--failure-category" not in test
     assert "Do not require a non-empty ticket result" in test
     assert "Do not ask a second failure-classification question" in (

@@ -1,7 +1,7 @@
 # Record current Test pane evidence
 
 Ask the maker to run one privacy-safe HRSD request in the Copilot Studio Test
-pane: **List my open HR cases**. The prompt must not contain a person's name,
+pane, for example **Show my open HR cases**. The prompt must not contain a person's name,
 email, employee ID, case number, case title, or other personal data.
 
 Before opening Test, save the current authored draft. The Test evidence binds
@@ -19,8 +19,7 @@ The maker decides whether the ServiceNow functionality worked correctly.
 Do not require a non-empty case result, and do not automatically treat a
 sample, empty result, or conversational response as pass or fail.
 
-Render the target link, saved-draft instruction, exact prompt, and privacy
-boundary above in the ordinary current-task reply after its controller-built lead-in, which is shown verbatim. Then use this compact
+Render the target link, saved-draft instruction, and privacy boundary above in the ordinary current-task reply after its controller-built lead-in, which is shown verbatim and already carries the ready message, the example request, and the finish-without-testing option. Do not restate or reword it, and do not add a "Required prompt" line. Then use this compact
 result question:
 
 <!-- visible-handoff-question:v1 -->
@@ -28,26 +27,29 @@ result question:
 [
   {
     "header": "Test ServiceNow HRSD",
-    "question": "Required prompt: **List my open HR cases**\n\nDid the ServiceNow HRSD capability work correctly for the exact saved draft and selected ServiceNow connection?\n\nReturn only Pass or Not pass. Do not include response content, personal data, case identifiers, tokens, or secrets.",
+    "question": "What did the request return: your expected cases, an empty result, or an error? No need to share case contents.",
     "options": [
-      { "label": "Pass, the ServiceNow HRSD capability worked correctly" },
-      { "label": "Not pass, it failed or could not be verified" }
+      { "label": "It returned the cases I expected" },
+      { "label": "It returned an empty result or an error" },
+      { "label": "Finish without testing" }
     ],
     "allowFreeformInput": false
   }
 ]
 ```
 
-Record only an allowlisted prompt category and the maker's pass/fail outcome.
+Record only an allowlisted prompt category and the maker's outcome.
 Never store response text, case/ticket data, URLs, identifiers, or free-form
 details:
 
 ```text
-python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-test --prompt-category list-my-open-hr-cases --result <pass-or-fail>
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-test --prompt-category list-my-open-hr-cases --result <pass-fail-or-untested>
 ```
 
-- **Pass:** record `--result pass`.
-- **Not pass:** record `--result fail` without inventing a failure category.
+- **It returned the cases I expected:** record `--result pass`.
+- **It returned an empty result or an error:** record `--result fail` without inventing a failure category.
+- **Finish without testing:** record `--result untested`, then show the `message` field of the command output verbatim as an ordinary reply. Do not claim the integration is connected or working, do not run final validation, and do not show the final success message. The test stays open, so the next Connect run resumes at the Test-pane request. The Test step is only reached after the earlier setup steps are complete, so no setup blocker is outstanding at this point.
+- If the maker replies in chat with only "Done" or an unclear answer instead of using the question, ask the same question again and do not record evidence.
 - While the question is unanswered, the test is not performed or the maker is
   not ready, return `ACTION_RESULT = "waiting"` and do not record evidence.
 

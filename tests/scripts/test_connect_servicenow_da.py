@@ -9973,6 +9973,162 @@ def test_record_test_attestation_accepts_maker_fail_without_category(
     assert result["failureCategory"] is None
 
 
+@pytest.mark.parametrize(
+    ("profile", "prompt_category", "untested_text"),
+    (
+        (
+            "hrsd",
+            "list-my-open-hr-cases",
+            "**The setup steps are finished, but the integration hasn't "
+            "been tested.** Test it before employees use it.\n\n"
+            "Your progress is saved at the Test-pane request. When you "
+            "return, we'll continue there.",
+        ),
+        (
+            "itsm",
+            "list-my-open-it-tickets",
+            "**The IT setup steps are finished, but this integration "
+            "hasn't been tested.** Test Employee Self-Service IT before "
+            "employees use it.\n\n"
+            "Your progress is saved at the IT Test-pane request. When you "
+            "return, we'll continue there.",
+        ),
+    ),
+)
+def test_record_test_untested_is_saved_never_pass_and_resumable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    prompt_category: str,
+    untested_text: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context = _context()
+    components = _components(CONNECTION_ID)
+    if profile == "itsm":
+        context = {
+            **context,
+            "agent": {
+                **context["agent"],
+                "schema_name": snow.IT_SCHEMA_NAME,
+                "workspace_slug": "employee-self-service-it",
+            },
+            "active": {"slug": "employee-self-service-it"},
+        }
+        components = _itsm_components()
+    context["environment"] = {**context["environment"], "display_name": "Contoso Dev"}
+    with snow.product_profile_context(profile):
+        state = snow._state_base(context, components)
+        _add_current_agent_binding(context, state, components)
+        state_path = snow._lifecycle_state_path(context)
+        state_path.parent.mkdir(parents=True)
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        monkeypatch.setattr(
+            snow,
+            "_agentbuilder_client",
+            lambda _context: type(
+                "FakeAgentBuilder",
+                (),
+                {"fetch_components": lambda self, _agent_id: components},
+            )(),
+        )
+        with pytest.raises(snow.ServiceNowConnectError, match="untested"):
+            snow.record_test_attestation(
+                context,
+                prompt_category=prompt_category,
+                result="untested",
+                failure_category="unexpected",
+            )
+
+        result = snow.record_test_attestation(
+            context,
+            prompt_category=prompt_category,
+            result="untested",
+            failure_category=None,
+        )
+        saved = json.loads(state_path.read_text(encoding="utf-8"))
+        record = saved["evidence"]["test"]
+        contract = json.loads(
+            (
+                snow.SOLUTION_ROOT
+                / "src"
+                / "skills"
+                / "connect"
+                / snow.ACTIVE_PROFILE.provider_key
+                / "contract.json"
+            ).read_text(encoding="utf-8")
+        )
+        test_phase = next(p for p in contract["phases"] if p["id"] == "test")
+        guidance = snow._current_task_guidance(
+            context,
+            saved,
+            phase_id="test",
+            role="ESS Maker / Agent Developer",
+        )
+
+        assert result["message"] == untested_text
+        assert "message" not in record
+        assert record["status"] == "untested"
+        assert record["result"] == "untested"
+        assert record["failureCategory"] is None
+        assert record["recordedAt"]
+        assert not snow._manual_evidence_current(saved, test_phase)
+        assert "worked" not in result["message"]
+        assert guidance.startswith(
+            f"Next, test a request in **{snow._spec_agent_name()}'s Test pane "
+            "in Contoso Dev**.\n\n"
+        )
+        assert guidance.endswith(
+            "request that should return your real ServiceNow data, then "
+            "tell us whether it returned what you expected."
+        )
+        assert "finish without testing" not in guidance
+
+        snow.record_test_attestation(
+            context,
+            prompt_category=prompt_category,
+            result="pass",
+            failure_category=None,
+        )
+        replaced = json.loads(state_path.read_text(encoding="utf-8"))
+        assert replaced["evidence"]["test"]["status"] == "completed"
+        assert replaced["evidence"]["test"]["result"] == "pass"
+        assert snow._manual_evidence_current(replaced, test_phase)
+
+
+def test_record_test_cli_accepts_untested_result() -> None:
+    args = snow.build_parser().parse_args(
+        [
+            "--provider",
+            "servicenow-da-hrsd",
+            "record-test",
+            "--prompt-category",
+            "list-my-open-hr-cases",
+            "--result",
+            "untested",
+        ]
+    )
+    assert args.result == "untested"
+
+
+@pytest.mark.parametrize(
+    ("profile", "records", "record"),
+    (("hrsd", "cases", "case"), ("itsm", "tickets", "ticket")),
+)
+def test_dev_test_follow_up_question_follows_spec(
+    profile: str,
+    records: str,
+    record: str,
+) -> None:
+    with snow.product_profile_context(profile):
+        question = snow._dev_test_clarifying_question()
+
+    assert question == (
+        f"What did the request return: your expected {records}, an empty "
+        f"result, or an error? No need to share {record} contents."
+    )
+
+
 def test_record_test_attestation_keeps_legacy_failure_category_compatible(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -12085,7 +12241,6 @@ _TECHNICAL_CARD_BLOCKS = (
 def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
     profile: str,
 ) -> None:
-    product = snow.PRODUCT_PROFILES[profile]
     context = _profile_context(
         profile,
         agent_id=AGENT_ID if profile == "hrsd" else OTHER_AGENT_ID,
@@ -12170,15 +12325,30 @@ def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
         f"Next, we'll make sure the agent's {audience} {record_noun} links "
         "open in the right employee portal."
     ) == portal
-    assert (
-        "We're ready to try a request. In the agent's Test pane, run a "
-        "request that should return your real ServiceNow data, for example "
-        "the required prompt below. Come back and tell us what happened and "
-        "whether it matched what you expected. You don't need to paste "
-        "case contents.\n\n"
-        f"**Required prompt:** `{product.test_prompt}`"
-    ) == test
-    assert "finish without testing" not in test
+    if profile == "hrsd":
+        expected_test = (
+            "We're ready to try an HR request.\n\n"
+            "In **Employee Self-Service HR's Test pane**, run a request that "
+            "should return your real ServiceNow data, for example **\"Show "
+            "my open HR cases,\"** if you have open cases.\n\n"
+            "Come back and tell us what happened and whether it matched what "
+            "you expected. You don't need to paste case contents.\n\n"
+            "You can also finish without testing; the integration will "
+            "remain untested."
+        )
+    else:
+        expected_test = (
+            "We're ready to try an IT request.\n\n"
+            "In **Employee Self-Service IT's Test pane**, run a request that "
+            "should return your real ServiceNow data, for example **\"Show "
+            "my open IT tickets,\"** if you have open tickets.\n\n"
+            "Come back and tell us what happened and whether it matched what "
+            "you expected. You don't need to paste ticket contents.\n\n"
+            "You can also finish without testing; the IT integration will "
+            "remain untested."
+        )
+    assert expected_test == test
+    assert "Required prompt" not in test
 
 
 @pytest.mark.parametrize(

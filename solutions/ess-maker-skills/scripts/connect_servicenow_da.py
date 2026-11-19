@@ -10479,6 +10479,86 @@ def _take_dev_opening(
     return text
 
 
+_DEV_TEST_COPY = {
+    "hrsd": {
+        "article": "an",
+        "audience": "HR",
+        "records": "cases",
+        "record": "case",
+        "example": "Show my open HR cases",
+        "integration": "the integration",
+    },
+    "itsm": {
+        "article": "an",
+        "audience": "IT",
+        "records": "tickets",
+        "record": "ticket",
+        "example": "Show my open IT tickets",
+        "integration": "the IT integration",
+    },
+}
+
+
+def _dev_test_ready_message() -> str:
+    copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
+    return (
+        f"We're ready to try {copy_['article']} {copy_['audience']} request.\n\n"
+        f"In **{_spec_agent_name()}'s Test pane**, run a request that should "
+        "return your real ServiceNow data, for example "
+        f"**\"{copy_['example']},\"** if you have open {copy_['records']}.\n\n"
+        "Come back and tell us what happened and whether it matched what you "
+        f"expected. You don't need to paste {copy_['record']} contents.\n\n"
+        f"You can also finish without testing; {copy_['integration']} will "
+        "remain untested."
+    )
+
+
+def _dev_test_clarifying_question() -> str:
+    copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
+    return (
+        f"What did the request return: your expected {copy_['records']}, an "
+        "empty result, or an error? No need to share "
+        f"{copy_['record']} contents."
+    )
+
+
+def _dev_untested_message() -> str:
+    if ACTIVE_PROFILE.key == "hrsd":
+        return (
+            "**The setup steps are finished, but the integration hasn't "
+            "been tested.** Test it before employees use it.\n\n"
+            "Your progress is saved at the Test-pane request. When you "
+            "return, we'll continue there."
+        )
+    return (
+        "**The IT setup steps are finished, but this integration hasn't "
+        f"been tested.** Test {_spec_agent_name()} before employees use "
+        "it.\n\n"
+        "Your progress is saved at the IT Test-pane request. When you "
+        "return, we'll continue there."
+    )
+
+
+def _dev_test_guidance(
+    context: dict[str, Any],
+    state: dict[str, Any],
+) -> str:
+    evidence = state.get("evidence")
+    record = evidence.get("test") if isinstance(evidence, dict) else None
+    if not (isinstance(record, dict) and record.get("status") == "untested"):
+        return _dev_test_ready_message()
+    environment = _recorded_environment_name(context)
+    in_env = f" in {environment}" if environment else ""
+    audience = _product_audience()
+    return (
+        f"Next, test a request in **{_spec_agent_name()}'s Test pane"
+        f"{in_env}**.\n\n"
+        f"Run {_DEV_TEST_COPY[ACTIVE_PROFILE.key]['article']} {audience} "
+        "request that should return your real ServiceNow data, then tell us "
+        "whether it returned what you expected."
+    )
+
+
 def _current_task_guidance(
     context: dict[str, Any],
     state: dict[str, Any],
@@ -10562,14 +10642,7 @@ def _current_task_guidance(
             f"{record_noun} links open in the right employee portal."
         )
     if phase_id == "test":
-        return (
-            "We're ready to try a request. In the agent's Test pane, run a "
-            "request that should return your real ServiceNow data, for "
-            "example the required prompt below. Come back and tell us what "
-            "happened and whether it matched what you expected. You don't "
-            "need to paste case contents.\n\n"
-            f"**Required prompt:** `{ACTIVE_PROFILE.test_prompt}`"
-        )
+        return _dev_test_guidance(context, state)
     raise ServiceNowConnectError(
         "ServiceNow current-task guidance is missing."
     )
@@ -11960,13 +12033,17 @@ def record_test_attestation(
         raise ServiceNowConnectError(
             "Unsupported privacy-safe Test pane prompt category."
         )
-    if result not in {"pass", "fail"}:
+    if result not in {"pass", "fail", "untested"}:
         raise ServiceNowConnectError(
-            "Test pane result must be pass or fail."
+            "Test pane result must be pass, fail, or untested."
         )
     if result == "pass" and failure_category is not None:
         raise ServiceNowConnectError(
             "A passing Test pane result cannot have a failure category."
+        )
+    if result == "untested" and failure_category is not None:
+        raise ServiceNowConnectError(
+            "An untested Test pane result cannot have a failure category."
         )
     if (
         result == "fail"
@@ -11994,7 +12071,11 @@ def record_test_attestation(
     )
     attestation = {
         "kind": "maker-attestation",
-        "status": "completed" if result == "pass" else "failed",
+        "status": {
+            "pass": "completed",
+            "fail": "failed",
+            "untested": "untested",
+        }[result],
         "promptCategory": prompt_category,
         "result": result,
         "failureCategory": failure_category,
@@ -12014,6 +12095,8 @@ def record_test_attestation(
     state["draftSemanticHash"] = draft_semantic_hash
     state["connectionBindingHash"] = connection_binding_hash
     _write_lifecycle_state(context, state)
+    if result == "untested":
+        return {**attestation, "message": _dev_untested_message()}
     return attestation
 
 
@@ -12970,7 +13053,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     test_parser.add_argument(
         "--result",
-        choices=("pass", "fail"),
+        choices=("pass", "fail", "untested"),
         required=True,
     )
     test_parser.add_argument(

@@ -232,9 +232,8 @@ def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
         (
             _ACTIONS / "test-connection.md",
             (
-                "Required prompt: **List my open HR cases**",
-                "exact saved draft and selected ServiceNow connection",
-                "Return only Pass or Not pass",
+                "What did the request return: your expected cases",
+                "No need to share case contents",
             ),
         ),
         (
@@ -521,39 +520,46 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
 
 
 @pytest.mark.parametrize(
-    ("provider", "prompt"),
+    ("provider", "records", "record"),
     (
-        ("servicenow-da-hrsd", "List my open HR cases"),
-        ("servicenow-da-itsm", "List my open IT tickets"),
+        ("servicenow-da-hrsd", "cases", "case"),
+        ("servicenow-da-itsm", "tickets", "ticket"),
     ),
 )
 def test_servicenow_test_question_has_explicit_result_choices(
     provider: str,
-    prompt: str,
+    records: str,
+    record: str,
 ) -> None:
     payload = _validate_payload(
         _payloads(
             _CONNECT / provider / "actions" / "test-connection.md"
         )[0],
         required_phrases=(
-            "Required prompt:",
-            prompt,
-            "exact saved draft and selected ServiceNow connection",
-            "Return only Pass or Not pass",
+            f"What did the request return: your expected {records}, an empty "
+            "result, or an error?",
+            f"No need to share {record} contents.",
         ),
     )
 
-    product = "HRSD" if provider.endswith("hrsd") else "ITSM"
     assert [option["label"] for option in payload["options"]] == [
-        f"Pass, the ServiceNow {product} capability worked correctly",
-        "Not pass, it failed or could not be verified",
+        f"It returned the {records} I expected",
+        "It returned an empty result or an error",
+        "Finish without testing",
     ]
     assert not any(option.get("recommended") for option in payload["options"])
     assert payload["allowFreeformInput"] is False
+    assert "Required prompt" not in payload["question"]
     assert "Purpose:" not in payload["question"]
     assert "Owner:" not in payload["question"]
     assert "{COPILOT_STUDIO_AGENT_URL}" not in payload["question"]
     assert "Open the Test pane" not in payload["question"]
+    doc = (
+        _CONNECT / provider / "actions" / "test-connection.md"
+    ).read_text(encoding="utf-8")
+    assert "--result <pass-fail-or-untested>" in doc
+    assert "record `--result untested`" in doc
+    assert "Required prompt" in doc and "do not add a \"Required prompt\"" in doc
 
 
 def test_portal_has_url_input_and_manual_fallback_payloads() -> None:
