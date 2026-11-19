@@ -202,3 +202,4 @@ def test_ci_runs_announcements_separately_on_supported_targets() -> None:
     assert "agentconfig_org_announcements/requirements.txt" in commands
     assert "tests/mcp/agentconfig_org_announcements" in commands
     assert "tests/setup/test_org_announcements_integration.py" in commands
+    assert "tests/setup/test_da_setup_router.py" in commands

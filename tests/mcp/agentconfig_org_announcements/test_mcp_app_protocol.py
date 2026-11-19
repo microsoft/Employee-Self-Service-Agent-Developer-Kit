@@ -1563,6 +1563,52 @@ def test_a_feature_code_on_a_server_failure_still_reports_unavailable(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("operation", ["create", "update", "transition", "duplicate"])
+@pytest.mark.parametrize("body", [b"private not-json", b'"\xffprivate"'])
+def test_registered_mutations_preserve_commit_guidance_after_invalid_json(
+    monkeypatch, fake_clients, operation, body
+) -> None:
+    import base64
+
+    token = base64.urlsafe_b64encode(
+        json.dumps({"tid": TENANT_ID, "oid": OBJECT_ID}).encode()
+    ).rstrip(b"=")
+    monkeypatch.setenv("AGENTCONFIG_ACCESS_TOKEN", f"header.{token.decode()}.signature")
+    methods = []
+
+    def handler(request):
+        methods.append(request.method)
+        if request.method == "POST":
+            return httpx.Response(200, json={"Id": BULLETIN_ID, "Errors": []})
+        if operation == "duplicate" and methods == ["GET"]:
+            return httpx.Response(200, json=_odata_config())
+        return httpx.Response(200, content=body)
+
+    client = org_client.OrgAnnouncementsClient(transport=httpx.MockTransport(handler))
+    _, graph = fake_clients(client)
+    tool, arguments = {
+        "create": ("save_bulletin", _save_arguments()),
+        "update": ("save_bulletin", {**_save_arguments(), "id": BULLETIN_ID}),
+        "transition": ("transition_bulletin", {"id": BULLETIN_ID, "transition": "archive"}),
+        "duplicate": ("duplicate_bulletin", {"id": BULLETIN_ID}),
+    }[operation]
+    try:
+        payload = _structured(_call(tool, arguments))
+        assert payload["status"] == "failure"
+        summary, cause = payload["errors"]
+        assert summary["code"] == "CommittedRefreshFailed"
+        assert "saved" in summary["message"].lower()
+        assert "do not repeat the action" in summary["message"].lower()
+        assert cause["code"] == "ServiceError"
+        assert all(error["retryable"] is False for error in payload["errors"])
+        assert "private" not in json.dumps(payload)
+        assert "decode" not in json.dumps(payload).lower()
+        assert graph.resolve_calls == []
+    finally:
+        asyncio.run(client.aclose())
+    assert methods == (["GET", "POST", "GET"] if operation == "duplicate" else ["POST", "GET"])
+
+
 def test_a_refresh_failure_after_a_committed_save_is_not_retryable(
     fake_clients,
 ) -> None:
@@ -1587,6 +1633,44 @@ def test_a_refresh_failure_after_a_committed_save_is_not_retryable(
     assert payload["errors"][1]["code"] == "NetworkError"
     # Exactly one write was issued; nothing replayed it.
     assert len(client.saves) == 1
+
+
+@pytest.mark.parametrize("operation", ["create", "duplicate"])
+@pytest.mark.parametrize("body", [b"private not-json", b'"\xffprivate"', b"{}"])
+def test_registered_create_with_invalid_receipt_requires_refresh(
+    monkeypatch, fake_clients, operation, body
+) -> None:
+    import base64
+
+    token = base64.urlsafe_b64encode(
+        json.dumps({"tid": TENANT_ID, "oid": OBJECT_ID}).encode()
+    ).rstrip(b"=")
+    monkeypatch.setenv("AGENTCONFIG_ACCESS_TOKEN", f"header.{token.decode()}.signature")
+    methods = []
+
+    def handler(request):
+        methods.append(request.method)
+        if request.method == "GET":
+            return httpx.Response(200, json=_odata_config())
+        return httpx.Response(200, content=body)
+
+    client = org_client.OrgAnnouncementsClient(transport=httpx.MockTransport(handler))
+    fake_clients(client)
+    tool, arguments = (
+        ("duplicate_bulletin", {"id": BULLETIN_ID})
+        if operation == "duplicate"
+        else ("save_bulletin", _save_arguments())
+    )
+    try:
+        payload = _structured(_call(tool, arguments))
+        assert payload["status"] == "failure"
+        assert payload["errors"][0]["code"] == "IndeterminateWrite"
+        assert payload["errors"][0]["retryable"] is False
+        assert "refresh" in payload["errors"][0]["message"].lower()
+        assert "private" not in json.dumps(payload)
+    finally:
+        asyncio.run(client.aclose())
+    assert methods == (["GET", "POST"] if operation == "duplicate" else ["POST"])
 
 
 def test_a_graph_failure_after_a_committed_save_is_not_retryable(

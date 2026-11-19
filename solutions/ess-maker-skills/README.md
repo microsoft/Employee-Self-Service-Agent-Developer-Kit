@@ -132,6 +132,12 @@ Describe the announcement in chat and the kit opens a pre-filled editor for
 you to review — nothing is saved until you publish or save a draft in that
 editor.
 
+If a save is acknowledged but its refreshed record cannot be read, the editor
+reports `CommittedRefreshFailed`: the announcement was saved; refresh rather
+than repeating the action. An unreadable acknowledgment for a new announcement
+or duplicate reports `IndeterminateWrite`: it may have been created, so refresh
+and check before retrying. Neither failure automatically repeats the write.
+
 Org Announcements are **scoped to the authenticated tenant and selected agent
 registration's title ID**, not shared across agents or distinct registrations.
 The current 100 limit and latest 50 archive window apply per

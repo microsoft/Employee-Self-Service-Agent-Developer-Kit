@@ -712,6 +712,41 @@ def test_keyed_reload_failure_is_reported_as_committed_refresh(
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("operation", ["create", "update", "transition"])
+@pytest.mark.parametrize("body", [b"private not-json", b'"\xffprivate"'])
+def test_malformed_committed_reload_is_a_safe_service_failure(
+    monkeypatch, operation, body
+) -> None:
+    methods = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        if request.method == "POST":
+            return httpx.Response(200, json=_save_result())
+        return httpx.Response(200, content=body)
+
+    client = _make_client(monkeypatch, handler)
+
+    async def run() -> None:
+        try:
+            with pytest.raises(org_client.CommittedCanonicalReloadError) as caught:
+                if operation == "transition":
+                    await client.transition_bulletin(TITLE_ID, BULLETIN_ID, "retired")
+                else:
+                    payload = {"status": "draft"}
+                    if operation == "update":
+                        payload["id"] = BULLETIN_ID
+                    await client.save_bulletin(TITLE_ID, payload)
+            assert isinstance(caught.value.cause, org_client.AgentConfigApiError)
+            assert "private" not in str(caught.value.cause)
+            assert "decode" not in str(caught.value.cause).lower()
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+    assert methods == ["POST", "GET"]
+
+
 @pytest.mark.parametrize("operation", ["save", "transition"])
 def test_committed_reload_retries_only_transient_keyed_get_404(
     monkeypatch, operation
@@ -749,6 +784,64 @@ def test_committed_reload_retries_only_transient_keyed_get_404(
     asyncio.run(run())
 
     assert counts == {"post": 1, "get": 3}
+
+
+@pytest.mark.parametrize("operation", ["create", "update", "transition"])
+@pytest.mark.parametrize(
+    "body",
+    [b"private not-json", b'"\xffprivate"', b"{}", b'{"Id":null,"Errors":[]}'],
+)
+def test_unreadable_save_acknowledgment_never_replays(
+    monkeypatch, operation, body
+) -> None:
+    methods = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        return httpx.Response(200, content=body)
+
+    client = _make_client(monkeypatch, handler)
+
+    async def run() -> None:
+        try:
+            expected = (
+                org_client.IndeterminateWriteError
+                if operation == "create"
+                else org_client.InvalidSaveResponseError
+            )
+            with pytest.raises(expected) as caught:
+                if operation == "transition":
+                    await client.transition_bulletin(TITLE_ID, BULLETIN_ID, "retired")
+                else:
+                    payload = {"status": "draft"}
+                    if operation == "update":
+                        payload["id"] = BULLETIN_ID
+                    await client.save_bulletin(TITLE_ID, payload)
+            assert "private" not in str(caught.value)
+            assert "decode" not in str(caught.value).lower()
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+    assert methods == ["POST"]
+
+
+def test_input_value_error_is_not_an_indeterminate_write(monkeypatch) -> None:
+    methods = []
+    client = _make_client(
+        monkeypatch,
+        lambda request: methods.append(request.method) or httpx.Response(200, json={}),
+    )
+
+    async def run() -> None:
+        try:
+            with pytest.raises(ValueError, match="status"):
+                await client.save_bulletin(TITLE_ID, {"status": "unsupported"})
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+    assert methods == []
 
 
 @pytest.mark.parametrize("operation", ["save", "transition"])

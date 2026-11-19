@@ -17,6 +17,7 @@ This new backend surface must never fall back to tenant-only routes.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 from datetime import datetime, timezone
@@ -64,9 +65,14 @@ class IndeterminateWriteError(AgentConfigApiError):
 
     Raised only for writes that cannot be safely replayed: an unkeyed create or
     a duplicate that failed with an ambiguous network error or a 502/503/504
-    gateway response. The caller must refresh canonical state before retrying so
+    gateway response, or returned an unreadable acknowledgment. The caller must
+    refresh canonical state before retrying so
     a committed-but-unacknowledged POST is never duplicated.
     """
+
+
+class InvalidSaveResponseError(AgentConfigApiError):
+    """A successful Save response did not establish the write outcome."""
 
 
 class BulletinValidationError(AgentConfigApiError):
@@ -450,17 +456,17 @@ class OrgAnnouncementsClient(AgentDiscoveryClient):
           entry, so field-level backend codes survive to the widget.
         * ``Errors`` empty and ``Id`` valid → the affected canonical key, after
           checking it agrees with the ID the caller asked to update.
-        * anything else → :class:`AgentConfigApiError`, never an empty default:
+        * anything else → :class:`InvalidSaveResponseError`, never an empty default:
           a blank record would render an empty editor over real stored content.
         """
         if not isinstance(payload, dict):
-            raise AgentConfigApiError(
+            raise InvalidSaveResponseError(
                 "Org Announcements API returned an invalid save response"
             )
 
         errors = payload.get("Errors")
         if not isinstance(errors, list):
-            raise AgentConfigApiError(
+            raise InvalidSaveResponseError(
                 "Org Announcements API returned an invalid save error list"
             )
         if errors:
@@ -468,21 +474,38 @@ class OrgAnnouncementsClient(AgentDiscoveryClient):
 
         raw_id = payload.get("Id")
         if not isinstance(raw_id, str):
-            raise AgentConfigApiError(
+            raise InvalidSaveResponseError(
                 "Org Announcements API returned a saved announcement without an id"
             )
         try:
             canonical_id = validate_bulletin_id(raw_id)
         except ValueError as error:
-            raise AgentConfigApiError(
+            raise InvalidSaveResponseError(
                 "Org Announcements API returned a saved announcement without a valid id"
             ) from error
         if requested_id is not None and canonical_id != requested_id:
-            raise AgentConfigApiError(
+            raise InvalidSaveResponseError(
                 "Org Announcements API returned a different announcement "
                 "than the one that was updated"
             )
         return canonical_id
+
+    async def _save_request(
+        self, title_id: str, save_input: dict[str, Any], requested_id: Optional[str]
+    ) -> str:
+        try:
+            result = await self._request(
+                "POST",
+                f"{self._collection_path(title_id)}/Save",
+                json={"input": save_input},
+                transform_payload=False,
+                idempotent=requested_id is not None,
+            )
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            raise InvalidSaveResponseError(
+                "Org Announcements API returned an unreadable save response"
+            ) from None
+        return self._unwrap_save_result(result, requested_id=requested_id)
 
     async def list_bulletins(self, title_id: str) -> list[dict[str, Any]]:
         """List every current item plus the most recent archived window."""
@@ -519,24 +542,16 @@ class OrgAnnouncementsClient(AgentDiscoveryClient):
         )
         is_create = not requested_id
         try:
-            result = await self._request(
-                "POST",
-                f"{self._collection_path(title_id)}/Save",
-                json={"input": _to_odata_save_input(payload)},
-                transform_payload=False,
-                idempotent=not is_create,
+            saved_id = await self._save_request(
+                title_id, _to_odata_save_input(payload), requested_id
             )
         except (AgentConfigApiError, httpx.RequestError) as error:
             if is_create and _is_ambiguous_write_failure(error):
                 raise IndeterminateWriteError(
                     "The announcement may have been created but the response was "
-                    "never received. Refresh before retrying."
+                    "not confirmed. Refresh before retrying."
                 ) from error
             raise
-        saved_id = self._unwrap_save_result(
-            result,
-            requested_id=requested_id if not is_create else None,
-        )
         return await self._reload_committed_bulletin(title_id, saved_id)
 
     async def _reload_committed_bulletin(
@@ -546,6 +561,11 @@ class OrgAnnouncementsClient(AgentDiscoveryClient):
         for attempt in range(len(_COMMITTED_RELOAD_404_DELAYS) + 1):
             try:
                 return await self.get_bulletin(title_id, bulletin_id)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                cause = AgentConfigApiError(
+                    "Org Announcements API returned an invalid canonical response"
+                )
+                raise CommittedCanonicalReloadError(cause) from None
             except (AgentConfigApiError, httpx.RequestError) as error:
                 is_retryable_404 = (
                     isinstance(error, AgentConfigApiError)
@@ -576,20 +596,10 @@ class OrgAnnouncementsClient(AgentDiscoveryClient):
         validated_status = _require_input_enum(
             status, "status", _VALID_STATUSES
         )
-        saved_id = self._unwrap_save_result(
-            await self._request(
-                "POST",
-                f"{self._collection_path(title_id)}/Save",
-                json={
-                    "input": {
-                        "Id": validated_id,
-                        "Status": validated_status,
-                    }
-                },
-                transform_payload=False,
-                idempotent=True,
-            ),
-            requested_id=validated_id,
+        saved_id = await self._save_request(
+            title_id,
+            {"Id": validated_id, "Status": validated_status},
+            validated_id,
         )
         if validated_status == STATUS_DELETED:
             return None
@@ -603,9 +613,12 @@ def _is_ambiguous_write_failure(
 
     A transport error never reached a response, and a 502/503/504 came from an
     intermediary that may have forwarded the request. A 4xx or a 500 from the
-    service itself is a definite rejection, so it stays a normal error.
+    service itself is a definite rejection, so it stays a normal error. An
+    unreadable successful Save receipt also leaves the outcome unknown.
     """
     if isinstance(error, httpx.RequestError):
+        return True
+    if isinstance(error, InvalidSaveResponseError):
         return True
     return error.http_status in (502, 503, 504)
 
