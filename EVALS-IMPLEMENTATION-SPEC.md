@@ -66,7 +66,7 @@ These decisions come from PM answers (Q1–Q3) and from the discussion with the 
 | v1 experience | **PM decision.** Build the intended experience around the Connect skill. Knowledge evals become available when the Connect skill ships. The paste-excerpt path stays as it is (section 7). |
 | Generic handoff | The eval skill is generic and driven by inputs. It does not read the Connect skill's internal files (for example its setup-state JSON). The eval skill team defines the handoff format (section 5.3). The same handoff serves every Connect skill (section 5.4). |
 | Setup does not block saving | Saving tests does not wait for the integration setup to finish. Setup is checked when tests run, and problems are flagged then. |
-| One KB per agent | Expect one ServiceNow KB source per agent for now. More than one is open (section 18). |
+| One KB per handoff | The Connect skill selects one KB and passes its `connectionId` + `kbSysId`. The eval skill tests only that KB, regardless of how many KBs the agent or connection has. |
 | Graph connector setup | Out of scope. An admin creates the tenant-wide Graph connector in the Microsoft 365 admin center. The Connect skill lists the connections, the maker picks one, and the Connect skill links it to the agent. |
 
 **What this changes in this document:**
@@ -76,7 +76,7 @@ These decisions come from PM answers (Q1–Q3) and from the discussion with the 
 | 2 (scope) | Updated below. |
 | 3, 4 | Owner column added. The Connect skill picks the source; the eval skill reads it and writes tests. |
 | 5.2–5.4 | The Connect skill is now the main way knowledge evals start. New handoff format. New section on supporting any Connect skill. |
-| 6 | The Connect skill picks the connection and KB. The eval skill checks them. Verified Graph findings added (section 6.1). |
+| 6 | The Connect skill picks the connection and KB. The eval skill checks that both IDs are supplied, then reads that KB. Verified Graph findings added (section 6.1). |
 | 7, 8 | Stay with the eval skill. Verified Graph reading added (section 7.5.1). The paste-excerpt path is unchanged. |
 | 12.2 | There is a caller now. |
 | 15, 16 | Example and story split updated. Stories need re-planning. |
@@ -196,7 +196,7 @@ Paths are from the repository root. In the table, `scripts\...` and `src\...` ar
 | Deployment | `evaluation_deployment.py` and `evaluation_promotion.py` prepare and promote sets. | Carry the new local records along. Do not invent an "update in place" API that Copilot Studio does not have. |
 | Run and results | `evaluation_runs.py` and `minimalbot_evaluation.py` start runs and read history and results. | Reuse them. Verify reply details, run links, safety checks, and whether retrying a start is safe. |
 | Review status | `review.json` stores review status and a base description. Deployment does not send it to Copilot Studio. | Do not treat it as policy approval or test confirmation. Add a separate provenance record. |
-| Finding knowledge sources | FlightCheck reads local knowledge files and can list Copilot Studio bot components. | Reuse only after we prove it works for the selected declarative agent. |
+| Finding knowledge sources | FlightCheck reads local knowledge files and can list Copilot Studio bot components. | Source selection belongs to the Connect skill. The eval skill uses the source IDs from its handoff, not agent knowledge-source discovery. |
 | ServiceNow entry | `src\skills\connect\servicenow\integration.json` is marked `unavailable`. | The Connect ServiceNow skill is being built by its feature crew. When it ships, it calls the eval skill with the connection ID and KB sys_id (section 5.3). The eval skill then reads the KB and writes the tests (section 2.1). |
 | ServiceNow MCP | Uses a shared username and password (Basic auth) and generic Table API read/write calls. | Not proven to read articles as the maker. Do not give this flow its broad read/write tools. |
 
@@ -208,7 +208,7 @@ Paths are from the repository root. In the table, `scripts\...` and `src\...` ar
 
 | Component | Owner | Job |
 | --- | --- | --- |
-| Shared entry | Eval skill | Turns direct requests and Connect skill handoffs into one request format. Asks for anything missing. Keeps "save tests" and "run tests" as separate permissions. |
+| Shared entry | Eval skill | Turns direct requests and Connect skill handoffs into one request format. Routes missing KB selection to the Connect skill. Keeps "save tests" and "run tests" as separate permissions. |
 | Handoff checker | Eval skill | Checks the handoff is complete (section 5.3). Hard stop if no knowledge source is named. Trusts the Connect skill that the source is on the agent. |
 | Knowledge source picker | Connect skill | Lists connections and KBs, lets the maker pick, links the source to the agent, and passes `connectionId` + `kbSysId` in the handoff. |
 | Policy input handler | Eval skill | Uses supplied text, calls an allowed reader, or asks for an excerpt. |
@@ -226,7 +226,7 @@ This new path must not change how ordinary custom agents work today, and must no
 | Location under `solutions\ess-maker-skills` | Change |
 | --- | --- |
 | `.github\prompts\evaluate.prompt.md` and the evaluation dispatcher | Keep the same command. Add a way to pass in context. No second command. |
-| Evaluation create/generate/update skills | Add a policy-based writing branch that starts from the handoff's KB. Also accept a ready-made test set if one is passed. Leave normal topic and catalogue behavior unchanged. |
+| Evaluation create/generate/update skills | Add a policy-based writing branch that reads the handoff's KB and generates the tests in the eval skill. Accept existing tests as context for updates or runs, not as a requirement for Connect to generate tests. Leave normal topic and catalogue behavior unchanged. |
 | One shared helper under `scripts` | Put the handoff into one format, check it, compute fingerprints, and check confirmations. The file name is our choice, not a PM requirement. |
 | Conditional reader (new script under `scripts`) | Reads the KB through Microsoft Graph using `connectionId` + `kbSysId`, reusing FlightCheck's Graph sign-in (`flightcheck\graph_client.py`, `checks\graph_connector_kb.py`). Sections 6.1 and 7.5.1. |
 | `evaluation_authoring.py` and related save/import code | Save cases with their source links. Clear confirmation when a case is edited. |
@@ -242,11 +242,11 @@ This new path must not change how ordinary custom agents work today, and must no
 
 1. Recognize a plain-language evaluation request or `/evaluate`.
 2. Find the currently selected agent using existing configuration helpers, when available.
-3. If the agent or source is unclear, ask the maker to pick. Never use another agent's settings.
+3. If the agent is unclear, ask the maker to pick. For new knowledge tests, the Connect skill must select and pass the KB; the eval skill does not offer a KB picker. Never use another agent's settings.
 4. If it is unclear whether to write new tests or run existing ones, ask.
 5. Writing tests locally can go ahead without run setup, where the current flow already allows that. Missing run setup blocks only deploying and running. It must not delete local work.
 6. **PM decision:** "Evaluate my agent" runs the existing evals. It does not create new ones.
-7. A direct request for knowledge tests ("test my ServiceNow PTO policy") is allowed when the agent already has the KB set up. The eval skill finds the connection and KB on the agent (section 6), or asks the maker, then follows the same path as section 5.2 steps 5–10. If no KB is set up, point the maker to the Connect skill.
+7. For a direct request for knowledge tests ("test my ServiceNow PTO policy"), use the KB selection already passed by the Connect skill for the selected agent, if available. Otherwise, route to the Connect skill to select and pass the KB, even if a KB is already set up. Do not discover or choose a KB in the eval skill. Once the handoff is complete, follow section 5.2 steps 5–10. Running existing saved evals does not trigger a new KB selection.
 
 ### 5.2 Start from a Connect skill (the caller)
 
@@ -267,11 +267,11 @@ Rules:
 
 - The eval skill uses only the handoff. It does not read the Connect skill's internal files.
 - If the maker says no, return `skipped` and do not block the Connect skill's setup work.
-- Expect one ServiceNow KB source per agent for now.
+- Use exactly the KB passed by the Connect skill, regardless of how many KBs the agent or connection has. Do not select another KB or expand to all KBs.
 
 ### 5.3 Handoff format (proposed)
 
-The eval skill team defines this format. These are internal field ideas, not claims about any existing service format. The Connect skill owners must agree to it (section 18).
+The eval skill team defines this format and tells the Connect skill owners what to pass. These are internal field ideas, not claims about any existing service format.
 
 | Field | Required | Meaning |
 | --- | --- | --- |
@@ -281,8 +281,8 @@ The eval skill team defines this format. These are internal field ideas, not cla
 | `target` | Yes | Tenant ID, environment ID, agent ID, and run mode. Each must be checked before running. |
 | `sourceType` | Yes for knowledge tests | `servicenow-kb`, `sharepoint`, `workday`, `servicenow-ticketing`, and so on (section 5.4). |
 | `sourceRef` | Yes for knowledge tests | What identifies the source. Depends on `sourceType` (table below). |
-| `testSet` | Optional | Ready-made cases, if the Connect skill has any. Normally empty: the eval skill writes the tests from `sourceRef`. Uses the existing EvaluationSet/EvaluationData format. |
-| `provenance` | Optional | Source details that come with a ready-made `testSet`. Saved as given (section 9). |
+| `testSet` | Optional | Existing cases to update or run, using the existing EvaluationSet/EvaluationData format. For new knowledge tests, the eval skill reads `sourceRef` and generates the tests; Connect is not responsible for generating them. |
+| `provenance` | Optional | Source details accompanying existing tests. Handled under section 9; not a substitute for the Connect skill's KB selection. |
 | `selectedSet` | Optional | An existing set to update or run: its folder and deployed ID if known. Never look it up by display name only. |
 | `changeContext` | Optional | What the caller knows changed, marked "reported" or "checked". Empty means unknown, not "nothing changed". |
 | `makerChoices` | Yes | Separate records of permission to save and permission to run. Earlier permission does not cover a changed action. |
@@ -291,12 +291,12 @@ The eval skill team defines this format. These are internal field ideas, not cla
 
 | `sourceType` | `sourceRef` fields |
 | --- | --- |
-| `servicenow-kb` | `connectionId` (Graph connection ID, required), `kbSysId` (the KB's ServiceNow ID; required when the connection holds more than one KB), `kbName` (display only). |
+| `servicenow-kb` | `connectionId` (Graph connection ID, required), `kbSysId` (the selected KB's ServiceNow ID, always required, even for a single-KB connection), `kbName` (display only). Both IDs come from the Connect skill. |
 | `sharepoint` | Site and library (or folder) the agent uses. To be agreed with that crew. |
 | `workday` | The connection and the operations it exposes. To be agreed with that crew. |
 | `servicenow-ticketing` | The connection and the operations it exposes. To be agreed with that crew. |
 
-Unknown values stay empty with a reason. Never fill them with guesses, similar-looking names, or the agent's reply. Never pass passwords or keys.
+Unknown values stay empty with a reason. A missing required KB ID blocks knowledge authoring until the Connect skill supplies it; the eval skill does not infer a KB or ask the maker to select one. Never fill values with guesses, similar-looking names, or the agent's reply. Never pass passwords or keys.
 
 ### 5.4 Works for any Connect skill
 
@@ -304,7 +304,7 @@ The eval skill does not know anything about ServiceNow. ServiceNow KB is the fir
 
 - **Same for every source (eval skill):** check the handoff, write tests from excerpts, confirm with the maker, save the set, create it in Copilot Studio, run it, return the outcome, keep provenance, rerun and compare.
 - **Different per source (Connect skill):** setting up the source, letting the maker pick it, and passing its IDs.
-- **Small per-source adapter in the eval skill:** confirm the agent has the named source, and read its content. Adding a new knowledge source means adding a `sourceType` and its adapter. It does not change the rest of the eval skill.
+- **Small per-source adapter in the eval skill:** read the content of the source selected and passed by the Connect skill. Trust the Connect skill that the source is set up on the agent; do not rediscover or select it. Adding a new knowledge source means adding a `sourceType` and its adapter. It does not change the rest of the eval skill.
 
 There are two kinds of sources:
 
@@ -315,38 +315,36 @@ There are two kinds of sources:
 
 SharePoint can likely reuse the reading approach in section 7.5. The Copilot Retrieval API documents SharePoint and OneDrive as well as Graph connectors. We have only tested Graph connectors.
 
-## 6. Find the selected knowledge source
+## 6. Use the knowledge source selected by the Connect skill
 
-**Owner after section 2.1:** The Connect skill lets the maker pick the connection and KB, and passes `connectionId` + `kbSysId` in the handoff. The eval skill trusts that the source is on the agent. For a direct request with no handoff, the eval skill uses the order below.
+**Ownership:** The Connect skill selects the connection and KB, with maker input where needed, and passes `connectionId` + `kbSysId` in the handoff. The eval skill fetches that KB's contents and generates the tests. It trusts the Connect skill that the source is on the agent and the connector is ready.
 
-**Proposed order:**
+**Required flow:**
 
-1. Use context from the caller, if given. Check it against the selected agent where we can.
-2. Look at the selected agent's local knowledge files.
-3. Use live lookup in Copilot Studio where it is proven to work for that agent.
-4. Show the possible sources with their type, reference, and how they were found.
-5. Let the maker pick. If lookup is not supported, ask for a source reference. Do not say "no sources found".
+1. Use the connection and KB IDs passed by the Connect skill for the selected agent.
+2. Check both required IDs are supplied. If either is missing, return to the Connect skill for a complete handoff.
+3. Search for articles only inside that KB, then read the selected articles and generate tests (sections 7–8).
+4. Do not enumerate alternative KBs, inspect agent knowledge files to choose a source, or ask the maker to select a KB in the eval skill.
+5. For a direct request without a Connect-selected KB, route to the Connect skill (section 5.1).
 
-Finding only one source makes confirming easier. It does not prove we have the right article or policy.
+Choosing a question area or an article within the passed KB is eval skill work (section 7). It is not a new KB selection.
 
 Things to keep in mind:
 
-- A local file shows local settings. It does not prove the source is published or currently indexed.
-- A connector reference may point to an environment variable that must be looked up.
 - A display name can change, so it is not a reliable ID.
 - A Microsoft Graph connection ID is not a ServiceNow KB ID.
 - One connection can cover several KBs, or only part of one.
-- Finding a source does not mean we are allowed to read its articles.
+- The read uses the maker's existing access. Report a refused call; do not select a different KB to work around it.
 - Source settings do not tell us the employee question area or what changed.
 
-**Open:** Prove this lookup works on the selected declarative agent. FlightCheck's current lookup is a good starting point, not a guarantee.
+Agent knowledge-source discovery is not a prerequisite for the eval skill. The Graph findings below support the Connect skill's selection and the eval skill's article lookup and reading within the passed KB.
 
 ### 6.1 Verified: finding the KB from a Graph connection ID (November 2026)
 
 We tested Microsoft Graph in a test tenant, signed in as a maker, through FlightCheck's existing Graph app. Results:
 
 - `GET /v1.0/external/connections` lists the Graph connections. In the test tenant there were 17 ServiceNow KB connections (one still a draft). The connection ID looks like `ServiceNowKB2609040733`.
-- **One connection can hold many KBs.** One connection had 293 articles across 17 KBs. So the connection ID alone is not enough to pick the KB. The maker must also pick a KB.
+- **One connection can hold many KBs.** One connection had 293 articles across 17 KBs. So the connection ID alone is not enough to pick the KB. The Connect skill must select a KB, with maker input where needed, and pass its `kbSysId`.
 - Each article has `KbKnowledgeBaseUrl`, ending in the KB's ServiceNow ID (`…/kb_knowledge_base/<KB sys_id>`), and `KbKnowledgeBase`, the KB name.
   - Use the **KB sys_id** as the stable ID. Show the name to the maker only.
   - Use the article `Number` and `SysId` for each test's provenance.
@@ -368,7 +366,7 @@ An excerpt is the part of an approved article that answers the question, includi
 
 ### 7.1 Start with the question to test
 
-First confirm the source and the employee question area.
+Use the KB selected and passed by the Connect skill, and confirm the employee question area. Do not ask the maker to choose a KB again.
 
 Example: "ServiceNow IT knowledge; can employees use personal USB drives?"
 
@@ -931,7 +929,7 @@ The five stories are under Feature 8199402 (ServiceNow Knowledge Evaluations for
 
 | # | Story | What to build | Effort | Sprint | Depends on |
 | --- | --- | --- | --- | --- | --- |
-| 1 | Shared flow and knowledge source (8147416) | Shared entry and result format, `/evaluate` and plain-language start, finding the agent's knowledge source, exact source/set selection, limited edits. No ServiceNow offer (deferred). | 3 days | 2601 (current, ends Nov 20) | Source lookup proven to work, or maker selection. |
+| 1 | Shared flow and knowledge source (8147416) | Shared entry and result format, `/evaluate` and plain-language start, accepting the Connect-selected KB, required source-ID checks, exact set selection, limited edits. Connect owns KB selection; eval owns reading and test generation. | 3 days | 2601 (current, ends Nov 20) | Handoff with `connectionId` + `kbSysId`; use a fake handoff until Connect ships. |
 | 2 | Policy-based test creation (8147415) | Full excerpt flow, conditional reader, formal/everyday tests, "confirm all shown" / "review one by one", handling source changes, local provenance. | 3.5 days | 2601 (current, ends Nov 20) | Story 1; OQ-9/OQ-10 approval to store excerpts; reader proof if we build one. |
 | 3 | Run approved tests and grade replies (8147417) | Pre-run checks, no-write check, chosen connection/mode, native prepare/start, no duplicate starts, run recovery, quality tied to exact test version, reading Copilot Studio grading, complete vs. missing evidence, tuning. | 7 days (4 run + 3 grading; not re-estimated after the merge) | 2602 (next) | Story 2; OQ-4; OQ-9 sign-off on the no-write check; PR-2/PR-4 and the real grading/reply format. |
 | 4 | Baseline comparison and recovery (8147419) | Complete results, unchanged reruns using existing history, FR-50 guidance (section 13.1), FR-51 regression-test offer (section 12.4), recovery, accessibility, measurements, maker testing. | 3 days | 2602 (next) | Story 3; OQ-13; design sign-off; OQ-7 support owner. |
@@ -944,7 +942,7 @@ The five stories are under Feature 8199402 (ServiceNow Knowledge Evaluations for
 - Story 1 adds the handoff (sections 5.2–5.4): handoff format, handoff checks, hard stop when no KB, and "evaluate my agent" runs existing evals.
 - Story 2 stays with the eval skill. Its reader is now the Graph reader using `connectionId` + `kbSysId` (sections 6.1 and 7.5.1). The paste-excerpt path stays.
 - Stories 3 and 4 stay as they are.
-- The Connect-skill start depends on the Connect ServiceNow skill shipping. Direct `/evaluate` knowledge tests work once the KB is on the agent.
+- The Connect-skill start depends on the Connect ServiceNow skill shipping. Direct `/evaluate` knowledge authoring also requires a KB selection passed by Connect; without one, route to Connect. Existing saved evals can still be run through `/evaluate`.
 
 ## 17. How we will verify it
 
@@ -956,9 +954,9 @@ Extend existing test files for changed behavior. Add new test files only for new
 
 | Area | Cases to cover |
 | --- | --- |
-| Context and start | `/evaluate` and plain-language requests in one format, missing/unclear source, lookup not supported, wrong target, separate write/run permission. |
+| Context and start | `/evaluate` and plain-language requests in one format, missing either required KB ID routes to Connect, both IDs required even for a single-KB connection, wrong target, separate write/run permission. |
 | Excerpt capture | Good supplied text, reference only, missing reference, too little or conflicting text, denied read, timeout, partial text, unsafe data refused, asking for excerpt without asking for more access. |
-| Conditional reader | Allowed and denied article, correct account and source, unclear choice, supported text formats, missing related content, redirects and sign-in limits. |
+| Conditional reader | Allowed and denied article, correct account, only the Connect-selected KB queried even when other KBs exist, article selection within that KB, supported text formats, missing related content, redirects and sign-in limits. |
 | Writing tests | Formal and everyday tests share the same policy text; expected answers are never sent to the agent; unrelated tests stay unchanged. |
 | Provenance | Group confirmation, question/policy edits clear confirmation, imports without records, promote/cleanup keep the record, failed or half saves never look current. |
 | Quality | Real score source, score not available, edited test clears old score, never mixed with agent pass/fail. |
@@ -976,7 +974,7 @@ Tests with fake (mock) responses do not prove real tenant access or API support.
 
 Before turning on a reader or claiming the full journey works:
 
-1. Show source lookup working on the real selected agent, or show that maker selection works when lookup is not available.
+1. Show that Connect passes the selected KB's `connectionId` + `kbSysId`, and the eval skill queries only that KB without rediscovering or selecting another source.
 2. For automatic reading: show an allowed read, a denied read, that the text is complete enough, and failure handling, all without new permissions.
 3. Show a real "cannot write to business systems" check, not just knowledge-only questions.
 4. Show a real run ID, real replies, grading evidence, and that every requested test is accounted for.
@@ -1008,7 +1006,7 @@ Developers must not fill these in with guesses.
 | When the eval skill is called | **Decided:** the Connect ServiceNow skill calls the eval skill and owns when that happens. The eval skill does not need to handle the timing. | — |
 | What goes back to the Connect skill | **Decided:** one outcome from section 12.2. The eval skill shows the results in the Copilot chat; the Connect skill does not repeat them. | — |
 | Who confirms knowledge tests | **Decided:** the eval skill, since it writes them (section 8). | — |
-| More than one KB on an agent | Expected one. If two or more: pick one, run all, or stop? | Handoff checks. |
+| More than one KB on an agent | **Decided:** the eval skill tests only the KB selected and passed by the Connect skill. Other KBs on the agent or connection do not change the scope. | — |
 | No results | **Decided:** tell the maker exactly what came back (for example, no articles found for that KB). Retry only when an API call failed or errored; do not retry an empty but successful result. | — |
 | Connector not ready | **Decided:** the Connect skill checks the Graph connector is ready (not a draft, finished loading) before calling the eval skill. The eval skill trusts this and reports whatever it gets back. | — |
 | Copilot license | **Decided:** OK if the Retrieval API needs a Microsoft 365 Copilot license. Fallback when it is not available: Search plus the paste-excerpt path. | — |
