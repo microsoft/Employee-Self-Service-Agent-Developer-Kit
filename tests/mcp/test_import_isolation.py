@@ -20,7 +20,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _mcp_modules import (  # noqa: E402
     load_landing_page_modules,
@@ -131,3 +131,23 @@ def test_the_suites_run_clean_in_a_single_interpreter() -> None:
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+def test_collecting_mcp_tests_does_not_shadow_the_planner_package() -> None:
+    probe = (
+        "import runpy, sys;"
+        f"sys.path.insert(0, {str(REPO_ROOT / 'solutions' / 'ess-maker-skills' / 'scripts')!r});"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r});"
+        f"runpy.run_path({str(Path(__file__).resolve())!r});"
+        "from planner.plan_model import Plan;"
+        "assert Plan.__module__ == 'planner.plan_model'"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
