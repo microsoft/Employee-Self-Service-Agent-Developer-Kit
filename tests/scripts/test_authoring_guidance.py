@@ -334,6 +334,22 @@ def test_flow_routes_are_notice_only_and_retired_workday_route_is_removed():
     assert retired_route not in _read("src/skills/topics/create/SKILL.md")
 
 
+def test_workflow_inspection_counts_attempts_without_restoring_execution():
+    guidance = _read("src/skills/workflows/test/SKILL.md")
+    emission = "python scripts/emit_capability.py workflow_test"
+
+    assert guidance.count(emission) == 1
+    assert (
+        guidance.index("If those prerequisites are unavailable")
+        < guidance.index(emission)
+        < guidance.index("python scripts/flow_run_inspect.py")
+    )
+    assert "not workflow execution or a backend conversation test" in guidance
+    assert "Prerequisite-only checks emit nothing." in guidance
+    assert "Additional reads for the same request do not emit again." in guidance
+    assert "not flow execution, repair or success" in guidance
+
+
 def test_evaluation_handoff_uses_remote_context_without_overwriting_drafts():
     dispatcher = _read("src/skills/evaluations/dispatcher/SKILL.md")
     create = _read("src/skills/evaluations/create/SKILL.md")
