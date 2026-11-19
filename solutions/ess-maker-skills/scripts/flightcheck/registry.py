@@ -399,23 +399,6 @@ _SPECS: list[CheckpointSpec] = [
         profile="hrsd",
     ),
     CheckpointSpec(
-        key="SN-DA-HRSD-AGENT-CONNECTION-001",
-        category_fn=run_servicenow_da_hrsd_checks,
-        category_label="ServiceNow DA HRSD",
-        clients=frozenset({AGENTBUILDER, CONNECTIVITY}),
-        requires_config=True,
-        requires_dataverse_endpoint=False,
-        prereqs=(
-            "SN-DA-HRSD-CREDENTIAL-001",
-            "SN-DA-HRSD-PORTAL-001",
-        ),
-        priority=Priority.HIGH.value,
-        roles=(Role.ESS_MAKER.value,),
-        inherit_prereq_clients=False,
-        provider="servicenow-da-hrsd",
-        profile="hrsd",
-    ),
-    CheckpointSpec(
         key="SN-DA-HRSD-TEST-001",
         category_fn=run_servicenow_da_hrsd_checks,
         category_label="ServiceNow DA HRSD",
@@ -424,7 +407,8 @@ _SPECS: list[CheckpointSpec] = [
         requires_dataverse_endpoint=False,
         prereqs=(
             "SN-DA-HRSD-TOPICS-001",
-            "SN-DA-HRSD-AGENT-CONNECTION-001",
+            "SN-DA-HRSD-CREDENTIAL-001",
+            "SN-DA-HRSD-PORTAL-001",
         ),
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),

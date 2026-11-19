@@ -30,12 +30,9 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-sl
 
 Before running discovery, tell the Maker:
 
-> Preparing read-only ServiceNow connection discovery. If Microsoft sign-in
-> opens, complete it; while the browser is waiting, setup is waiting for
-> authorization, not processing the ServiceNow API. After authorization, the
-> connection inventory request uses a 60-second HTTP connect/read timeout.
-> That is not a 60-second limit for the whole invocation, and a server that
-> continues returning bytes may keep a read active.
+> We're checking your ServiceNow connections, read-only. If a Microsoft
+> sign-in window opens, please complete it, and we'll continue once you're
+> signed in.
 
 Parse the first `DA_ADMIN_PREFLIGHT_PROGRESS_JSON:` marker with
 `stage: authentication` as client/auth preparation. Do not say that the HTTP
@@ -104,7 +101,7 @@ runtime-rendered question may add the bounded discovery error:
 [
   {
     "header": "ServiceNow instance",
-    "question": "For {AGENT_DISPLAY_NAME} (`{SELECTED_AGENT_SLUG}`) in environment `{ENVIRONMENT_ID}` and {REALM} realm, enter the intended public ServiceNow HTTPS root URL.\n\nExample: `https://<your-instance>.service-now.com`\n\nUse only the instance root (`https://<instance>.service-now.com`). Do not enter a portal or module path such as `/sp`, `/esc`, or `/now/...`. Do not enter a username, password, credential, token, secret, or certificate. If you do not know the URL, ask your ServiceNow administrator for the public instance root.\n\n{DISCOVERY_ERROR_IF_ANY}",
+    "question": "For {AGENT_DISPLAY_NAME} (`{SELECTED_AGENT_SLUG}`) in environment `{ENVIRONMENT_ID}` and {REALM} realm, which ServiceNow instance should Employee Self-Service use? Send its public HTTPS root URL, not credentials.\n\nExample: `https://<your-instance>.service-now.com`\n\nUse only the instance root (`https://<instance>.service-now.com`). Do not enter a portal or module path such as `/sp`, `/esc`, or `/now/...`. Do not enter a username, password, credential, token, secret, or certificate. If you do not know the URL, ask your ServiceNow administrator for the public instance root.\n\n{DISCOVERY_ERROR_IF_ANY}",
     "allowFreeformInput": true
   }
 ]
