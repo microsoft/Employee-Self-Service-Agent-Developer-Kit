@@ -106,18 +106,46 @@ def _project_metadata(metadata: dict[str, Any], key: str) -> str:
     return yaml_content
 
 
-def acknowledge_instruction_baseline(agent_dir: Path, submitted_yaml: str) -> None:
-    """Acknowledge submitted instructions only; leave later drafts untouched."""
-    path = Path(agent_dir) / ".baseline" / "agent.mcs.yml"
-    baseline = yaml.safe_load(path.read_text(encoding="utf-8"))
-    submitted = yaml.safe_load(submitted_yaml)
-    if not isinstance(baseline, dict) or not isinstance(submitted, dict):
+def _instruction_yaml_span(content: str) -> tuple[int, int]:
+    try:
+        document = yaml.compose(content)
+    except yaml.YAMLError as exc:
+        raise ValueError("Instruction acknowledgement requires valid agent YAML.") from exc
+    if not isinstance(document, yaml.MappingNode):
         raise ValueError("Instruction acknowledgement requires agent YAML mappings.")
-    if "instructions" not in submitted:
-        raise ValueError("Submitted agent YAML has no instructions section.")
-    baseline["instructions"] = submitted["instructions"]
+    sections = [
+        (key, value) for key, value in document.value
+        if isinstance(key, yaml.ScalarNode) and key.value == "instructions"
+    ]
+    if len(sections) != 1:
+        raise ValueError("Agent YAML must contain exactly one instructions section.")
+    key, value = sections[0]
+    if value.start_mark.index < key.end_mark.index:
+        raise ValueError("The instructions section must contain an explicit value.")
+    # Block collection end marks include comments preceding the next field.
+    while isinstance(value, (yaml.MappingNode, yaml.SequenceNode)) and not value.flow_style and value.value:
+        value = value.value[-1][1] if isinstance(value, yaml.MappingNode) else value.value[-1]
+    return key.end_mark.index, value.end_mark.index
+
+
+def acknowledge_instruction_baseline(agent_dir: Path, submitted_yaml: str) -> None:
+    """Replace only the acknowledged instruction section; leave later drafts untouched."""
+    path = Path(agent_dir) / ".baseline" / "agent.mcs.yml"
+    baseline = path.read_text(encoding="utf-8")
+    submitted = submitted_yaml.replace("\r\n", "\n")
+    start, end = _instruction_yaml_span(baseline)
+    submitted_start, submitted_end = _instruction_yaml_span(submitted)
+    replacement = submitted[submitted_start:submitted_end]
+    if baseline[start:end].endswith("\n") and not replacement.endswith("\n"):
+        replacement += "\n"
+    elif (
+        not baseline[start:end].endswith("\n")
+        and replacement.endswith("\n")
+        and baseline[end:].startswith("\n")
+    ):
+        replacement = replacement[:-1]
     _atomic_write_text(
-        path, yaml.safe_dump(baseline, sort_keys=False, allow_unicode=True),
+        path, baseline[:start] + replacement + baseline[end:],
     )
 
 
@@ -136,13 +164,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--account")
     parser.add_argument("--draft", type=Path, help="Desired agent.mcs.yml draft.")
     parser.add_argument("--expected", type=Path, help="Fresh AgentBuilder read snapshot.")
+    parser.add_argument(
+        "--acknowledge-remote-changes", action="store_true",
+        help="Save a reviewed reconciliation against the unchanged --expected snapshot.",
+    )
     parser.add_argument("--output", type=Path, help="Reusable JSON result path.")
     parser.add_argument("--yaml-output", type=Path, help="Optional reusable read projection.")
     parser.add_argument("--yes", action="store_true", help="Apply the separately approved save.")
     args = parser.parse_args(argv)
 
-    if args.operation == "read" and (args.yes or args.draft or args.expected):
-        parser.error("read does not accept --yes, --draft, or --expected.")
+    if args.operation == "read" and (
+        args.yes or args.draft or args.expected or args.acknowledge_remote_changes
+    ):
+        parser.error(
+            "read does not accept --yes, --draft, --expected, or --acknowledge-remote-changes."
+        )
     if args.operation == "update" and (args.draft is None or args.expected is None):
         parser.error("update requires --draft and --expected.")
     if args.yaml_output and args.operation != "read":
@@ -211,8 +247,36 @@ def main(argv: list[str] | None = None) -> int:
             "desiredInstructions": desired_instructions,
             "changed": desired_instructions != expected_instructions,
             "saved": False,
+            "writeAttempted": False,
         }
     )
+    baseline_path = agent_folder / ".baseline" / "agent.mcs.yml"
+    result["baselinePath"] = str(baseline_path)
+    try:
+        baseline_instructions = _metadata_from_yaml(
+            baseline_path.read_text(encoding="utf-8"), "agent:baseline",
+        )["instructions"]
+    except (OSError, ValueError, ObjectModelConverterError) as exc:
+        raise ComponentEditError(
+            "The instruction baseline is unavailable or cannot be converted. No write was sent.",
+            {**result, "saveBlocked": True},
+        ) from exc
+    remote_instructions = current["component"]["metadata"]["instructions"]
+    result["baselineComparison"] = {
+        "baseline": baseline_instructions,
+        "remote": remote_instructions,
+        "draft": desired_instructions,
+    }
+    result["saveBlocked"] = (
+        remote_instructions not in (baseline_instructions, desired_instructions)
+        and not args.acknowledge_remote_changes
+    )
+    if args.yes and result["saveBlocked"]:
+        raise ComponentEditError(
+            "Instructions changed since the acknowledged baseline. Review and reconcile "
+            "the draft before using --acknowledge-remote-changes. No write was sent.",
+            result,
+        )
     if args.yes:
         update = native.update_agent_instructions(
             expected_component,

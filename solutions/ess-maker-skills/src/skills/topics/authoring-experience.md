@@ -379,6 +379,18 @@ Carry forward the testing objective and authorized editable scope. These choices
 
 Resolve unverified topic state or report its blocker rather than guessing which choice applies. Preserve the existing scoped batch/debugging consent rules and do not repeat a decision already established by explicit authorization. Do not make instruction correction a prerequisite for a deliberate topic-only save.
 
+### Baseline drift before saving
+
+Run the normal topic or instruction update preview before approval. The tools compare acknowledged baseline, current saved content and proposed content as converted Object Models. Topic comparisons exclude server-generated fields; instruction comparisons cover only the instructions section.
+
+When `saveBlocked` is true, use `baselineComparison` to review the baseline, remote and draft content. Preserve unrelated remote changes in the proposal. Resolve overlapping edits through the existing review and authorization rules; do not present the ordinary save as ready to run.
+
+After the maker approves the reconciled proposal, add `--acknowledge-remote-changes` to the existing `topic_authoring.py update` or `agent_instructions.py update` preview and save commands, retaining the reviewed snapshot as `--expected`. Use `--yes` only for the approved save. The acknowledged save requires current content to still match that reviewed snapshot. If it has changed again, read fresh content and repeat the affected review before saving.
+
+Use the acknowledgement flag only for an explicitly reviewed reconciliation. Do not overwrite or advance the acknowledged baseline to clear the guard. If the baseline cannot be read or converted, report the underlying failure and stop the save; the flag does not bypass unavailable baseline evidence.
+
+When saved content already matches the proposal, use the existing already-current outcome without claiming a new remote write. The acknowledgement flag does not authorize changes to component identity, activation or publication.
+
 ### Targeted instruction-change preview and approval
 
 For deletion-related routing corrections, reuse this preview and the instruction-only save control with the state, consent and outcome bindings in [Deletion-related instruction correction](deletion-experience.md#deletion-related-instruction-correction). That path does not use Create/Update's topic-save sequencing or testing continuation.
@@ -388,6 +400,8 @@ For deletion-related routing corrections, reuse this preview and the instruction
 Carry forward the selected agent, topic, identified conflict and actual topic-save state. Use current saved instruction evidence to prepare the smallest targeted correction through the normal instruction owner.
 
 Preserve unrelated live instructions and pending local edits. Isolate the correction without losing other drafts or including them in the proposed push.
+
+Apply [Baseline drift before saving](#baseline-drift-before-saving) to the instruction preview and save.
 
 If current instructions cannot be established or the correction cannot be isolated, explain the missing evidence or scope issue and offer the next safe action. Do not present a runnable Push choice.
 

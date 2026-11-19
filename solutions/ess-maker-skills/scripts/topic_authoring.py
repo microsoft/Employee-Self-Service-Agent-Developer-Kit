@@ -682,6 +682,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--display-name", help="Creation-only display name.")
     parser.add_argument("--description", help="Creation-only component description.")
     parser.add_argument("--expected", type=Path, help="Read snapshot for update; preview for delete.")
+    parser.add_argument(
+        "--acknowledge-remote-changes", action="store_true",
+        help="Save a reviewed reconciliation against the unchanged --expected snapshot.",
+    )
     parser.add_argument("--output", type=Path, help="Reusable JSON result path.")
     parser.add_argument("--yaml-output", type=Path, help="Optional reusable read projection.")
     parser.add_argument("--yes", action="store_true", help="Apply the separately approved change.")
@@ -695,6 +699,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("create requires --display-name.")
     if args.operation == "update" and args.expected is None:
         parser.error("update requires --expected from a fresh read.")
+    if args.acknowledge_remote_changes and args.operation != "update":
+        parser.error("--acknowledge-remote-changes is valid only for update.")
     if args.operation == "delete" and args.yes and args.expected is None:
         parser.error("delete --yes requires --expected from a reviewed deletion preview.")
     if args.operation == "delete" and args.expected is not None and not args.yes:
@@ -862,7 +868,41 @@ def main(argv: list[str] | None = None) -> int:
             != str(entry.get("schemaName") or "").casefold()
         ):
             raise ValueError("The expected topic identity differs from its current mapping.")
-        result["before"] = current
+        result.update({"before": current, "writeAttempted": False})
+        baseline_path = agent_folder / ".baseline" / relative_path
+        result["baselinePath"] = str(baseline_path)
+        try:
+            baseline_dialog = _without_server_generated_fields(
+                _convert_topic_yaml(
+                    baseline_path.read_text(encoding="utf-8"), f"{relative_path}:baseline",
+                )
+            )
+        except (OSError, ValueError, ObjectModelConverterError) as exc:
+            raise ComponentEditError(
+                "The topic baseline is unavailable or cannot be converted. No write was sent.",
+                {**result, "saveBlocked": True},
+            ) from exc
+        remote_dialog = _without_server_generated_fields(current["dialog"])
+        desired_clean = _without_server_generated_fields(desired_dialog)
+        expected_dialog = _without_server_generated_fields(expected_component["dialog"])
+        result["baselineComparison"] = {
+            "baseline": baseline_dialog, "remote": remote_dialog, "draft": desired_clean,
+        }
+        result["saveBlocked"] = (
+            remote_dialog not in (baseline_dialog, desired_clean)
+            and not args.acknowledge_remote_changes
+        )
+        if args.acknowledge_remote_changes and remote_dialog != expected_dialog:
+            raise ComponentEditError(
+                "The topic changed after the reviewed snapshot. No write was sent.",
+                {**result, "expectedDialog": expected_dialog, "saveBlocked": True},
+            )
+        if args.yes and result["saveBlocked"]:
+            raise ComponentEditError(
+                "The topic changed since the acknowledged baseline. Review and reconcile "
+                "the draft before using --acknowledge-remote-changes. No write was sent.",
+                result,
+            )
         if args.yes:
             topic_update = {
                 "componentId": entry["componentId"],
@@ -871,6 +911,8 @@ def main(argv: list[str] | None = None) -> int:
                 "dialog": desired_dialog,
                 "requireCleanDiagnostics": True,
             }
+            if args.acknowledge_remote_changes:
+                topic_update["requireExpectedDialog"] = True
             update = native.update_dialog_components(
                 [topic_update],
                 _retry_on_conflict=False,

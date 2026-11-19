@@ -41,7 +41,7 @@ Discover the component inventory for the selected agent. Preserve each entry's c
 
 Classify changes by their actual content, not their containing filename or YAML formatting. For `agent.mcs.yml`, compare the instruction section with its acknowledged baseline separately from other fields. List an unchanged instruction section as neither pending nor excluded. Represent a changed display name as **Display name**, naming the proposed value and its actual save limitation; do not relabel metadata as instruction changes.
 
-Before pushing retained topic or instruction drafts, compare their complete proposed content with freshly read saved content. Use the acknowledged baseline or earlier read, when available, to distinguish intended local edits from newer remote changes. Preserve unrelated remote changes in the proposal. Resolve overlapping edits through the existing review and authorization rules before supplying the fresh snapshot as `--expected` to the save command.
+Before pushing retained topic or instruction drafts, apply [Baseline drift before saving](authoring-experience.md#baseline-drift-before-saving). Compare the acknowledged baseline, freshly read remote content and complete proposed draft. Preserve unrelated remote changes in the proposal. Resolve overlapping edits through the existing review and authorization rules before supplying the fresh snapshot as `--expected` to the save command. Follow the linked acknowledgement procedure only after the reconciled proposal is approved.
 
 Account for at least these component types:
 

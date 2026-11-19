@@ -10,7 +10,17 @@ If those prerequisites are unavailable, explain what could not be inspected and 
 
 ## Read and interpret
 
-Read `src/reference/ess-docs/operations/flow-run-inspection.md` before interpreting run actions. Use the existing inspector against the confirmed target:
+Read `src/reference/ess-docs/operations/flow-run-inspection.md` before interpreting run actions.
+
+Immediately before the first authorized read-only inspection attempt for the request, emit once:
+
+```powershell
+python scripts/emit_capability.py workflow_test
+```
+
+This best-effort usage event counts an inspection attempt, not flow execution, repair or success. Prerequisite-only checks emit nothing. Additional reads for the same request do not emit again. Do not retry unknown telemetry delivery.
+
+Use the existing inspector against the confirmed target:
 
 ```powershell
 python scripts/flow_run_inspect.py --flow "<flow-guid>" --environment "<environment-guid>"
