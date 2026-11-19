@@ -16,6 +16,7 @@ Here's what I can help you with:
 | `/planner` | Type Enter to plan an ESS rollout — grounded scenarios, tasks, and owners (works before setup) |
 | `/roles` | Assign a rollout role (Workday/ServiceNow admin) to a person so they can see and pick up their tasks |
 | `/landing-page` | Configure the branding and content employees see when they open the ESS agent |
+| `/org-announcements` | Create and manage announcements for the selected deployed ESS agent |
 | `/connect-workday` | Connect the active ESS HR agent to Workday |
 | `/connect` | Choose an available integration |
 | `/create` | Create a workflow or evaluation test set locally |

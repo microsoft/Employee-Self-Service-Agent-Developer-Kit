@@ -109,6 +109,103 @@ Copilot Studio and deployed to the organization. `/setup` installs and extracts
 the Power Platform agent; publication, admin approval, and Integrated apps
 deployment are separate steps.
 
+### 📢 Post Organization Announcements
+
+Publish announcements for the selected deployed ESS agent and its audiences.
+Run `/org-announcements`, ask `Create an announcement`, or use the **Post an
+announcement** Quick Action.
+
+- **Standard announcements** carry a title, description, priority, and up to
+  two actions.
+- **Alerts** carry a single link action for time-sensitive notices.
+- **Audiences** are optional. An empty audience applies no additional Security
+  Group filtering and reaches everyone who uses the selected agent. Security
+  groups, mail-enabled security groups, or classic distribution groups limit
+  delivery and are searched by name or email in one combined query.
+- **Scheduling** publishes an announcement for a start/end window, and expired
+  announcements can be published again through the normal editor after
+  reviewing and updating their schedule.
+- **Lifecycle** actions archive, unarchive, move back to draft, duplicate, or
+  delete an announcement.
+
+Describe the announcement in chat and the kit opens a pre-filled editor for
+you to review — nothing is saved until you publish or save a draft in that
+editor.
+
+If a save is acknowledged but its refreshed record cannot be read, the editor
+reports `CommittedRefreshFailed`: the announcement was saved; refresh rather
+than repeating the action. An unreadable acknowledgment for a new announcement
+or duplicate reports `IndeterminateWrite`: it may have been created, so refresh
+and check before retrying. Neither failure automatically repeats the write.
+
+Org Announcements are **scoped to the authenticated tenant and selected agent
+registration's title ID**, not shared across agents or distinct registrations.
+The current 100 limit and latest 50 archive window apply per
+tenant-and-registration pair. Within that registration, `audience: []` applies
+no additional Security Group filtering. There is no cross-agent or legacy
+tenant-only API fallback.
+
+**LOB means line-of-business.** Regular and LOB are separate Microsoft 365 app
+registrations of the same bot, not different agents or audience groups.
+Announcements and landing-page settings belong to the chosen registration;
+changes for one do not automatically apply to the other. Choose the registration
+your intended users use to open the agent, without guessing its deployment
+channel from the label.
+
+Both feature MCP providers expose read-only `resolve_agent_title_id(botId)`
+through `src/mcp/agentconfig_core/agent_title_resolution.py`. Native DA discovery
+binds the exact bot, environment, ring and tenant from `.local/config.json` and
+the locked `.local/setup/config.json`; no Dataverse endpoint is required.
+It validates `GET /copilotstudio/minimalBots/api/{botId}?api-version=2024-10-01`,
+then reads the regular ID from `bot.teamsAppInformation.microsoft365.titleId`
+using the existing component fetch:
+`POST /copilotstudio/minimalBots/api/{botId}/components?api-version=2022-03-01-preview`
+with `{}`. LOB requires a separate read:
+`GET /copilotstudio/agents/{botId}/channels/m365/publish?api-version=2024-10-01`,
+with `X-CCI-CdsBotId` set to the exact bot. Its plain `titleId` maps to canonical
+`lobTitleId`; components alone do not expose that DA registration. No realm or
+channel-root probe is added, and `/publish` is never called with POST.
+This Studio frontend route was confirmed by prior read-only probes, not a
+public documented contract.
+
+The resolver always returns both registration keys (`null` when unavailable)
+and requires at least one valid title. HTTP 404 remains an explicit error, not
+proof that a registration is absent or a reason to switch backend. Null/non-object
+publish status or a missing `titleId` field is malformed; an explicit null/blank
+title means unavailable. These fail-closed failure policies are offline-tested,
+not live-established. Authentication, authorization, malformed metadata and
+network failures never become empty discovery or registration substitutions.
+
+Both skills follow `src/skills/shared/agent-title-resolution.md`. The verified
+pair is retained per agent and active mirror under `registrationTitleIds`;
+the legacy scalar `titleId` remains the selected scope. Explicit, verified or
+compatible cached selections take precedence. Only when no selection exists
+and both IDs are distinct does the skill ask which registration to configure.
+A missing requested registration never silently falls back. Setup preserves
+the pair and scalar only for the same bot and environment.
+
+Metadata discovery reuses the authoring MSAL cache for the same tenant/account
+and requests ring-global MinimalBot.Read and MakerOperations.Read scopes.
+Earlier successful probes also had previously granted ReadWrite permissions,
+so minimum endpoint permissions have not been established. Power Platform and
+Substrate use separate resource tokens. Browser sign-in is bounded to 300
+seconds; cancelled lookups remain tracked until their worker finishes.
+Neither feature requires the other's MCP process, searches by agent name,
+derives IDs from apps/share links, or initializes configuration during discovery.
+
+Announcement authoring requires the Org Announcements feature to be enabled
+for your tenant, and audience search requires the `Directory.Read.All`
+Microsoft Graph permission to be consented in your tenant. Graph uses a
+separate resource token for the same authoring tenant and account. The current
+account-context check requires readable `tid` and `oid` claims; opaque tokens
+or credentials missing those claims return an explicit authentication failure
+rather than using a different account. The API still validates tokens and
+authorizes every request.
+
+This development surface requires the matching agent-qualified v1.1 backend
+and scoped widget. The MCP rejects unscoped canonical responses instead of
+silently consuming records from an older backend.
+
 ### 📖 Pre-Loaded ESS Documentation, Samples & Best Practices
 
 The kit ships with a complete reference library that the AI agent reads at task time — you don't need to look anything up yourself.
@@ -575,6 +672,7 @@ first** when setup offers it, or run **`/planner`** directly.
 | `/roles` | Attest who holds a rollout role on a shared plan; list or revoke attestations |
 | `/discover` | Inventory tenant environments, agents, and integrations to ground the rollout in actual configuration |
 | `/landing-page` | Configure landing-page branding and content |
+| `/org-announcements` | Create and manage announcements for the selected ESS agent |
 | `/connect` | Choose an available integration |
 | `/connect-workday` | Connect the ESS HR agent to Workday |
 | `/manage-topics` | List current ISV topic-set states, or review and approve enabling or disabling sets |
