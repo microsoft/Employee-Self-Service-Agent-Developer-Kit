@@ -96,6 +96,22 @@ def bash_launch_section(bash_text: str) -> str:
 
 
 class TestPowerShellInstallerAutoLaunch:
+    def test_flightcheck_only_uses_verified_da_setup(
+        self, ps1_text: str
+    ) -> None:
+        section = ps1_text.split("# 6. FlightCheck config generation", 1)[1]
+        section = section.split("# VS Code can retain", 1)[0]
+        assert "'scripts\\flightcheck_setup.py'" in section
+        assert "$setupPy --ring $Ring" in section
+        assert "if ($setupExit -ne 0)" in section
+        assert "'--agent-slug', $configState.activeAgent" in section
+        assert "'--preferred-username', $configState.account" in section
+        assert "'--tenant-id', $configState.tenantId" in section
+        assert "'--ring', $configState.ring" in section
+        assert "discover.py" not in section
+        assert "fetch_and_setup.py" not in section
+        assert "select-targets always" not in section
+
     def test_launch_section_invokes_code_chat_with_setup_prompt(
         self, ps1_launch_section: str
     ) -> None:
@@ -228,6 +244,19 @@ class TestPowerShellInstallerAutoLaunch:
 
 
 class TestBashInstallerAutoLaunch:
+    def test_flightcheck_only_config_persists_selected_ring(
+        self, bash_text: str
+    ) -> None:
+        assert "'ring': sys.argv[6]" in bash_text
+        assert re.search(
+            r'"\$IS_MANAGED"\s+"\$RING"\s+"\$CONFIG_PATH"',
+            bash_text,
+        ), (
+            "macOS FlightCheck-only config must receive and persist the "
+            "selected Power Platform ring"
+        )
+        assert "config['ring'] = ring" in bash_text
+
     def test_launch_section_invokes_code_chat_with_setup_prompt(
         self, bash_launch_section: str
     ) -> None:

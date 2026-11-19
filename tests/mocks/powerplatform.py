@@ -16,8 +16,8 @@ Mock response builders for the Power Platform API.
 #     https://learn.microsoft.com/en-us/rest/api/power-platform/licensing/billing-policy/list-billing-policies
 #   List Billing Policy Environments:
 #     https://learn.microsoft.com/en-us/rest/api/power-platform/licensing/billing-policy-environment/list-billing-policy-environments
-#   Get Currency Allocation By Environment:
-#     https://learn.microsoft.com/en-us/rest/api/power-platform/licensing/currency-allocation/get-currency-allocation-by-environment
+#   Get Many Environment Entitlements:
+#     https://learn.microsoft.com/en-us/rest/api/power-platform/licensing/entitlement/get-many-environment-entitlements
 #   List Environments For User:
 #     https://learn.microsoft.com/en-us/rest/api/power-platform/environmentmanagement/environments/list-environments-for-user
 #   Get Environment Application Package:
@@ -57,14 +57,24 @@ guessed):
     | @odata.nextLink  | string                          |
     | value            | BillingPolicyEnvironmentResponseModelV1[] |
 
-  CurrencyAllocationModelV1:
-    | currencyType     | ExternalCurrencyType ("MCSMessages" | "MCSSessions" | ...) |
-    | allocated        | int32                           |
+  EnvironmentEntitlementResponseModel (fields consumed by FlightCheck):
+    | entitlementId        | string                      |
+    | entitlement          | EnvironmentEntitlementDetailServiceModel |
 
-  AllocationsByEnvironmentResponseModelV1 (a single object, NOT an OData
-  collection):
-    | environmentId        | string                      |
-    | currencyAllocations  | CurrencyAllocationModelV1[] |
+  EnvironmentEntitlementDetailServiceModel:
+    | capacity             | EnvironmentCapacityEntitlementModel |
+    | payGo                | CatalogPayGoEntitlementModel |
+
+  EnvironmentCapacityEntitlementModel:
+    | allocated.value      | number (double)             |
+    | allocated.autoAllocated | number (double)          |
+    | availableQuantity    | number (double)             |
+    | consumed.value       | number (double)             |
+    | status               | OverageStatus               |
+
+  CatalogPayGoEntitlementModel:
+    | entitled.value       | number (double)             |
+    | consumed.value       | number (double)             |
 
   EnvironmentList:
     | @odata.nextlink  | string (uri)                    |
@@ -376,50 +386,90 @@ def list_policy_environments(
     }
 
 
-def currency_allocation(*, currency_type: str = "MCSMessages", allocated: int = 0) -> dict[str, Any]:
-    """Build a single ``CurrencyAllocationModelV1`` record.
+def environment_entitlement(
+    *,
+    entitlement_id: str = "MCSMessages",
+    allocated: int | float = 0,
+    auto_allocated: int | float = 0,
+    available: int | float = 0,
+    consumed: int | float = 0,
+    payg_entitled: int | float = 0,
+    payg_consumed: int | float = 0,
+    status: str = "NotSpecified",
+    addons: Iterable[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build the documented environment entitlement fields FlightCheck reads."""
+    return {
+        "environmentId": MOCK_ENV_ID,
+        "entitlementId": entitlement_id,
+        "addons": list(addons or []),
+        "entitlement": {
+            "capacity": {
+                "allocated": {
+                    "value": allocated,
+                    "autoAllocated": auto_allocated,
+                },
+                "availableQuantity": available,
+                "consumed": {
+                    "value": consumed,
+                },
+                "status": status,
+            },
+            "payGo": {
+                "entitled": {
+                    "value": payg_entitled,
+                },
+                "consumed": {
+                    "value": payg_consumed,
+                },
+            },
+        },
+    }
 
-    ``currency_type`` follows the ``ExternalCurrencyType`` enum; Copilot Studio
-    message capacity is ``MCSMessages``.
-    """
-    return {"currencyType": currency_type, "allocated": allocated}
+
+def environment_addon(
+    *,
+    addon_type: str = "MCSMessages",
+    allocated: int | float = 0,
+    unit: str = "Count",
+) -> dict[str, Any]:
+    """Build a documented environment add-on record."""
+    return {
+        "addonType": addon_type,
+        "addonUnit": unit,
+        "allocated": allocated,
+    }
 
 
-def get_currency_allocations(
+def get_environment_entitlements(
     *,
     environment_id: str = MOCK_ENV_ID,
-    allocations: Iterable[dict] | None = None,
+    entitlements: Iterable[dict] | None = None,
     status: int = 200,
 ) -> dict[str, Any]:
-    """responses.add(**...) kwargs for
-    GET /licensing/environments/{environment_id}/allocations.
-
-    The success body is a single ``AllocationsByEnvironmentResponseModelV1``
-    (not an OData collection). Pass ``status=404`` to model "environment has no
-    allocations" (the client maps 404 to an empty list); ``status=403``/``401``
-    for permission denied.
-    """
-    url = f"{PP_API_BASE}/licensing/environments/{environment_id}/allocations"
-    if status in (401, 403):
+    """responses.add kwargs for the documented environment-entitlements GET."""
+    url = f"{PP_API_BASE}/licensing/environments/{environment_id}/entitlements"
+    headers = {"x-ms-request-id": f"entitlement-request-{status}"}
+    if status == 204:
         return {
             "method": "GET",
             "url": url,
-            "json": {"error": {"code": "AuthorizationFailed"}},
-            "status": status,
+            "body": "",
+            "headers": headers,
+            "status": 204,
         }
-    if status == 404:
+    if status != 200:
         return {
             "method": "GET",
             "url": url,
-            "json": {"error": {"code": "EnvironmentAllocationsNotFound"}},
-            "status": 404,
+            "body": "",
+            "headers": headers,
+            "status": status,
         }
     return {
         "method": "GET",
         "url": url,
-        "json": {
-            "environmentId": environment_id,
-            "currencyAllocations": list(allocations) if allocations is not None else [],
-        },
+        "json": list(entitlements if entitlements is not None else []),
+        "headers": headers,
         "status": 200,
     }

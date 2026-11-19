@@ -26,6 +26,7 @@ References:
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping
 
 # Validation status — read by tests/conftest.py:require_validated_mock().
@@ -558,17 +559,25 @@ def flow_run(
     response_code: str = "OK",
     error: Mapping[str, Any] | None = None,
     bot_schema: str = "msdyn_copilotforemployeeselfservicehr",
+    start_time: str | None = None,
 ) -> dict[str, Any]:
     """Build a single Power Automate flow-run record (run history).
 
     Models the runtime runs endpoint response consumed by WD-RUN-001 via
-    ``pp_admin_client.get_flow_runs``. The two fields the check reads are
-    ``properties.status`` and ``properties.response.name``; ``correlation.
-    clientKeywords`` (BotSchemaName / CdsBotId) is included for fidelity.
+    ``pp_admin_client.get_flow_runs``. The fields the check reads are
+    ``properties.status``, ``properties.response.name`` and
+    ``properties.startTime`` (freshness gate); ``correlation.clientKeywords``
+    (BotSchemaName / CdsBotId) is included for fidelity.
+
+    ``start_time`` controls the run's ``properties.startTime``. When omitted it
+    defaults to *now* (UTC) so a run looks FRESH to WD-RUN-001's freshness
+    window — this keeps existing success/failure fixtures passing. Pass an
+    explicit older timestamp (e.g. ``"2026-06-01T00:00:00.0000000Z"``) to model
+    a STALE run that falls outside the freshness window.
 
     Cited consumers:
       - solutions/ess-maker-skills/scripts/flightcheck/checks/workday.py
-        (_classify_run / _check_workday_run_health)
+        (_classify_run / _check_workday_run_health_passive)
 
     Source (validated):
       Captured live (2026-06) from a real ESS Workday tenant via the runtime
@@ -585,9 +594,15 @@ def flow_run(
           response.name=Respond_to_Copilot_with_XmlTemplate_To_Json_Failed,
           error={code:ActionFailed,message:"An action failed..."}
     """
+    if start_time is None:
+        _now = datetime.now(timezone.utc)
+        start_time = _now.strftime("%Y-%m-%dT%H:%M:%S.0000000Z")
+        end_time = (_now + timedelta(seconds=3)).strftime("%Y-%m-%dT%H:%M:%S.0000000Z")
+    else:
+        end_time = start_time
     props: dict[str, Any] = {
-        "startTime": "2026-06-01T00:00:00.0000000Z",
-        "endTime": "2026-06-01T00:00:03.0000000Z",
+        "startTime": start_time,
+        "endTime": end_time,
         "status": status,
         "correlation": {
             "clientKeywords": [f"BotSchemaName:{bot_schema},ChannelId:pva-studio"],

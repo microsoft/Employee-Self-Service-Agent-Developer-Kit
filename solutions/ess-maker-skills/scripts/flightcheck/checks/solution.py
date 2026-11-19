@@ -223,7 +223,10 @@ def _result(
 
 
 def _active_agent_bot_id(runner) -> str | None:
-    return agent_scope.active_agent_bot_id(getattr(runner, "config", None))
+    return agent_scope.active_agent_bot_id(
+        getattr(runner, "config", None),
+        str(getattr(runner, "agent_slug", "") or "").strip() or None,
+    )
 
 
 def _first_present(*values: Any) -> Any:

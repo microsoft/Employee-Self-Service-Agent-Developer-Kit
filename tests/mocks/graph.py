@@ -168,6 +168,27 @@ def user(
     }
 
 
+def profile_user(*, user_id: str = MOCK_USER_ID) -> dict[str, Any]:
+    """Selected standard properties for check_entra_profile.py.
+
+    Source (validatable), verified against the public CSDL:
+      https://graph.microsoft.com/v1.0/$metadata
+      EntityType user: country, department, employeeId, employeeType, jobTitle,
+      officeLocation, preferredLanguage, usageLocation, userType: Edm.String.
+      <Property Name="employeeHireDate" Type="Edm.DateTimeOffset" />
+      Inherited entity: <Property Name="id" Type="Edm.String" Nullable="false" />
+    Operation/example responses:
+      https://learn.microsoft.com/en-us/graph/api/user-get?view=graph-rest-1.0#examples
+      https://learn.microsoft.com/en-us/graph/api/user-list?view=graph-rest-1.0#examples
+    """
+    return {
+        "id": user_id, "userType": "Member",
+        "usageLocation": "US", "preferredLanguage": "en-US", "country": "United States",
+        "officeLocation": "Mock office", "jobTitle": "Mock title", "department": "Mock department",
+        "employeeType": "Employee", "employeeId": "MOCK-001", "employeeHireDate": "2020-01-01T00:00:00Z",
+    }
+
+
 def directory_role(
     *,
     role_id: str = "00000000-0000-0000-0000-000000003001",
@@ -489,6 +510,7 @@ def application(
     preauthorize_connector: bool = True,
     connector_app_id: str = WORKDAY_CONNECTOR_APP_ID,
     graph_permissions: bool = True,
+    optional_claim_names: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Build a single Graph /applications record for the Workday app.
 
@@ -514,6 +536,8 @@ def application(
                 id (Edm.String, key — the object id)
                 appId (Edm.String)
                 displayName (Edm.String)
+                optionalClaims (optionalClaims) — accessToken
+                  Collection(optionalClaim), name (Edm.String)
                 api (apiApplication) — fields used:
                   oauth2PermissionScopes (Collection(permissionScope)):
                     id (Edm.Guid), value (Edm.String),
@@ -565,6 +589,14 @@ def application(
         "displayName": display_name,
         "signInAudience": "AzureADMyOrg",
         "identifierUris": [f"api://{app_id}"],
+        "optionalClaims": {
+            "accessToken": [
+                {"name": name, "source": None, "essential": False}
+                for name in optional_claim_names
+            ],
+            "idToken": [],
+            "saml2Token": [],
+        },
         "api": {
             "oauth2PermissionScopes": scopes,
             "preAuthorizedApplications": preauth,
@@ -710,6 +742,38 @@ def list_users(
         "json": collection(
             users if users is not None else [user()],
             odata_context="$metadata#users",
+        ),
+        "status": 200,
+    }
+
+
+def search_users(
+    *, users: Iterable[Mapping[str, Any]] | None = None
+) -> dict[str, Any]:
+    """Mock GET /v1.0/users?$search=... (name/UPN/mail resolution).
+
+    Registered on the bare ``/users`` path so it matches the ``$search`` /
+    ``$select`` / ``$top`` query the resolver sends (``responses`` treats a
+    querystring-free registration as "match any query on this path"). Tests
+    assert the outgoing ``$search`` term on ``responses.calls`` afterwards.
+
+    Cited consumers:
+      - flightcheck/graph_client.py search_users (name -> object id).
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="user" — id, displayName,
+              userPrincipalName, mail
+      Docs:   https://learn.microsoft.com/graph/api/user-list
+              (?$search on directory objects; requires
+              ConsistencyLevel: eventual)
+    """
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/users",
+        "json": collection(
+            users if users is not None else [user()],
+            odata_context="$metadata#users(id,displayName,userPrincipalName,mail)",
         ),
         "status": 200,
     }

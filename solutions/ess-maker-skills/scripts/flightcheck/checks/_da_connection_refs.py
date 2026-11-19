@@ -35,6 +35,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ..agent_scope import active_agent_bot_id, configured_agents
+
 
 WORKDAY_SOAP_CONNECTOR_SUFFIX = "/apis/shared_workdaysoap"
 
@@ -42,14 +44,10 @@ WORKDAY_SOAP_CONNECTOR_SUFFIX = "/apis/shared_workdaysoap"
 def agent_bot_ids(config: dict[str, Any]) -> list[str]:
     """Return configured bot IDs from multi-agent and single-agent config."""
     bot_ids: list[str] = []
-    for agent in config.get("agents", []) or []:
-        bid = (agent or {}).get("botId")
+    for agent in configured_agents(config):
+        bid = agent.get("botId")
         if isinstance(bid, str) and bid.strip():
             bot_ids.append(bid.strip())
-    single = (config.get("agent") or {}).get("botId")
-    if isinstance(single, str) and single.strip():
-        bot_ids.append(single.strip())
-
     seen: set[str] = set()
     ordered: list[str] = []
     for bot_id in bot_ids:
@@ -146,7 +144,7 @@ def _require_identity_field(value: Any, field_name: str) -> str:
 def read_active_agent_connection_references(runner) -> list[dict[str, Any]] | None:
     """The single active agent's DA connection references (config
     ``agent.botId``), or ``None`` when the AgentBuilder client or the
-    active-agent botId is unavailable.
+    selected-agent botId is unavailable.
 
     Intended for ``DV-CONN-001`` (checks/workday_extension.py), which validates
     the Workday SOAP connection reference on the agent under check. Scoping this
@@ -156,7 +154,10 @@ def read_active_agent_connection_references(runner) -> list[dict[str, Any]] | No
     """
     client = getattr(runner, "agentbuilder", None)
     config = getattr(runner, "config", None) or {}
-    agent_id = (config.get("agent") or {}).get("botId")
+    agent_id = active_agent_bot_id(
+        config,
+        str(getattr(runner, "agent_slug", "") or "").strip() or None,
+    )
     if client is None or not agent_id:
         return None
     return _bot_connection_references(client, agent_id)

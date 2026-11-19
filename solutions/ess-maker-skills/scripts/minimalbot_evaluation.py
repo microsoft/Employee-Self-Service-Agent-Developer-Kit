@@ -82,9 +82,55 @@ NATIVE_REVIEW_LOCAL_ONLY_WARNING = (
 )
 _TOKEN_CACHE_PATH = os.path.join(".local", ".token_cache.bin")
 _EVAL_KINDS = {"EvaluationSet", "EvaluationData"}
-_EXPECTED_WORKDAY_TOPIC_COUNTS = {
-    "gptagent_copilotforemployeeselfservicehr": 21,
+_REVIEWED_WORKDAY_TOPIC_SUFFIXES = {
+    "gptagent_copilotforemployeeselfservicehr": frozenset(
+        {
+            "EmployeeUpdatePhoneNumber",
+            "GetReferenceData",
+            "WorkdayCompanyCode",
+            "WorkdayEmployeeID",
+            "WorkdayGetBaseCompensation",
+            "WorkdayGetCertifications",
+            "WorkdayGetCostCenter",
+            "WorkdayGetEmergencyContact",
+            "WorkdayGetEmploymentInformation",
+            "WorkdayGetLanguageInformation",
+            "WorkdayGetNationalIDs",
+            "WorkdayGetPassports",
+            "WorkdayGetVisas",
+            "WorkdayManagerCheck",
+            "WorkdayOnError",
+            "WorkdaySystemGetCommonExecution",
+            "WorkdaySystemGetRESTExecution",
+            "WorkdaySystemGetUserContextV2",
+            "WorkdaySystemRefreshReferenceData",
+            "WorkdaySystemSetRuntimeTemplateConfigurations",
+            "Workdayemployeeupdateemail",
+            "Workdayserviceanniversary",
+        }
+    ),
 }
+
+
+def reviewed_workday_topic_schemas(
+    agent_schema: str, *, realm: str = "",
+) -> frozenset[str]:
+    """Return the reviewed OOB Workday topic schemas for one agent."""
+    schema = str(agent_schema or "").strip()
+    suffixes = _REVIEWED_WORKDAY_TOPIC_SUFFIXES.get(schema.casefold())
+    normalized_realm = str(realm).strip().casefold()
+    if suffixes is None and normalized_realm in {"test", "prod"}:
+        suffix = f"_{normalized_realm}"
+        if schema.casefold().endswith(suffix):
+            suffixes = _REVIEWED_WORKDAY_TOPIC_SUFFIXES.get(
+                schema[:-len(suffix)].casefold()
+            )
+    if suffixes is None:
+        return frozenset()
+    return frozenset(
+        f"{schema}.topic.{suffix}" for suffix in suffixes
+    )
+
 
 # Shared session with bounded retry-with-backoff, mirroring auth.py /
 # powerplatform_client.py. Unlike those read-only clients this path also issues
@@ -234,16 +280,286 @@ def _wire_kinds(value: Any) -> Any:
     return value
 
 
-def _without_diagnostics(value: Any) -> Any:
+def _without_server_generated_fields(value: Any) -> Any:
     if isinstance(value, dict):
         return {
-            key: _without_diagnostics(child)
+            key: _without_server_generated_fields(child)
             for key, child in value.items()
-            if key != "diagnostics"
+            if key not in {"diagnostics", "structuredCondition"}
         }
     if isinstance(value, list):
-        return [_without_diagnostics(child) for child in value]
+        return [_without_server_generated_fields(child) for child in value]
     return value
+
+
+_MISSING = object()
+
+
+class _DialogMergeConflict(ValueError):
+    """Raised when a local dialog delta overlaps newer remote content."""
+
+
+def _merge_values_equal(left: Any, right: Any) -> bool:
+    if left is _MISSING or right is _MISSING:
+        return left is right
+    return left == right
+
+
+def _longest_common_subsequence(
+    expected: list[str],
+    desired: list[str],
+) -> list[str]:
+    """Return one deterministic LCS for unique component action IDs."""
+    rows = len(expected) + 1
+    columns = len(desired) + 1
+    lengths = [[0] * columns for _ in range(rows)]
+    for expected_index in range(len(expected) - 1, -1, -1):
+        for desired_index in range(len(desired) - 1, -1, -1):
+            if expected[expected_index] == desired[desired_index]:
+                lengths[expected_index][desired_index] = (
+                    lengths[expected_index + 1][desired_index + 1] + 1
+                )
+            else:
+                lengths[expected_index][desired_index] = max(
+                    lengths[expected_index + 1][desired_index],
+                    lengths[expected_index][desired_index + 1],
+                )
+
+    result: list[str] = []
+    expected_index = 0
+    desired_index = 0
+    while (
+        expected_index < len(expected)
+        and desired_index < len(desired)
+    ):
+        if expected[expected_index] == desired[desired_index]:
+            result.append(expected[expected_index])
+            expected_index += 1
+            desired_index += 1
+        elif (
+            lengths[expected_index + 1][desired_index]
+            >= lengths[expected_index][desired_index + 1]
+        ):
+            expected_index += 1
+        else:
+            desired_index += 1
+    return result
+
+
+def _keyed_list(
+    value: list[Any],
+    *,
+    path: str,
+) -> tuple[list[str], dict[str, dict[str, Any]]]:
+    ids: list[str] = []
+    items: dict[str, dict[str, Any]] = {}
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise _DialogMergeConflict(
+                f"{path}[{index}] has no stable object identity"
+            )
+        item_id = str(item.get("id") or "").strip()
+        if not item_id:
+            raise _DialogMergeConflict(
+                f"{path}[{index}] has no stable action ID"
+            )
+        if item_id in items:
+            raise _DialogMergeConflict(
+                f"{path} contains duplicate action ID {item_id!r}"
+            )
+        ids.append(item_id)
+        items[item_id] = item
+    return ids, items
+
+
+def _merge_keyed_lists(
+    expected: list[Any],
+    desired: list[Any],
+    remote: list[Any],
+    *,
+    path: str,
+) -> list[Any]:
+    expected_ids, expected_items = _keyed_list(expected, path=path)
+    desired_ids, desired_items = _keyed_list(desired, path=path)
+    remote_ids, remote_items = _keyed_list(remote, path=path)
+
+    expected_set = set(expected_ids)
+    desired_set = set(desired_ids)
+    remote_set = set(remote_ids)
+    added = desired_set - expected_set
+    removed = expected_set - desired_set
+    common = expected_set & desired_set
+    stable = set(_longest_common_subsequence(expected_ids, desired_ids))
+    moved = common - stable
+    content_changed = {
+        item_id
+        for item_id in common
+        if desired_items[item_id] != expected_items[item_id]
+    }
+
+    # An empty scaffold is an explicit compatibility boundary. A remote action
+    # that is not the locally requested action is customer content, not an
+    # insertion point the kit may silently repurpose.
+    if not expected and remote:
+        remote_only = remote_set - desired_set
+        if remote_only:
+            raise _DialogMergeConflict(
+                f"{path} contains newer actions not present in the reviewed "
+                "empty scaffold"
+            )
+
+    merged_by_id: dict[str, Any] = {}
+    result_ids: list[str] = []
+    for item_id in remote_ids:
+        if item_id in removed:
+            if remote_items[item_id] != expected_items[item_id]:
+                raise _DialogMergeConflict(
+                    f"{path} action {item_id!r} changed remotely while the "
+                    "local edit removed it"
+                )
+            continue
+        if item_id in desired_set:
+            expected_item = expected_items.get(item_id, _MISSING)
+            merged_by_id[item_id] = _merge_dialog_value(
+                expected_item,
+                desired_items[item_id],
+                remote_items[item_id],
+                path=f"{path}[id={item_id!r}]",
+            )
+        else:
+            merged_by_id[item_id] = copy.deepcopy(remote_items[item_id])
+        result_ids.append(item_id)
+
+    locally_positioned = added | moved
+    locally_touched = locally_positioned | content_changed
+    deleted_remote_edits = (moved | content_changed) - remote_set
+    if deleted_remote_edits:
+        deleted_ids = ", ".join(
+            repr(item_id) for item_id in sorted(deleted_remote_edits)
+        )
+        raise _DialogMergeConflict(
+            f"{path} action(s) {deleted_ids} were deleted remotely while the "
+            "local edit moved or changed them"
+        )
+    for item_id in desired_ids:
+        if item_id in merged_by_id:
+            continue
+        if item_id in locally_touched:
+            merged_by_id[item_id] = copy.deepcopy(desired_items[item_id])
+            result_ids.append(item_id)
+
+    # Apply only local insert/move operations. Remote-only actions keep their
+    # relative order, while a required local adjacency (for example immediately
+    # before User Context Validate) is restored around the latest live content.
+    for item_id in desired_ids:
+        if item_id not in locally_positioned or item_id not in merged_by_id:
+            continue
+        if item_id in result_ids:
+            result_ids.remove(item_id)
+        desired_index = desired_ids.index(item_id)
+        next_anchor = next(
+            (
+                candidate
+                for candidate in desired_ids[desired_index + 1 :]
+                if candidate in result_ids
+            ),
+            None,
+        )
+        if next_anchor is not None:
+            result_ids.insert(result_ids.index(next_anchor), item_id)
+            continue
+        previous_anchor = next(
+            (
+                candidate
+                for candidate in reversed(desired_ids[:desired_index])
+                if candidate in result_ids
+            ),
+            None,
+        )
+        if previous_anchor is None:
+            result_ids.append(item_id)
+        else:
+            result_ids.insert(result_ids.index(previous_anchor) + 1, item_id)
+
+    return [merged_by_id[item_id] for item_id in result_ids]
+
+
+def _merge_dialog_value(
+    expected: Any,
+    desired: Any,
+    remote: Any,
+    *,
+    path: str,
+) -> Any:
+    """Apply the local expected-to-desired delta to the latest remote value."""
+    if _merge_values_equal(expected, desired):
+        return (
+            _MISSING
+            if remote is _MISSING
+            else copy.deepcopy(remote)
+        )
+    if _merge_values_equal(remote, expected):
+        return (
+            _MISSING
+            if desired is _MISSING
+            else copy.deepcopy(desired)
+        )
+    if _merge_values_equal(remote, desired):
+        return (
+            _MISSING
+            if desired is _MISSING
+            else copy.deepcopy(desired)
+        )
+
+    if all(
+        isinstance(value, dict)
+        for value in (expected, desired, remote)
+    ):
+        merged: dict[str, Any] = {}
+        keys = set(expected) | set(desired) | set(remote)
+        for key in keys:
+            child = _merge_dialog_value(
+                expected.get(key, _MISSING),
+                desired.get(key, _MISSING),
+                remote.get(key, _MISSING),
+                path=f"{path}.{key}",
+            )
+            if child is not _MISSING:
+                merged[key] = child
+        return merged
+
+    if all(
+        isinstance(value, list)
+        for value in (expected, desired, remote)
+    ):
+        return _merge_keyed_lists(
+            expected,
+            desired,
+            remote,
+            path=path,
+        )
+
+    raise _DialogMergeConflict(
+        f"{path} was changed both locally and remotely"
+    )
+
+
+def _reconcile_dialog_update(
+    expected: dict[str, Any],
+    desired: dict[str, Any],
+    remote: dict[str, Any],
+) -> dict[str, Any]:
+    merged = _merge_dialog_value(
+        _without_server_generated_fields(expected),
+        _without_server_generated_fields(desired),
+        _without_server_generated_fields(remote),
+        path="$",
+    )
+    if not isinstance(merged, dict):
+        raise _DialogMergeConflict(
+            "The reconciled dialog is not an Object Model object"
+        )
+    return merged
 
 
 def blocking_diagnostics(
@@ -315,6 +631,12 @@ def resolve_workday_dialogs(
             "The active agent component map must contain a JSON object."
         )
 
+    reviewed = reviewed_workday_topic_schemas(schema)
+    reviewed_schemas = (
+        {value.casefold() for value in reviewed}
+        if reviewed
+        else None
+    )
     schema_prefix = f"{schema}.topic.Workday".casefold()
     entries: list[dict[str, str]] = []
     component_ids: set[str] = set()
@@ -324,12 +646,25 @@ def resolve_workday_dialogs(
             continue
         component_schema = str(raw_entry.get("schemaName") or "").strip()
         display_name = str(raw_entry.get("displayName") or "").strip()
+        normalized_component_schema = component_schema.casefold()
+        is_workday_topic = (
+            normalized_component_schema in reviewed_schemas
+            if reviewed_schemas is not None
+            else (
+                normalized_component_schema.startswith(schema_prefix)
+                and display_name.startswith("Workday")
+            )
+        )
         if (
             raw_entry.get("componentKind") != "DialogComponent"
-            or not component_schema.casefold().startswith(schema_prefix)
-            or not display_name.startswith("Workday")
+            or not is_workday_topic
         ):
             continue
+        if not display_name.startswith("Workday"):
+            raise MinimalBotEvaluationError(
+                "A reviewed Workday topic has an unexpected display name: "
+                f"{component_schema}."
+            )
         relative_path = raw_path.replace("\\", "/")
         safe_path = PurePosixPath(relative_path)
         if (
@@ -372,7 +707,29 @@ def resolve_workday_dialogs(
         raise MinimalBotEvaluationError(
             "No mapped Workday dialog topics were found for the active agent."
         )
-    expected_count = _EXPECTED_WORKDAY_TOPIC_COUNTS.get(schema.casefold())
+    if reviewed_schemas is not None:
+        observed_schemas = {
+            entry["schemaName"].casefold() for entry in entries
+        }
+        missing_schemas = sorted(reviewed_schemas - observed_schemas)
+        unexpected_schemas = sorted(observed_schemas - reviewed_schemas)
+        if missing_schemas or unexpected_schemas:
+            details = []
+            if missing_schemas:
+                details.append(
+                    "missing=" + ", ".join(missing_schemas)
+                )
+            if unexpected_schemas:
+                details.append(
+                    "unexpected=" + ", ".join(unexpected_schemas)
+                )
+            raise MinimalBotEvaluationError(
+                "The active ESS HR component map does not match the reviewed "
+                f"{len(reviewed_schemas)}-topic Workday inventory ("
+                + "; ".join(details)
+                + "). Refresh the workspace before activation."
+            )
+    expected_count = len(reviewed_schemas) if reviewed_schemas is not None else None
     if expected_count is not None and len(entries) != expected_count:
         raise MinimalBotEvaluationError(
             "The active ESS HR component map contains "
@@ -397,11 +754,6 @@ def _folder_matches_globs(folder: Path, root: Path, only_globs: list[str]) -> bo
         if any(fnmatch.fnmatch(rel, glob) for glob in only_globs):
             return True
     return False
-
-
-def _safe_name(value: str, fallback: str) -> str:
-    name = re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
-    return name or fallback
 
 
 def _schema_name(stem: str, component_id: str) -> str:
@@ -648,6 +1000,8 @@ class MinimalBotEvaluationClient:
     def update_dialog_components(
         self,
         updates: list[dict[str, Any]],
+        *,
+        _retry_on_conflict: bool = True,
     ) -> dict[str, Any]:
         """Update existing dialog components with drift and identity checks."""
         if not updates:
@@ -668,6 +1022,8 @@ class MinimalBotEvaluationClient:
             )
 
         changes: list[dict[str, Any]] = []
+        verification_updates: list[dict[str, Any]] = []
+        reconciled_components = 0
         for update in updates:
             component_id = str(update.get("componentId") or "")
             schema_name = str(update.get("schemaName") or "")
@@ -716,10 +1072,41 @@ class MinimalBotEvaluationClient:
                     "MinimalBot dialog update did not request content or state "
                     "changes."
                 )
-            remote_dialog = _without_diagnostics(component.get("dialog"))
+            remote_dialog = _without_server_generated_fields(
+                component.get("dialog")
+            )
+            effective_dialog = desired_dialog
+            if has_dialog_update:
+                expected_clean = _without_server_generated_fields(
+                    expected_dialog
+                )
+                desired_clean = _without_server_generated_fields(
+                    desired_dialog
+                )
+                if remote_dialog not in (expected_clean, desired_clean):
+                    try:
+                        effective_dialog = _reconcile_dialog_update(
+                            expected_clean,
+                            desired_clean,
+                            remote_dialog,
+                        )
+                    except _DialogMergeConflict as exc:
+                        raise MinimalBotEvaluationError(
+                            "The selected MinimalBot dialog has newer remote "
+                            "content that overlaps this scoped edit. No remote "
+                            f"content was overwritten: {exc}."
+                        ) from exc
+                    reconciled_components += 1
+                else:
+                    effective_dialog = desired_clean
+            effective_update = dict(update)
+            if has_dialog_update:
+                effective_update["dialog"] = effective_dialog
+            verification_updates.append(effective_update)
             dialog_is_desired = (
                 not has_dialog_update
-                or remote_dialog == _without_diagnostics(desired_dialog)
+                or remote_dialog
+                == _without_server_generated_fields(effective_dialog)
             )
             state_is_desired = (
                 desired_state is None
@@ -731,18 +1118,9 @@ class MinimalBotEvaluationClient:
             )
             if dialog_is_desired and state_is_desired and status_is_desired:
                 continue
-            if (
-                has_dialog_update
-                and not dialog_is_desired
-                and remote_dialog != _without_diagnostics(expected_dialog)
-            ):
-                raise MinimalBotEvaluationError(
-                    "The selected MinimalBot dialog changed remotely after "
-                    "the workspace baseline was captured."
-                )
             updated_component = copy.deepcopy(component)
             if has_dialog_update:
-                updated_component["dialog"] = desired_dialog
+                updated_component["dialog"] = effective_dialog
             if desired_state is not None:
                 updated_component["state"] = desired_state
             if desired_status is not None:
@@ -773,6 +1151,19 @@ class MinimalBotEvaluationClient:
                 body=payload,
                 operation="dialog update",
             )
+            if (
+                response.status_code in {409, 412}
+                and _retry_on_conflict
+            ):
+                # The live change token advanced after the read. Re-read once:
+                # if another attempt already applied this exact mapping the
+                # idempotent reconciliation returns success without another
+                # PUT; otherwise it reapplies the same scoped delta to the
+                # newer live topic.
+                return self.update_dialog_components(
+                    updates,
+                    _retry_on_conflict=False,
+                )
             if response.status_code != 200:
                 raise MinimalBotEvaluationError(
                     "MinimalBot dialog update failed "
@@ -781,11 +1172,12 @@ class MinimalBotEvaluationClient:
 
         verified = self.read_components()
         verification = self._verify_dialog_components_payload(
-            updates,
+            verification_updates,
             verified,
         )
         return {
             "updatedComponents": len(changes),
+            "reconciledComponents": reconciled_components,
             **verification,
         }
 
@@ -840,9 +1232,9 @@ class MinimalBotEvaluationClient:
                 == expected_schema.casefold()
             )
             if verified_update and "dialog" in update:
-                verified_update = _without_diagnostics(
+                verified_update = _without_server_generated_fields(
                     component.get("dialog")
-                ) == _without_diagnostics(update["dialog"])
+                ) == _without_server_generated_fields(update["dialog"])
             if verified_update and update.get("state") is not None:
                 verified_update = (
                     component.get("state") == update["state"]

@@ -14,9 +14,10 @@ from pathlib import Path
 
 import yaml
 
-from ..runner import CheckResult, Priority, Role, Status
+from ..runner import BLOCK_REASON_CHECKPOINT_CONTRACT, CheckResult, Priority, Role, Status
+from ..agent_scope import active_agent, resolve_agent_directory
 
-DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
+DOC_BASE = "https://learn.microsoft.com/en-us/microsoft-365/copilot/employee-self-service"
 STUDIO_BASE = "https://copilotstudio.microsoft.com"
 
 
@@ -112,6 +113,51 @@ def run_local_file_checks(runner) -> list[CheckResult]:
     return results
 
 
+def run_da_local_file_checks(runner) -> list[CheckResult]:
+    """Read only the exact selected workspace; do not run legacy topic heuristics."""
+    config = getattr(runner, "config", None) or {}
+    selected = active_agent(config, getattr(runner, "agent_slug", None))
+    slug = selected.get("slug")
+    try:
+        path = resolve_agent_directory(Path("workspace") / "agents", slug)
+    except ValueError as exc:
+        return [CheckResult(
+            "CONFIG-007", "Local Files", Priority.HIGH.value, Status.BLOCKED.value,
+            "Selected DA local content", str(exc),
+            "Resolve the exact selected agent workspace before rerunning.",
+            roles=[Role.ESS_MAKER.value],
+            block_reason=BLOCK_REASON_CHECKPOINT_CONTRACT,
+        )]
+    if not path.is_dir() or not (path / "agent.mcs.yml").is_file():
+        return [CheckResult(
+            "CONFIG-007", "Local Files", Priority.HIGH.value, Status.BLOCKED.value,
+            "Selected DA local content", "The selected agent's extracted identity file is unavailable.",
+            "Extract or refresh this selected agent's workspace; do not use a sibling's files.",
+            evidence={"agentSlug": slug, "evidenceBoundary": "local_authored_content"},
+            roles=[Role.ESS_MAKER.value],
+            block_reason=BLOCK_REASON_CHECKPOINT_CONTRACT,
+        )]
+    label = slug.replace("-", " ").title()
+    rows = _check_agent_identity(path, label, runner, slug)
+    rows.append(CheckResult(
+        "TOPIC-011", "Local authored files", Priority.LOW.value, Status.PASSED.value,
+        "Local conversation inventory",
+        f"{len(list((path / 'topics').glob('*.mcs.yml')))} local conversation file(s). "
+        "This inventory does not impose a minimum topic count or prove deployed content.",
+        roles=[Role.ESS_MAKER.value],
+    ))
+    if (path / "topics").is_dir():
+        rows.extend(_check_topic_descriptions(path, label, runner, slug))
+    for row in rows:
+        row.category = "Local authored files"
+        row.evidence.update({
+            "agentSlug": slug,
+            "evidenceBoundary": "local_authored_content",
+            "deploymentFreshnessVerified": False,
+        })
+    return rows
+
+
 def _check_single_agent(agent_path: Path, agent_name: str, runner=None) -> list[CheckResult]:
     """Run all local file checks for a single agent."""
     results: list[CheckResult] = []
@@ -188,11 +234,24 @@ def _check_agent_identity(agent_path: Path, label: str, runner=None, agent_name:
         ))
         return results
 
+    da_full = getattr(runner, "maker_diagnostics", False) is True
+    if da_full and (
+        not isinstance(parsed.get("displayName"), str)
+        or not parsed["displayName"].strip()
+    ):
+        return [CheckResult(
+            "CONFIG-007", f"Configuration ({label})", Priority.CRITICAL.value,
+            Status.FAILED.value, f"{label}: Authored agent identity",
+            "The extracted identity has no non-empty displayName.",
+            "Repair or refresh the selected agent's authored identity.",
+            roles=[Role.ESS_MAKER.value],
+        )]
+
     instructions_value = parsed.get("instructions")
     instruction_text = instructions_value.strip() if isinstance(instructions_value, str) else ""
     if instruction_text:
         word_count = len(instruction_text.split())
-        if word_count >= 50:
+        if da_full or word_count >= 50:
             results.append(CheckResult(roles=[Role.ESS_MAKER.value],
                 checkpoint_id="CONFIG-007", category=f"Configuration ({label})",
                 priority=Priority.CRITICAL.value, status=Status.PASSED.value,
@@ -491,6 +550,7 @@ def _salvage_xml_attribute_yaml(content: str) -> str:
 def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_name: str = "") -> list[CheckResult]:
     """CONFIG-014: Check that topic descriptions are specific enough for AI routing."""
     results = []
+    maker_diagnostics = getattr(runner, "maker_diagnostics", False) is True
     topics_dir = agent_path / "topics"
 
     if not topics_dir.exists():
@@ -556,7 +616,8 @@ def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_n
                 continue
 
         if not isinstance(doc, dict):
-            # Topic file isn't a YAML mapping — nothing to check.
+            if maker_diagnostics:
+                unparseable.append(tf.name)
             continue
 
         desc_raw = doc.get("modelDescription")
@@ -589,8 +650,32 @@ def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_n
 
         # Check word count
         word_count = len(desc_text.split())
-        if word_count < _MIN_DESCRIPTION_WORDS:
+        if not maker_diagnostics and word_count < _MIN_DESCRIPTION_WORDS:
             too_short.append(f"{display_name} ({word_count} words)")
+
+    if maker_diagnostics:
+        status = Status.FAILED.value if has_placeholder else Status.SKIPPED.value if unparseable else Status.PASSED.value
+        finding = f"Inspected {checked} local description(s); description length does not establish routing quality."
+        if has_placeholder:
+            finding += " Placeholder text found: " + "; ".join(has_placeholder) + "."
+        if unparseable:
+            finding += " Could not inspect YAML files: " + ", ".join(unparseable) + "."
+        remediation = ""
+        if has_placeholder:
+            remediation = f"Open {studio_link} and replace placeholder description text with the intended routing guidance."
+        if unparseable:
+            remediation += (
+                f" Open the listed topics in {studio_link} and confirm they load in the Code editor. "
+                "If they load, refresh the local extraction; do not hand-edit exporter-generated YAML merely to clear this limitation."
+            )
+        return [CheckResult(
+            roles=[Role.ESS_MAKER.value], checkpoint_id="CONFIG-014",
+            category=f"Topics ({label})", priority=Priority.MEDIUM.value, status=status,
+            description=f"{label}: Local description inventory",
+            result=finding, remediation=remediation.strip(),
+            evidence={"inspectedDescriptions": checked, "unparseableFiles": unparseable,
+                      "placeholderDescriptions": has_placeholder},
+        )]
 
     # If a file couldn't be parsed even after quoting Copilot Studio's
     # XML-attribute-style keys, surface a single low-noise Skipped row so
@@ -620,9 +705,13 @@ def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_n
     if not checked:
         results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="CONFIG-014", category=f"Topics ({label})",
-            priority=Priority.MEDIUM.value, status=Status.SKIPPED.value,
-            description=f"{label}: Topic description quality",
-            result="No AI-routed topics with modelDescription found",
+            priority=Priority.MEDIUM.value,
+            status=Status.PASSED.value if maker_diagnostics else Status.SKIPPED.value,
+            description=f"{label}: Local description inventory" if maker_diagnostics else f"{label}: Topic description quality",
+            result=(
+                "No local modelDescription fields found; description text was not judged."
+                if maker_diagnostics else "No AI-routed topics with modelDescription found"
+            ),
         ))
         return results
 
@@ -656,7 +745,12 @@ def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_n
             checkpoint_id="CONFIG-014", category=f"Topics ({label})",
             priority=Priority.MEDIUM.value, status=Status.PASSED.value,
             description=f"{label}: Topic description quality",
-            result=f"All {checked} AI-routed topic(s) have descriptions >= {_MIN_DESCRIPTION_WORDS} words with no placeholders",
+            result=(
+                f"Inspected {checked} local description(s); no placeholder markers found. "
+                "Description length does not establish routing quality."
+                if maker_diagnostics else
+                f"All {checked} AI-routed topic(s) have descriptions >= {_MIN_DESCRIPTION_WORDS} words with no placeholders"
+            ),
             doc_link=f"{DOC_BASE}/customize#customize-topics",
         ))
 

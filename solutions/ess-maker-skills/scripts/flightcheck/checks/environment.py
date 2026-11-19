@@ -19,7 +19,7 @@ from ._dlp_utils import iter_effective_policies
 from ._maker_urls import maker_solutions_url
 from .licensing import (
     _CAPACITY_DOC,
-    _env_mcs_allocation,
+    _env_mcs_entitlement_observation,
     classify_copilot_studio_capacity,
 )
 from auth import query_all, dataverse_get, AuthExpiredError  # scripts/auth.py, on path via cli.py
@@ -268,72 +268,95 @@ def run_environment_checks(runner) -> list[CheckResult]:
         return results
 
     # ---- ENV-001: Environment exists ----
-    try:
-        env = pp.get_environment(env_id)
-        if "_error" in env:
+    if pp is None:
+        results.extend([
+            CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+                checkpoint_id="ENV-001", category="Environment",
+                priority=Priority.CRITICAL.value, status=Status.SKIPPED.value,
+                description="Power Platform environment exists",
+                result=(
+                    "Power Platform Admin API is unavailable, so the "
+                    "environment inventory was not rechecked."
+                ),
+                remediation="Authenticate with Power Platform Admin access.",
+            ),
+            CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+                checkpoint_id="ENV-002", category="Environment",
+                priority=Priority.CRITICAL.value, status=Status.SKIPPED.value,
+                description="Dataverse database provisioned",
+                result=(
+                    "Power Platform Admin API is unavailable, so Dataverse "
+                    "provisioning state was not rechecked."
+                ),
+                remediation="Authenticate with Power Platform Admin access.",
+            ),
+        ])
+    else:
+        try:
+            env = pp.get_environment(env_id)
+            if "_error" in env:
+                results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+                    checkpoint_id="ENV-001", category="Environment",
+                    priority=Priority.CRITICAL.value, status=Status.FAILED.value,
+                    description="Power Platform environment exists",
+                    result=f"Unable to query environment: {env['_error']}",
+                    remediation="Requires Power Platform Administrator role.",
+                    doc_link=f"{DOC_BASE}/prepare#set-up-your-power-platform-environment",
+                ))
+                return results
+
+            props = env.get("properties", {})
+            display_name = props.get("displayName", env_id)
             results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
                 checkpoint_id="ENV-001", category="Environment",
-                priority=Priority.CRITICAL.value, status=Status.FAILED.value,
-                description="Power Platform environment exists",
-                result=f"Unable to query environment: {env['_error']}",
-                remediation="Requires Power Platform Administrator role.",
-                doc_link=f"{DOC_BASE}/prepare#set-up-your-power-platform-environment",
-            ))
-            return results
-
-        props = env.get("properties", {})
-        display_name = props.get("displayName", env_id)
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
-            checkpoint_id="ENV-001", category="Environment",
-            priority=Priority.CRITICAL.value, status=Status.PASSED.value,
-            description="Power Platform environment exists",
-            result=f"Environment: {display_name}",
-            doc_link=f"{DOC_BASE}/prepare#set-up-your-power-platform-environment",
-        ))
-
-        # ---- ENV-002: Dataverse provisioned ----
-        db_state = (
-            props.get("linkedEnvironmentMetadata", {})
-            .get("resourceProvisioningState", "")
-        )
-        # Also check databaseType
-        db_type = props.get("databaseType", "")
-        if db_state.lower() == "succeeded" or db_type:
-            results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
-                checkpoint_id="ENV-002", category="Environment",
                 priority=Priority.CRITICAL.value, status=Status.PASSED.value,
-                description="Dataverse database provisioned",
-                result=f"State: {db_state or 'Available'}, Type: {db_type or 'N/A'}",
+                description="Power Platform environment exists",
+                result=f"Environment: {display_name}",
                 doc_link=f"{DOC_BASE}/prepare#set-up-your-power-platform-environment",
             ))
-        else:
+
+            # ---- ENV-002: Dataverse provisioned ----
+            db_state = (
+                props.get("linkedEnvironmentMetadata", {})
+                .get("resourceProvisioningState", "")
+            )
+            db_type = props.get("databaseType", "")
+            if db_state.lower() == "succeeded" or db_type:
+                results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+                    checkpoint_id="ENV-002", category="Environment",
+                    priority=Priority.CRITICAL.value, status=Status.PASSED.value,
+                    description="Dataverse database provisioned",
+                    result=f"State: {db_state or 'Available'}, Type: {db_type or 'N/A'}",
+                    doc_link=f"{DOC_BASE}/prepare#set-up-your-power-platform-environment",
+                ))
+            else:
+                results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+                    checkpoint_id="ENV-002", category="Environment",
+                    priority=Priority.CRITICAL.value, status=Status.FAILED.value,
+                    description="Dataverse database provisioned",
+                    result=f"Provisioning state: {db_state or 'Unknown'}",
+                    remediation="Enable Dataverse database for this environment.",
+                    doc_link=f"{DOC_BASE}/prepare#set-up-your-power-platform-environment",
+                ))
+
+            # ---- ENV-003: Environment type ----
+            env_type = props.get("environmentSku", "")
             results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
-                checkpoint_id="ENV-002", category="Environment",
-                priority=Priority.CRITICAL.value, status=Status.FAILED.value,
-                description="Dataverse database provisioned",
-                result=f"Provisioning state: {db_state or 'Unknown'}",
-                remediation="Enable Dataverse database for this environment.",
+                checkpoint_id="ENV-003", category="Environment",
+                priority=Priority.HIGH.value, status=Status.PASSED.value,
+                description="Environment type",
+                result=f"Type: {env_type}",
                 doc_link=f"{DOC_BASE}/prepare#set-up-your-power-platform-environment",
             ))
 
-        # ---- ENV-003: Environment type ----
-        env_type = props.get("environmentSku", "")
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
-            checkpoint_id="ENV-003", category="Environment",
-            priority=Priority.HIGH.value, status=Status.PASSED.value,
-            description="Environment type",
-            result=f"Type: {env_type}",
-            doc_link=f"{DOC_BASE}/prepare#set-up-your-power-platform-environment",
-        ))
-
-    except Exception as e:
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
-            checkpoint_id="ENV-001", category="Environment",
-            priority=Priority.CRITICAL.value, status=Status.WARNING.value,
-            description="Power Platform environment",
-            result=f"Unable to check: {type(e).__name__}: {e}",
-            remediation="Ensure Power Platform Admin permissions.",
-        ))
+        except Exception as e:
+            results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+                checkpoint_id="ENV-001", category="Environment",
+                priority=Priority.CRITICAL.value, status=Status.WARNING.value,
+                description="Power Platform environment",
+                result=f"Unable to check: {type(e).__name__}: {e}",
+                remediation="Ensure Power Platform Admin permissions.",
+            ))
 
     # ---- ENV-004: Connections & Connection References ----
     results.extend(_check_connections_and_refs(runner))
@@ -343,6 +366,8 @@ def run_environment_checks(runner) -> list[CheckResult]:
 
     # ---- ENV-008: DLP policies ----
     try:
+        if pp is None:
+            raise RuntimeError("Power Platform Admin API is unavailable")
         policies = iter_effective_policies(pp, env_id)
         if isinstance(policies, dict) and "_error" in policies:
             # The apiPolicies admin endpoint returned 401/403 — we could
@@ -406,8 +431,9 @@ def run_environment_checks(runner) -> list[CheckResult]:
             ),
         ))
 
-    # ---- ENV-009: Maker has preferred customization solution selected ----
-    results.extend(_check_preferred_solution(runner))
+    # Profile execution schedules ENV-009 through its dedicated function.
+    if "ENV-009" not in tuple(getattr(runner, "execution_targets", ())):
+        results.extend(_check_preferred_solution(runner))
 
     return results
 
@@ -428,15 +454,18 @@ _CAPACITY_PORTAL_PATH = "/billing/licenses/copilotStudio/overview"
 def _capacity_portal(runner) -> str:
     """Return the Power Platform capacity portal link.
 
-    Prefers the ring-matched admin center origin. Targeted runs (for example
-    ``--checkpoint ENV-CAPACITY-001``) authenticate only the AgentBuilder
-    client and never resolve the BAP ring, so ``runner.ring`` can be None. Fall
-    back to the ring-agnostic production Admin Center rather than raising, so a
-    missing ring cannot crash an otherwise-successful capacity verdict.
+    Prefers the retained target origin, then the ring-matched admin center.
+    Targeted runs can have no ring, so fall back to the production Admin Center
+    rather than crashing an otherwise-successful capacity verdict.
     """
+    retained_origin = str(
+        getattr(runner, "power_platform_admin_origin", "") or ""
+    ).strip().rstrip("/")
     ring = getattr(runner, "ring", None)
-    origin = _POWER_PLATFORM_ADMIN_ORIGIN_BY_RING.get(
-        ring, _POWER_PLATFORM_ADMIN_ORIGIN_BY_RING["prod"]
+    # Retained origins win because Preview targets intentionally use logical prod.
+    origin = retained_origin or _POWER_PLATFORM_ADMIN_ORIGIN_BY_RING.get(
+        ring,
+        _POWER_PLATFORM_ADMIN_ORIGIN_BY_RING["prod"],
     )
     return (
         "[Power Platform Admin Center > Licensing > Copilot Studio > "
@@ -449,7 +478,13 @@ def run_capacity_check(runner) -> list[CheckResult]:
     return _check_copilot_studio_capacity_provisioned(runner)
 
 
-def _env_capacity(status: str, result: str, remediation: str = "") -> CheckResult:
+def _env_capacity(
+    status: str,
+    result: str,
+    remediation: str = "",
+    *,
+    evidence: dict | None = None,
+) -> CheckResult:
     """Build an ENV-CAPACITY-001 row (every branch shares id/category/role)."""
     return CheckResult(
         roles=[Role.POWER_PLATFORM_ADMIN.value],
@@ -457,6 +492,7 @@ def _env_capacity(status: str, result: str, remediation: str = "") -> CheckResul
         priority=Priority.CRITICAL.value, status=status,
         description="Copilot Studio capacity provisioned",
         result=result, remediation=remediation, doc_link=_CAPACITY_DOC,
+        evidence=evidence or {},
     )
 
 
@@ -471,10 +507,10 @@ def _check_copilot_studio_capacity_provisioned(runner) -> list[CheckResult]:
     it asks only whether the environment has any dedicated Copilot Studio
     capacity (``population=None``).
 
-    A known zero allocation is a visible runtime or billing risk, but it does
-    not block the remaining foundation setup. When the allocation cannot be
-    read, the row requires explicit manual confirmation rather than presenting
-    the unknown result as a known failure.
+    A known zero entitlement requires an explicit maker override before
+    foundation readiness can complete. When the entitlement cannot be read, the
+    row requires explicit manual confirmation rather than presenting the
+    unknown result as a known failure.
     """
     env_id = getattr(runner, "env_id", None)
     if not env_id:
@@ -482,31 +518,59 @@ def _check_copilot_studio_capacity_provisioned(runner) -> list[CheckResult]:
             "Environment ID is unavailable, so Copilot Studio capacity could not be verified.",
             "Verify the environment identity, then rerun this checkpoint.")]
 
-    allocated = _env_mcs_allocation(getattr(runner, "powerplatform", None), env_id)
+    allocated, evidence = _env_mcs_entitlement_observation(
+        getattr(runner, "powerplatform", None),
+        env_id,
+    )
     payg_flag = getattr(runner, "_payg_configured", None)
     _, reason = classify_copilot_studio_capacity(
         allocated, population=None, payg_flag=payg_flag)
     capacity_portal = _capacity_portal(runner)
 
     if reason == "unreadable":
+        outcome = evidence.get("outcome")
+        if outcome == "denied-access":
+            detail = "access was denied"
+        elif outcome == "not-found":
+            detail = "the environment entitlement resource was not found"
+        elif outcome == "missing-entitlement":
+            detail = "the service returned no MCSMessages entitlement"
+        elif outcome == "ambiguous-entitlement":
+            detail = "the service returned multiple MCSMessages entitlements"
+        elif outcome == "service-error":
+            detail = "the service returned an error"
+        elif outcome == "invalid-response":
+            detail = (
+                "the service response contained an invalid entitlement value"
+                if evidence.get("errorType")
+                == "InvalidEntitlementAllocationValue"
+                else "the service returned an invalid entitlement response"
+            )
+        else:
+            detail = "the required API capability was unavailable"
         return [_env_capacity(Status.MANUAL.value,
-            "The Power Platform Licensing API was unavailable or permission was denied, so FlightCheck could not verify this environment's Copilot Studio message capacity allocation programmatically.",
-            f"Verify in {capacity_portal} whether Copilot Studio message capacity is allocated to this environment. If it is allocated, explicitly attest that result during setup. If it is not allocated, rerun this checkpoint so setup can record the risk.")]
+            f"FlightCheck could not verify this environment's Copilot Studio message capacity because {detail}.",
+            f"Retry this check after reviewing capacity in {capacity_portal}. If verification remains unavailable, an appropriate administrator may explicitly attest during setup that the capacity check is skipped; this does not verify allocation.",
+            evidence=evidence)]
     if reason == "covered":
         return [_env_capacity(Status.PASSED.value,
-            f"{allocated} Copilot Studio message credit(s) are allocated to this environment.")]
+            f"{allocated} Copilot Studio message credit(s) are allocated to this environment.",
+            evidence=evidence)]
     if reason == "zero_with_payg":
         return [_env_capacity(Status.WARNING.value,
             "No Copilot Studio message capacity is allocated to this environment, and Pay-as-you-go billing is configured.",
-            f"Billing risk: agent messages will be billed through Azure Pay-as-you-go. Setup can continue with this risk recorded. Allocate prepaid capacity in {capacity_portal} if that billing path is not intended.")]
+            f"Allocate Copilot Studio capacity in {capacity_portal}, then rerun this check. After a fresh zero-allocation result, an appropriate administrator may explicitly attest during setup that the capacity check is skipped.",
+            evidence=evidence)]
     if reason == "zero_payg_unknown":
         return [_env_capacity(Status.WARNING.value,
             "No Copilot Studio message capacity is allocated to this environment, and Pay-as-you-go status was not determined in this run.",
-            f"Runtime and billing risk: message capacity is not confirmed. Setup can continue with this risk recorded. Verify Pay-as-you-go billing or allocate Copilot Studio capacity in {capacity_portal} before agent use.")]
+            f"Allocate Copilot Studio capacity in {capacity_portal}, then rerun this check. After a fresh zero-allocation result, an appropriate administrator may explicitly attest during setup that the capacity check is skipped.",
+            evidence=evidence)]
     # reason == "zero_no_payg"
     return [_env_capacity(Status.WARNING.value,
         "No Copilot Studio message capacity is allocated to this environment, and Pay-as-you-go billing is not configured.",
-        f"Runtime risk: the ESS agent has no message capacity. Setup can continue with this risk recorded, but capacity must be allocated in {capacity_portal} before the agent is used.")]
+        f"Allocate Copilot Studio capacity in {capacity_portal}, then rerun this check. After a fresh zero-allocation result, an appropriate administrator may explicitly attest during setup that the capacity check is skipped.",
+        evidence=evidence)]
 
 
 # ---------------------------------------------------------------------------

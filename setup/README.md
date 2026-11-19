@@ -14,9 +14,22 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-mac.sh)"
 ```
 
-Once complete, the installer asks in the terminal which experience you want — **Maker** (guided rail layout — recommended) or **Developer** (default VS Code view with the rendered README). Under a non-interactive shell (CI, piped input) the installer silently picks Maker. VS Code then opens at `solutions/ess-maker-skills/`. When you're ready, run `/setup` in Copilot Chat — in Maker mode, follow the **Getting started** walkthrough — to connect the workspace to an existing editable DA Dev agent. `/setup` is not run automatically in either mode. You'll be prompted to trust the workspace and sign in to GitHub/Copilot — accept these prompts.
+Once complete, the installer asks in the terminal which experience you want — **Maker** (guided rail layout — recommended) or **Developer** (default VS Code view with the rendered README). Under a non-interactive shell (CI, piped input) the installer silently picks Maker. VS Code then opens at `solutions/ess-maker-skills/`. When you're ready, run `/setup` in Copilot Chat — in Maker mode, follow the **Getting started** walkthrough — to connect the workspace to an existing editable DA Dev agent. `/setup` is not run automatically in either mode. Review the workspace trust prompt before accepting it, then follow the purpose-specific sign-in guidance below.
 
 > **GitHub Copilot subscription is required** for the in-editor maker experience. This script installs the toolchain and extension scaffolding; it does not grant the Copilot entitlement.
+
+## Authentication prompts
+
+The full Maker and Developer experiences use two independent authentication stages:
+
+1. **GitHub Copilot sign-in** activates Copilot Chat, the interface where you run `/setup` and the other ESS maker commands. Sign in with a GitHub account that has an active GitHub Copilot entitlement. This sign-in does not grant access to Power Platform.
+2. **Power Platform sign-in** authorizes the kit to discover environments and agents and to call the required Microsoft services. When `/setup` opens a browser, sign in with the Microsoft work account that can access the target Power Platform environment and agent.
+
+You may see more than one Microsoft account-selection or consent window because setup and FlightCheck call multiple Microsoft services. These prompts are separate from GitHub Copilot authentication.
+
+Cloning the public repository and installing VS Code do not normally require GitHub authentication. A private fork or branch may require GitHub or GitHub CLI authentication, and Codespaces requires a GitHub account because it is a GitHub-hosted service.
+
+**FlightCheck-only mode does not require VS Code, GitHub, or GitHub Copilot.** It still opens the Microsoft sign-in required to inspect the selected Power Platform environment and its services.
 
 ## Maker Mode (Guided Rail Layout) and Developer Mode
 
@@ -80,7 +93,10 @@ The same Codespace environment can be used to run FlightCheck without the full m
 
 ## FlightCheck-Only Mode
 
-For users who want to run a pre-deployment readiness check on their Power Platform environment — no coding tools or VS Code required. Just run this command:
+Run FlightCheck without coding tools or VS Code. The Windows standalone
+installer checks a selected Declarative Agent (DA), using the same setup
+diagnostics and report as `/flightcheck` in a configured DA workspace.
+It does not run legacy/custom-engine or environment-only checks.
 
 **Windows** (PowerShell):
 
@@ -88,23 +104,59 @@ For users who want to run a pre-deployment readiness check on their Power Platfo
 iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1)
 ```
 
-**macOS** (Terminal):
+That's it. The script handles everything automatically:
+
+1. Installs Python and Git (if not already present)
+2. Accepts your DA's Copilot Studio URL, or offers environment and native-agent selection
+3. Opens sign-in for the Microsoft work account that can access that agent
+4. Verifies the exact selected agent and saves its standalone configuration
+5. Runs the full DA setup diagnostics and opens the report
+
+Dataverse and completed foundation setup are not required. Checks needing
+unavailable evidence explain what remains unverified. Local-file checks need
+an agent workspace; the installer does not export a Dataverse solution.
+
+**macOS** retains its existing standalone discovery workflow:
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck-mac.sh)"
 ```
 
-That's it. The script handles everything automatically:
+For DA diagnostics on macOS, use the direct command below from an already
+configured DA workspace.
 
-1. Installs Python and Git (if not already present)
-2. Opens a browser window for you to sign in with your Microsoft work account
-3. Shows your available environments — pick one by number
-4. Shows the agents in that environment — pick one (or skip)
-5. Runs the full FlightCheck validation and displays results
+### Running a specific check on Windows
+
+Pass `-Checkpoint` to run a single check instead of the full suite. For the
+Workday litmus test:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1))) -Checkpoint WD-RUN-001
+```
+
+The script still refreshes the code, installs missing dependencies, and verifies
+your selected DA. It runs only the requested check and its supporting
+prerequisites, not the full suite. Unknown or unsupported IDs fail explicitly;
+they do not fall back to a full run. Omit `-Checkpoint` for the existing full
+diagnostics.
+
+The Workday litmus reads recent flow history; it does not execute employee
+tasks. Its report is saved separately to
+`solutions\ess-maker-skills\workspace\flightcheck\workday-litmus\report.html`,
+preserving the full-suite report. The terminal prints the full artifact paths.
+If there is no recent run to inspect, follow the report's Test-pane guidance
+and rerun the same command.
+
+For a local installer invocation, use
+`.\setup\Install-EssAdk.ps1 -FlightCheckOnly -Checkpoint WD-RUN-001`
+from the repository root.
 
 ### Changing your environment or agent
 
-Re-run the same command — it will ask if you want to reconfigure:
+Re-run the same Windows command and select the intended DA. Older
+environment-only/legacy standalone configurations are replaced only after
+the new target is verified. Existing maker-workspace configurations are not
+overwritten; use `/flightcheck` there or choose a separate `-InstallRoot`.
 
 ```powershell
 iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1)
@@ -112,7 +164,7 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 ### Targeting a non-prod ring
 
-The FlightCheck-only installer targets the Power Platform **prod** service ring by default (where customer environments live). To validate a **preprod** or **test** environment, pass `-Ring` / `--ring`:
+The FlightCheck-only installer targets the Power Platform **prod** service ring by default (where customer environments live). To validate a **preprod** or **test** environment, pass `-Ring` / `--ring`. A supplied Copilot Studio URL must match that ring:
 
 **Windows** (PowerShell):
 
@@ -186,7 +238,7 @@ The installer provisions the following dependencies. Users do not need to instal
 | GitHub CLI (`gh`) | Latest | Device-code auth flow for private repo clone | ❌ |
 | VS Code | Latest | Editor and Copilot host | ❌ |
 | PowerShell 7 | Latest | Script execution (Windows only) | ❌ |
-| .NET runtime | 10 | Runtime for Microsoft Object Model serialization | ❌ |
+| .NET runtime / SDK | 10 | Object Model serialization; macOS installs a user-local SDK to verify NuGet signatures | ❌ |
 | NuGet | Latest available | Retrieves Microsoft Object Model packages using configured package sources | ❌ |
 
 ### Python packages (installed via pip from `scripts/requirements.txt`)
@@ -221,7 +273,7 @@ The devcontainer provides an equivalent pre-built environment:
 
 ### Microsoft Object Model packages
 
-The full installer retrieves the exact Microsoft Object Model package versions required by the kit. NuGet uses the standard machine, user, and repository configuration hierarchy, including enterprise feeds, credentials, proxies, and package-source mappings.
+The full installer retrieves the exact Microsoft Object Model package versions required by the kit. NuGet uses the standard machine, user, and repository configuration hierarchy, including enterprise feeds, credentials, proxies, and package-source mappings. On macOS, package signatures are checked by the .NET SDK with `dotnet nuget verify --all`; Mono NuGet remains responsible only for package acquisition. When an existing .NET 10 SDK is unavailable, the installer uses Microsoft's `dotnet-install.sh` to install it under `~/.dotnet` without administrator privileges or a system package. If signature verification cannot run or reports a failure, setup prints a warning and continues with the downloaded package.
 
 If the runtime, NuGet, or Object Model packages cannot be installed, setup warns and continues. Object Model serialization remains unavailable until the reported dependency is installed and the package installer below is rerun.
 

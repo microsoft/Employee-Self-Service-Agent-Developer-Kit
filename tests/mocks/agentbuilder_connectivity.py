@@ -103,6 +103,40 @@ def components() -> dict[str, Any]:
     }
 
 
+def dialog_component_change(
+    *,
+    schema_name: str,
+    dialog: dict[str, Any] | None = None,
+    status: str = "Active",
+) -> dict[str, Any]:
+    """Build one live ``DialogComponent`` change.
+
+    Source (validated):
+      tests/fixtures/cassettes/agentbuilder_readiness.yaml lines 140-149.
+      The captured minimalBots component response uses
+      ``botComponentChanges[].component`` with ``$kind=DialogComponent``,
+      ``status``, ``schemaName``, and an inline ``dialog`` object.
+    """
+    return {
+        "$kind": "BotComponentInsert",
+        "component": {
+            "$kind": "DialogComponent",
+            "id": schema_name,
+            "schemaName": schema_name,
+            "status": status,
+            "state": "mc",
+            "dialog": dialog or {"$kind": "AdaptiveDialog"},
+        },
+    }
+
+
+def dialog_components(
+    changes: Iterable[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build the validated minimalBots component-response envelope."""
+    return {"botComponentChanges": list(changes)}
+
+
 def connection_reference_change(
     *,
     connector: str,

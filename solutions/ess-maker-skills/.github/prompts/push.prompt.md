@@ -36,6 +36,19 @@ interactive evaluation push waiting for unattended stdin.
 If evaluation scope is ambiguous, ask rather than pushing all components.
 Return after this branch; do not also execute the general push below.
 
+After the shared deployment flow reports a verified successful deployment,
+run the one-time DA post-deployment analytics reminder:
+
+```
+python scripts/analytics_pointer.py --post-deploy
+```
+
+Show any command output verbatim. The command is silent after the reminder has
+already been completed for the current environment/agent association. Run it
+only after deployment verification; do not show an analytics link after a
+preview, cancellation, or failed deployment. If the resolver cannot build the
+link, do not substitute the Copilot Studio home page.
+
 ## General component push
 
 For a general component push, show:

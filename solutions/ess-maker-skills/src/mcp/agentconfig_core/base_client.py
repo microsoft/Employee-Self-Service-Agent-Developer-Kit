@@ -335,6 +335,36 @@ class AgentConfigBaseClient:
         """
         return payload
 
+    def _format_api_error(self, body: Any, status_code: int) -> str:
+        """Build an ``AgentConfigApiError`` message from an error response body.
+
+        The neutral core surfaces only the top-level ``Code`` and ``Message``
+        from the AgentConfiguration error envelope. A server (e.g. the planner)
+        may override this to surface additional actionable detail — such as the
+        ``Target`` field and the nested ``Details[]`` validation entries — that
+        the caller (or the agent) needs to self-correct.
+        """
+        code = ""
+        message = ""
+        if isinstance(body, dict):
+            code_candidate = body.get("Code")
+            if isinstance(code_candidate, str):
+                code = code_candidate
+            message_candidate = body.get("Message")
+            if isinstance(message_candidate, str):
+                message = message_candidate
+        if not code:
+            code = "HttpError"
+        if not message:
+            message = f"HTTP {status_code}"
+        return f"{code}: {message}"
+
+    def _format_error_response(
+        self, response: httpx.Response, body: Any, client_request_id: str,
+    ) -> str:
+        """Allow surfaces to add request diagnostics without changing other clients."""
+        return self._format_api_error(body, response.status_code)
+
     async def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is not None and not self._client.is_closed:
             return self._client
@@ -440,6 +470,13 @@ class AgentConfigBaseClient:
         # retry-on-transient behavior; only call sites that would genuinely
         # duplicate on replay (unkeyed creates) opt out with idempotent=False.
         retry_safe = True if idempotent is None else idempotent
+        headers = httpx.Headers(kwargs.get("headers"))
+        try:
+            client_request_id = str(uuid.UUID(headers.get("client-request-id", "")))
+        except ValueError:
+            client_request_id = str(uuid.uuid4())
+        headers["client-request-id"] = client_request_id
+        kwargs["headers"] = headers
         last_error: Optional[Exception] = None
         refreshed = False
         for attempt in range(self.max_retries):
@@ -462,6 +499,9 @@ class AgentConfigBaseClient:
                         # request (typically an unkeyed create) may already have
                         # committed server-side; replaying it risks a duplicate,
                         # so surface it instead of retrying.
+                        response.raise_for_status()
+                    if attempt == self.max_retries - 1:
+                        # The final response must keep its status and diagnostics.
                         response.raise_for_status()
                     wait = (2**attempt) + random.uniform(0, 1)
                     last_error = AgentConfigApiError(
@@ -488,25 +528,12 @@ class AgentConfigBaseClient:
                 )
 
             except httpx.HTTPStatusError as error:
-                code = ""
-                message = ""
                 try:
                     body = error.response.json()
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     body = None
-                if isinstance(body, dict):
-                    code_candidate = body.get("Code")
-                    if isinstance(code_candidate, str):
-                        code = code_candidate
-                    message_candidate = body.get("Message")
-                    if isinstance(message_candidate, str):
-                        message = message_candidate
-                if not code:
-                    code = "HttpError"
-                if not message:
-                    message = f"HTTP {error.response.status_code}"
                 raise AgentConfigApiError(
-                    f"{code}: {message}",
+                    self._format_error_response(error.response, body, client_request_id),
                     http_status=error.response.status_code,
                 ) from error
 

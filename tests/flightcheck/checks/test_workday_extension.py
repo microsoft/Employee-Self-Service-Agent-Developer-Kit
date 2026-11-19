@@ -10,9 +10,9 @@ Coverage per emitter:
     connection, degrades gracefully when it does not. Cached-ref read + a
     best-effort Power Platform admin owner echo — no cassette required (the
     admin connections listing is the ``validated`` pp_admin mock).
-  * DV-CONN-001 — PASS/FAIL/SKIPPED over the validated minimalBots components
-    read (Workday SOAP connection reference; faked ``runner.agentbuilder``);
-    owner echo via the ``validated`` pp_admin mock.
+  * DV-CONN-001 — PASS/FAIL/SKIPPED over the Dataverse connectionreferences
+    table for the runtime package's Microsoft Dataverse reference; owner echo
+    via the ``validated`` pp_admin mock.
   * WD-REST-001 — pure-config check (restBaseUrl trimmed to '/api').
   * WD-REST-002 — pure local-file check (user-context redirect topic);
     SKIPPED on the legacy install path.
@@ -33,11 +33,9 @@ import pytest
 
 
 from tests.conftest import require_validated_mock
-from tests.mocks import agentbuilder_connectivity as ab
 from tests.mocks import dataverse as dv
 from tests.mocks import pp_admin as pp
 
-require_validated_mock(ab)
 require_validated_mock(dv)
 require_validated_mock(pp)
 
@@ -60,17 +58,6 @@ class _FakePPAdmin:
 
     def get_connections(self, _env_id: str):
         return self._connections
-
-
-class _FakeAgentBuilder:
-    """Stand-in for FlightCheckRunner.agentbuilder. Only ``fetch_components``
-    is consumed (DV-CONN-001's connection-reference read)."""
-
-    def __init__(self, components: dict[str, Any]):
-        self._components = components
-
-    def fetch_components(self, _agent_id: str):
-        return self._components
 
 
 @dataclass
@@ -245,44 +232,46 @@ class TestConnectionAuth:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# DV-CONN-001 — Workday SOAP connection binding (S5.4, PASS/FAIL).
+# DV-CONN-001 — runtime Dataverse connection binding (S5.4, PASS/FAIL).
 # ─────────────────────────────────────────────────────────────────────
 
 
-def _runner_with_refs(references, *, pp_admin=None, env_id=None):
-    """A runner whose faked ``agentbuilder.fetch_components`` returns the given
-    connection references and whose config names an active agent (botId)."""
-    components = ab.components_with_references(references=references)
+def _runner_with_refs(monkeypatch, references, *, pp_admin=None, env_id=None):
+    monkeypatch.setattr(wx, "query_all", lambda *_a, **_k: references)
     return _Runner(
-        config={"agent": {"botId": ab.MOCK_AGENT_ID}},
-        agentbuilder=_FakeAgentBuilder(components),
+        env_url="https://org.crm.dynamics.com",
+        dv_token="token",
         pp_admin=pp_admin,
         env_id=env_id,
     )
 
 
 class TestDataverseConnection:
-    def test_bound_with_owner_echo_passes(self):
+    def test_bound_with_owner_echo_passes(self, monkeypatch):
         owner_conn = pp.connection(
-            name="wd-conn-active",
-            api_name="shared_workdaysoap",
+            name="dv-conn-active",
+            api_name="shared_commondataserviceforapps",
             extra_properties={"accountName": "maker@contoso.com"},
         )
         runner = _runner_with_refs(
-            [ab.workday_connection_reference(connection_id="wd-conn-active")],
+            monkeypatch,
+            [dv.workday_connection_refs_runtime()[1] | {
+                "connectionid": "dv-conn-active"
+            }],
             pp_admin=_FakePPAdmin([owner_conn]),
             env_id="env-1",
         )
         r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
 
         assert r.status == Status.PASSED.value
-        assert "bound to a connection" in r.result
+        assert "active and bound" in r.result
         assert "maker@contoso.com" in r.result
         assert "your own account" in r.result
 
-    def test_passes_without_pp_admin_notes_owner_unreadable(self):
+    def test_passes_without_pp_admin_notes_owner_unreadable(self, monkeypatch):
         runner = _runner_with_refs(
-            [ab.workday_connection_reference(connection_id="wd-conn-active")],
+            monkeypatch,
+            [dv.workday_connection_refs_runtime()[1]],
         )
         r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
 
@@ -290,64 +279,77 @@ class TestDataverseConnection:
         assert "owner could not be read" in r.result
         assert "your own account" in r.result
 
-    def test_unbound_fails(self):
+    def test_unbound_fails(self, monkeypatch):
         runner = _runner_with_refs(
-            [ab.workday_connection_reference(connection_id=None)],
+            monkeypatch,
+            [dv.workday_connection_refs_runtime()[1] | {
+                "connectionid": None
+            }],
         )
         r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
 
         assert r.status == Status.FAILED.value
-        assert "unbound" in r.result
-        assert "connectionId=null" in r.result
-        assert "bind the Workday SOAP connection reference" in r.remediation
+        assert "not active and bound" in r.result
+        assert "Microsoft Dataverse connection reference" in r.remediation
 
-    def test_workday_ref_absent_fails(self):
-        # Only a ServiceNow ref is present - no Workday SOAP ref.
+    def test_inactive_fails(self, monkeypatch):
         runner = _runner_with_refs(
+            monkeypatch,
+            [dv.workday_connection_refs_runtime()[1] | {"statuscode": 2}],
+        )
+        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
+
+        assert r.status == Status.FAILED.value
+        assert "not active and bound" in r.result
+
+    def test_dataverse_ref_absent_fails(self, monkeypatch):
+        runner = _runner_with_refs(
+            monkeypatch,
+            [dv.workday_connection_refs_runtime()[0]],
+        )
+        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
+
+        assert r.status == Status.FAILED.value
+        assert "found 0" in r.result
+        assert "Microsoft Dataverse connection reference" in r.remediation
+
+    def test_no_dataverse_access_skips(self):
+        runner = _Runner()
+        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
+
+        assert r.status == Status.SKIPPED.value
+        assert "Dataverse URL or access token not available" in r.result
+
+    def test_duplicate_reference_fails(self, monkeypatch):
+        reference = dv.workday_connection_refs_runtime()[1]
+        runner = _runner_with_refs(
+            monkeypatch,
             [
-                ab.connection_reference_change(
-                    connector="shared_service-now",
-                    connection_id="sn-1",
-                )
-            ]
+                reference,
+                reference | {
+                    "connectionreferenceid":
+                        "00000000-0000-0000-0000-000000008099"
+                },
+            ],
         )
         r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
 
         assert r.status == Status.FAILED.value
-        assert "was not found" in r.result
-        assert "shared_workdaysoap" in r.result
-        assert "Install or repair the Workday extension pack" in r.remediation
+        assert "found 2" in r.result
 
-    def test_no_agentbuilder_client_skips(self):
-        runner = _Runner(config={"agent": {"botId": ab.MOCK_AGENT_ID}})
-        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
+    def test_dataverse_read_error_degrades_to_error(self, monkeypatch):
+        def fail(*_args, **_kwargs):
+            raise RuntimeError("boom")
 
-        assert r.status == Status.SKIPPED.value
-        assert "not available" in r.result
-
-    def test_no_active_agent_botid_skips(self):
+        monkeypatch.setattr(wx, "query_all", fail)
         runner = _Runner(
-            config={},
-            agentbuilder=_FakeAgentBuilder(ab.components_with_references()),
+            env_url="https://org.crm.dynamics.com",
+            dv_token="token",
         )
         r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
 
-        assert r.status == Status.SKIPPED.value
-        assert "not available" in r.result
-
-    def test_malformed_changeset_degrades_to_warning(self):
-        # A 200 payload whose connectionReferenceChanges is present but not a
-        # list is a shape we do not understand: fail loudly (dispatcher WARNING)
-        # rather than reporting a confident "reference not found" FAILED.
-        runner = _Runner(
-            config={"agent": {"botId": ab.MOCK_AGENT_ID}},
-            agentbuilder=_FakeAgentBuilder(
-                {"connectionReferenceChanges": {"unexpected": "dict"}}
-            ),
-        )
-        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
-
-        assert r.status == Status.WARNING.value
+        assert r.status == Status.ERROR.value
+        assert r.evidence["executionError"] is True
         assert "Unable to run DV-CONN-001" in r.result
         assert "DV-CONN-001" in r.remediation
 
@@ -831,8 +833,8 @@ class TestDispatcher:
             "WD-NET-001",
         ]
 
-    def test_emitter_failure_degrades_to_warning(self, monkeypatch):
-        # A raising emitter must degrade to a WARNING for its own checkpoint
+    def test_emitter_failure_degrades_to_error(self, monkeypatch):
+        # A raising emitter must degrade to an ERROR for its own checkpoint
         # without aborting the remaining four.
         def _boom(_runner):
             raise RuntimeError("kaboom")
@@ -842,19 +844,20 @@ class TestDispatcher:
         by_id = _by_id(results)
 
         assert len(results) == 5
-        assert by_id["WD-REST-001"].status == Status.WARNING.value
+        assert by_id["WD-REST-001"].status == Status.ERROR.value
+        assert by_id["WD-REST-001"].evidence["executionError"] is True
         assert "Unable to run WD-REST-001" in by_id["WD-REST-001"].result
         assert by_id["WD-REST-001"].roles == [Role.ESS_MAKER.value]
         # The other four still emitted normally.
         assert by_id["WD-NET-001"].status == Status.MANUAL.value
 
-    def test_config_reading_emitters_warn_on_boom_config(self):
+    def test_config_reading_emitters_error_on_boom_config(self):
         # A config whose .get raises breaks the three config-reading emitters;
-        # each degrades to WARNING and the run still returns all five rows.
+        # each degrades to ERROR and the run still returns all five rows.
         results = wx.run_workday_extension_checks(_Runner(config=_BoomConfig()))
         by_id = _by_id(results)
 
         assert len(results) == 5
         for cp in ("WD-REST-001", "WD-REST-002", "WD-NET-001"):
-            assert by_id[cp].status == Status.WARNING.value
+            assert by_id[cp].status == Status.ERROR.value
             assert f"Unable to run {cp}" in by_id[cp].result

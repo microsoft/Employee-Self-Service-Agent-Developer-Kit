@@ -45,8 +45,9 @@ def test_authentication_plan_distinguishes_credential_stores() -> None:
     stores = {item["store"] for item in auth.authentication_plan()}
 
     assert stores == {
-        "azure-cli-graph",
         "pac",
+        "agentbuilder-msal",
         "dataverse-msal",
         "workday-connector",
     }
+    assert all("Graph" not in item["purpose"] for item in auth.authentication_plan())

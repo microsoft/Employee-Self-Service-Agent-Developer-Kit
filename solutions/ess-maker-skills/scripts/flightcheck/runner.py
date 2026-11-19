@@ -16,7 +16,8 @@ from enum import Enum
 from typing import Any, Callable
 
 
-FLIGHTCHECK_RESULT_SCHEMA_VERSION = "flightcheck.result.v1"
+FLIGHTCHECK_RESULT_SCHEMA_VERSION = "flightcheck.result.v2"
+LIFECYCLE_CHECKPOINT_SCHEMA_VERSION = "flightcheck.lifecycle-checkpoint.v1"
 
 
 class Status(str, Enum):
@@ -67,6 +68,31 @@ class Role(str, Enum):
     ESS_MAKER = "ESS Maker / Agent Developer"
 
 
+# Block-reason taxonomy — WHY a BLOCKED check was gated, as a bounded enum.
+#
+# The BLOCKED status already tells telemetry that an essential platform
+# capability was unavailable; block_reason splits that single wedge by cause
+# so we can count, specifically, runs blocked by admin-API authorization
+# denials vs. everything else. These are emitted to telemetry, so they MUST
+# stay a small closed set of non-identifying tokens — never free text or
+# error messages (EUII risk). telemetry.py keeps an independent allow-list
+# mirror of these literals; keep the two in sync.
+#
+# adminApiAuthorization — an admin API positively rejected us for identity
+#   reasons: HTTP 401/403 or an AADSTS* error. This is the metric the team
+#   is chasing (customers blocked by admin-API auth policy).
+# adminApiUnavailable — an admin API could not be reached or did not
+#   positively authorize/deny: connect error, timeout, 404 wrong-env, 5xx.
+#   Default when a client block cannot be positively classified as auth, so
+#   the known test-ring 404-wrong-host bug never inflates the auth metric.
+BLOCK_REASON_ADMIN_API_AUTHORIZATION = "adminApiAuthorization"
+BLOCK_REASON_ADMIN_API_UNAVAILABLE = "adminApiUnavailable"
+BLOCK_REASON_CHECKPOINT_CONTRACT = "checkpointContract"
+BLOCK_REASON_PROFILE_CARDINALITY = "profileCardinality"
+BLOCK_REASON_EVIDENCE_AMBIGUOUS = "evidenceAmbiguous"
+BLOCK_REASON_OTHER = "other"
+
+
 @dataclass
 class CheckResult:
     checkpoint_id: str
@@ -87,6 +113,11 @@ class CheckResult:
     # so the runner's ERROR fallback and unit-test constructions still
     # build. Values are Role enum strings.
     roles: list[str] = field(default_factory=list)
+    # block_reason — WHY this check is BLOCKED, as a bounded BLOCK_REASON_*
+    # token. Only meaningful when status == BLOCKED; empty on every other
+    # status. An empty block_reason on a blocked row means pre-change data.
+    block_reason: str = ""
+    custom_tags: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.severity:
@@ -132,7 +163,35 @@ class RunResult:
     overall: str = ""  # READY / READY_WITH_WARNINGS / NOT_READY
     profile: str = ""
     profile_checkpoints: list[str] = field(default_factory=list)
+    profile_families: dict[str, dict[str, int]] = field(default_factory=dict)
+    requested_validation_context: dict[str, Any] = field(default_factory=dict)
     validation_context: dict[str, Any] = field(default_factory=dict)
+    client_availability: dict[str, dict[str, Any]] = field(default_factory=dict)
+    diagnostic_only: bool = False
+    coverage: dict[str, Any] = field(default_factory=dict)
+    rerun_command: str = ""
+
+
+def maker_diagnostic_outcome(result: RunResult) -> str:
+    """Describe configuration inspection, never release approval."""
+    if any(row.status == Status.FAILED.value for row in result.results):
+        return "ISSUES_FOUND"
+    if not result.results or any(
+        row.status in {Status.BLOCKED.value, Status.ERROR.value, Status.SKIPPED.value}
+        or row.evidence.get("dependencyCoverageComplete") is False
+        for row in result.results
+    ):
+        return "SOME_CHECKS_UNVERIFIED"
+    if any(
+        row.status != Status.PASSED.value
+        and not (
+            row.status == Status.NOT_CONFIGURED.value
+            and row.evidence.get("applicability") in {"not_configured", "disabled", "configured", "not_applicable"}
+        )
+        for row in result.results
+    ):
+        return "CHECKED_WITH_NOTES"
+    return "SETUP_CHECKS_PASSED"
 
 
 _VALIDATION_REALMS = frozenset({"dev", "test", "prod"})
@@ -150,6 +209,7 @@ class ValidationContext:
     realm: str
     environment_id: str = ""
     environment_url: str = ""
+    agent_slug: str = ""
     agent_schema_name: str = ""
     agent_id: str = ""
     tenant_id: str = ""
@@ -171,12 +231,15 @@ class ValidationContext:
 
     def to_dict(self) -> dict[str, str]:
         return {
-            "realm": self.realm.strip(),
-            "environmentId": self.environment_id.strip(),
-            "environmentUrl": self.environment_url.strip(),
-            "agentSchemaName": self.agent_schema_name.strip(),
-            "agentId": self.agent_id.strip(),
-            "tenantId": self.tenant_id.strip(),
+            "realm": str(self.realm or "").strip(),
+            "environmentId": str(self.environment_id or "").strip(),
+            "environmentUrl": str(self.environment_url or "").strip(),
+            "agentSlug": str(self.agent_slug or "").strip(),
+            "agentSchemaName": str(
+                self.agent_schema_name or ""
+            ).strip(),
+            "agentId": str(self.agent_id or "").strip(),
+            "tenantId": str(self.tenant_id or "").strip(),
         }
 
 
@@ -195,7 +258,12 @@ def _default_severity(status: str, priority: str) -> str:
 class FlightCheckRunner:
     """Executes registered check functions and aggregates results."""
 
-    def __init__(self, scope: str = "full", target_matcher: Callable | None = None):
+    def __init__(
+        self,
+        scope: str = "full",
+        target_matcher: Callable | None = None,
+        checkpoint_target: str | None = None,
+    ):
         self.scope = scope
         self.results: list[CheckResult] = []
         self._check_fns: list[tuple[str, Callable]] = []
@@ -205,6 +273,7 @@ class FlightCheckRunner:
         # target checkpoint, or every member of a target family) before the
         # summary/verdict is built. None = normal full/scope run (no filter).
         self._target_matcher: Callable | None = target_matcher
+        self.checkpoint_target = checkpoint_target
         # Standalone-scope target selection (set by cli.py's
         # _resolve_target_selection in scope mode only). Pins the
         # ServiceNow connection SN-CONN-* should scope to; None ⇒ validate
@@ -218,25 +287,44 @@ class FlightCheckRunner:
         """Register a check function. fn(runner) -> list[CheckResult]."""
         self._check_fns.append((category, fn))
 
+    def should_execute(self, checkpoint_id: str) -> bool:
+        """Return whether the current target/profile requests this checkpoint."""
+        return (
+            self._target_matcher is None
+            or self._target_matcher(checkpoint_id)
+        )
+
     def run(self) -> RunResult:
         """Execute all registered checks and build the run result."""
         start = time.time()
         started_iso = time.strftime("%Y-%m-%dT%H:%M:%S")
 
-        for category, fn in self._check_fns:
+        for category_index, (category, fn) in enumerate(
+            self._check_fns,
+            start=1,
+        ):
             try:
                 results = fn(self)
                 if results:
                     self.results.extend(results)
             except Exception as e:
                 self.results.append(CheckResult(
-                    checkpoint_id=f"{category[:3].upper()}-ERR",
+                    checkpoint_id=(
+                        f"EXEC-{category_index:03d}-"
+                        f"{''.join(ch for ch in category.upper() if ch.isalnum())[:24]}"
+                        "-ERR"
+                    ),
                     category=category,
                     priority=Priority.HIGH.value,
                     status=Status.ERROR.value,
                     description=f"{category} validation",
                     result=f"Check failed with error: {e}",
                     remediation="Review permissions and retry. See terminal output for details.",
+                    remediation_id="FLIGHTCHECK-EXECUTION-ERROR",
+                    evidence={
+                        "executionError": True,
+                        "category": category,
+                    },
                     roles=[Role.ESS_MAKER.value],
                 ))
                 traceback.print_exc()
@@ -253,7 +341,7 @@ class FlightCheckRunner:
             self.results = [
                 r for r in self.results
                 if self._target_matcher(r.checkpoint_id)
-                or r.checkpoint_id.endswith("-ERR")
+                or r.evidence.get("executionError") is True
             ]
 
         # Build category summaries
@@ -327,6 +415,7 @@ class FlightCheckRunner:
 
 def save_results(run_result: RunResult, output_dir: str = "workspace/flightcheck"):
     """Persist run results to JSON and HTML report."""
+    output_dir = os.path.abspath(output_dir)
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(os.path.join(output_dir, "history"), exist_ok=True)
 
@@ -337,7 +426,10 @@ def save_results(run_result: RunResult, output_dir: str = "workspace/flightcheck
         "scope": run_result.scope,
         "profile": run_result.profile,
         "profile_checkpoints": run_result.profile_checkpoints,
+        "profile_families": run_result.profile_families,
+        "requested_validation_context": run_result.requested_validation_context,
         "validation_context": run_result.validation_context,
+        "client_availability": run_result.client_availability,
         "started": run_result.started,
         "duration_secs": run_result.duration_secs,
         "overall": run_result.overall,
@@ -354,6 +446,12 @@ def save_results(run_result: RunResult, output_dir: str = "workspace/flightcheck
         "results": [asdict(r) for r in run_result.results],
         "contract": versioned_run_result_to_dict(run_result),
     }
+    if run_result.diagnostic_only:
+        data["diagnostic_only"] = True
+    if run_result.coverage:
+        data["coverage"] = run_result.coverage
+    if run_result.rerun_command:
+        data["rerun_command"] = run_result.rerun_command
     with open(results_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
@@ -389,13 +487,9 @@ def save_results(run_result: RunResult, output_dir: str = "workspace/flightcheck
 #      unavailable; keeping it separate from Skipped prevents a
 #      release gate from being rendered as a success-shaped no-op.
 #
-#   2. MANUAL_VERIFICATION — Warning, Manual, NotConfigured. The
-#      kit cannot make a yes/no judgement, or surfaced a soft
-#      finding the operator should confirm is acceptable. Warnings
-#      live here (not in Action required) because they are "should
-#      I worry?" questions, not "fix this" instructions — the
-#      verification path is the operator's, not the kit's. NotConfigured
-#      means the kit had no creds/visibility to evaluate.
+#   2. REVIEW_ITEMS — Warning, Manual, NotConfigured. The legacy
+#      bucket key remains "manual_verification"; renderers distinguish
+#      non-blocking warning review from actual manual verification.
 #
 #   3. PASSED — Passed, Skipped. Skipped is grouped with Passed only
 #      for benign non-applicable rows. Essential unavailable capability
@@ -500,6 +594,7 @@ def check_result_contract_dict(result: CheckResult) -> dict[str, Any]:
         "remediation": result.remediation,
         "docLink": result.doc_link,
         "docLabel": result.doc_label,
+        "customTags": list(result.custom_tags),
         "roles": list(result.roles),
         "evidence": dict(result.evidence),
     }
@@ -514,9 +609,25 @@ def versioned_run_result_to_dict(run_result: RunResult) -> dict[str, Any]:
     """
     return {
         "schemaVersion": FLIGHTCHECK_RESULT_SCHEMA_VERSION,
+        **({"diagnosticOnly": True} if run_result.diagnostic_only else {}),
+        **({"coverage": dict(run_result.coverage)} if run_result.coverage else {}),
+        **({"rerunCommand": run_result.rerun_command} if run_result.rerun_command else {}),
         "profile": run_result.profile,
         "profileCheckpoints": list(run_result.profile_checkpoints),
+        "profileFamilies": dict(run_result.profile_families),
+        "emittedCheckpoints": [
+            result.checkpoint_id for result in run_result.results
+        ],
+        "requestedValidationContext": dict(
+            run_result.requested_validation_context
+        ),
         "validationContext": dict(run_result.validation_context),
+        "clientAvailability": dict(run_result.client_availability),
+        "executionErrors": [
+            check_result_contract_dict(result)
+            for result in run_result.results
+            if result.evidence.get("executionError") is True
+        ],
         "overall": run_result.overall,
         "counts": {
             "total": run_result.total,
@@ -536,6 +647,325 @@ def versioned_run_result_to_dict(run_result: RunResult) -> dict[str, Any]:
     }
 
 
+def _compact_target_matches(
+    target: str,
+    checkpoint_id: str,
+    *,
+    is_family: bool,
+) -> bool:
+    family = target.rstrip("*").rstrip("-")
+    if is_family:
+        return checkpoint_id.startswith(f"{family}-")
+    return checkpoint_id == target
+
+
+def compact_checkpoint_result_to_dict(
+    run_result: RunResult,
+    *,
+    target: str,
+    provider: str,
+    profile: str,
+    agent_slug: str,
+    agent_id: str,
+    environment_id: str,
+    invocation_id: str,
+    invocation_source: str,
+    exit_code: int,
+    target_is_family: bool = False,
+) -> dict[str, Any]:
+    """Return the bounded lifecycle checkpoint contract written to stdout."""
+    identity = {
+        "provider": provider,
+        "profile": profile,
+        "agentSlug": agent_slug,
+        "agentId": agent_id,
+        "environmentId": environment_id,
+    }
+    required_identity = {
+        key: value
+        for key, value in identity.items()
+        if not isinstance(value, str) or not value.strip()
+    }
+    if required_identity:
+        raise ValueError(
+            "Compact checkpoint identity is incomplete: "
+            + ", ".join(sorted(required_identity))
+        )
+    if not isinstance(target, str) or not target.strip():
+        raise ValueError("Compact checkpoint target is required.")
+    if not isinstance(invocation_id, str) or not invocation_id.strip():
+        raise ValueError("Compact checkpoint invocation ID is required.")
+    contract_rows = [
+        result
+        for result in run_result.results
+        if result.checkpoint_id.startswith("CHECKPOINT-CLIENT-")
+        or result.checkpoint_id.startswith("CHECKPOINT-CONTRACT-")
+    ]
+    blocking_contract_rows = [
+        result
+        for result in contract_rows
+        if result.status
+        in {
+            Status.FAILED.value,
+            Status.BLOCKED.value,
+            Status.ERROR.value,
+        }
+    ]
+    if blocking_contract_rows:
+        raise ValueError(
+            "Compact checkpoint execution has a blocking client or contract row."
+        )
+    target_results = [
+        result for result in run_result.results if result not in contract_rows
+    ]
+    if not target_results:
+        raise ValueError("Compact checkpoint result must contain result rows.")
+    if any(
+        not _compact_target_matches(
+            target,
+            result.checkpoint_id,
+            is_family=target_is_family,
+        )
+        for result in target_results
+    ):
+        raise ValueError(
+            "Compact checkpoint result contains a row outside the target."
+        )
+    blocking = any(
+        result.status
+        in {
+            Status.FAILED.value,
+            Status.BLOCKED.value,
+            Status.ERROR.value,
+        }
+        for result in target_results
+    )
+    warnings = any(
+        result.status == Status.WARNING.value for result in target_results
+    )
+    evaluated_nonready = any(
+        result.status
+        in {
+            Status.NOT_CONFIGURED.value,
+            Status.SKIPPED.value,
+        }
+        for result in target_results
+    )
+    compact_exit_code = 1 if blocking else 0
+    compact_overall = (
+        "NOT_READY"
+        if blocking or evaluated_nonready
+        else "READY_WITH_WARNINGS"
+        if warnings
+        else "READY"
+    )
+    return {
+        "schemaVersion": LIFECYCLE_CHECKPOINT_SCHEMA_VERSION,
+        "kind": "checkpoint-result",
+        "target": target,
+        "targetKind": "family" if target_is_family else "fixed",
+        "identity": identity,
+        "invocation": {
+            "id": invocation_id,
+            "source": invocation_source,
+            "started": run_result.started,
+        },
+        "overall": compact_overall,
+        "exitCode": compact_exit_code,
+        "results": [
+            check_result_contract_dict(result)
+            for result in target_results
+        ],
+    }
+
+
+def compact_checkpoint_error_to_dict(
+    *,
+    target: str,
+    error_type: str,
+    message: str,
+    exit_code: int,
+) -> dict[str, Any]:
+    """Return a bounded typed error when no result contract can be emitted."""
+    return {
+        "schemaVersion": LIFECYCLE_CHECKPOINT_SCHEMA_VERSION,
+        "kind": "checkpoint-error",
+        "target": target,
+        "error": {
+            "type": error_type,
+            "message": message,
+            "exitCode": exit_code,
+        },
+    }
+
+
+def parse_compact_checkpoint_result(
+    raw: str,
+    *,
+    expected_target: str,
+    expected_provider: str,
+    expected_profile: str,
+    expected_agent_slug: str,
+    expected_agent_id: str,
+    expected_environment_id: str,
+    expected_invocation_id: str,
+    expected_target_is_family: bool = False,
+) -> dict[str, Any]:
+    """Strictly validate one lifecycle checkpoint stdout contract."""
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("Compact checkpoint stdout is empty.")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Compact checkpoint stdout is not valid JSON.") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Compact checkpoint payload must be an object.")
+    expected_top = {
+        "schemaVersion",
+        "kind",
+        "target",
+        "targetKind",
+        "identity",
+        "invocation",
+        "overall",
+        "exitCode",
+        "results",
+    }
+    if set(payload) != expected_top:
+        raise ValueError("Compact checkpoint payload fields do not match v1.")
+    if payload.get("schemaVersion") != LIFECYCLE_CHECKPOINT_SCHEMA_VERSION:
+        raise ValueError("Unsupported compact checkpoint schema version.")
+    if payload.get("kind") != "checkpoint-result":
+        raise ValueError("Compact checkpoint payload is not a result.")
+    if payload.get("target") != expected_target:
+        raise ValueError("Compact checkpoint target does not match.")
+    expected_target_kind = (
+        "family" if expected_target_is_family else "fixed"
+    )
+    if payload.get("targetKind") != expected_target_kind:
+        raise ValueError("Compact checkpoint target kind does not match.")
+
+    identity = payload.get("identity")
+    expected_identity = {
+        "provider": expected_provider,
+        "profile": expected_profile,
+        "agentSlug": expected_agent_slug,
+        "agentId": expected_agent_id,
+        "environmentId": expected_environment_id,
+    }
+    if not isinstance(identity, dict) or identity != expected_identity:
+        raise ValueError("Compact checkpoint identity does not match.")
+
+    invocation = payload.get("invocation")
+    if (
+        not isinstance(invocation, dict)
+        or set(invocation) != {"id", "source", "started"}
+        or invocation.get("id") != expected_invocation_id
+        or not isinstance(invocation.get("source"), str)
+        or not invocation["source"]
+        or not isinstance(invocation.get("started"), str)
+        or not invocation["started"]
+    ):
+        raise ValueError("Compact checkpoint invocation does not match.")
+
+    results = payload.get("results")
+    if not isinstance(results, list) or not results:
+        raise ValueError("Compact checkpoint result rows are empty.")
+    expected_result_fields = {
+        "checkpointId",
+        "category",
+        "status",
+        "severity",
+        "automationType",
+        "remediationId",
+        "description",
+        "result",
+        "remediation",
+        "docLink",
+        "docLabel",
+        "customTags",
+        "roles",
+        "evidence",
+    }
+    allowed_statuses = {status.value for status in Status}
+    for result in results:
+        if not isinstance(result, dict) or set(result) != expected_result_fields:
+            raise ValueError("Compact checkpoint result row fields are invalid.")
+        checkpoint_id = result.get("checkpointId")
+        if (
+            not isinstance(checkpoint_id, str)
+            or not _compact_target_matches(
+                expected_target,
+                checkpoint_id,
+                is_family=expected_target_is_family,
+            )
+        ):
+            raise ValueError("Compact checkpoint result row target is invalid.")
+        if result.get("status") not in allowed_statuses:
+            raise ValueError("Compact checkpoint result row status is invalid.")
+        for field_name in (
+            "category",
+            "severity",
+            "automationType",
+            "remediationId",
+            "description",
+            "result",
+            "remediation",
+            "docLink",
+            "docLabel",
+        ):
+            if not isinstance(result.get(field_name), str):
+                raise ValueError(
+                    f"Compact checkpoint row {field_name} must be a string."
+                )
+        if not isinstance(result.get("customTags"), list) or not all(
+            isinstance(tag, str) for tag in result["customTags"]
+        ):
+            raise ValueError("Compact checkpoint row customTags are invalid.")
+        if not isinstance(result.get("roles"), list) or not all(
+            isinstance(role, str) for role in result["roles"]
+        ):
+            raise ValueError("Compact checkpoint row roles are invalid.")
+        if not isinstance(result.get("evidence"), dict):
+            raise ValueError("Compact checkpoint row evidence is invalid.")
+
+    blocking = any(
+        result["status"]
+        in {
+            Status.FAILED.value,
+            Status.BLOCKED.value,
+            Status.ERROR.value,
+        }
+        for result in results
+    )
+    warnings = any(
+        result["status"] == Status.WARNING.value for result in results
+    )
+    evaluated_nonready = any(
+        result["status"]
+        in {
+            Status.NOT_CONFIGURED.value,
+            Status.SKIPPED.value,
+        }
+        for result in results
+    )
+    expected_exit = 1 if blocking else 0
+    expected_overall = (
+        "NOT_READY"
+        if blocking or evaluated_nonready
+        else "READY_WITH_WARNINGS"
+        if warnings
+        else "READY"
+    )
+    if payload.get("exitCode") != expected_exit:
+        raise ValueError("Compact checkpoint exit semantics are inconsistent.")
+    if payload.get("overall") != expected_overall:
+        raise ValueError(
+            "Compact checkpoint overall semantics are inconsistent."
+        )
+    return payload
+
+
 def _generate_html_report(r: RunResult) -> str:
     """Generate the category-grouped HTML report.
 
@@ -544,6 +974,10 @@ def _generate_html_report(r: RunResult) -> str:
     one checks card, but it does not change which checks run or how statuses
     are computed.
     """
+    if r.diagnostic_only:
+        from .maker_report import render_maker_report
+
+        return render_maker_report(r)
     buckets = bucket_results(r.results)
 
     verdict_class, verdict_icon, verdict_headline, verdict_sub = _verdict_text(r)
@@ -587,21 +1021,18 @@ def _verdict_text(r: RunResult) -> tuple[str, str, str, str]:
     matters: the headline answers "is my deployment OK?" in five
     words or less; the subline says exactly what to do next.
 
-    Section pointers in the subline reflect the bucket model:
-    Failed / Error live under "Action required"; Warning / Manual /
-    NotConfigured live under "Needs manual verification". Pointing
-    operators at the right section is the whole reason the verdict
-    has a subline.
+    Point to the actual action panel and status filters without treating
+    automated warnings as manual verification.
     """
     failing = r.failed + r.blocked + r.errors
-    manual_count = r.warnings + r.manual + r.not_configured
+    manual_count = r.manual + r.not_configured
 
     if r.overall == "READY":
         if manual_count:
             sub = (
                 f"All {r.passed} automated check(s) passed. "
                 f"{manual_count} item(s) need manual verification \u2014 "
-                "see \u201cNeeds manual verification\u201d below."
+                "use the Manual and Not configured filters to find their next steps."
             )
         else:
             sub = (
@@ -612,10 +1043,11 @@ def _verdict_text(r: RunResult) -> tuple[str, str, str, str]:
 
     if r.overall == "READY_WITH_WARNINGS":
         sub = (
-            f"{r.warnings} warning(s) found. Review each one in "
-            "\u201cNeeds manual verification\u201d below and confirm "
-            "it\u2019s acceptable before deploying."
+            f"{r.warnings} non-blocking warning(s) found. Use the Warnings tab "
+            "to review the findings and their next steps."
         )
+        if manual_count:
+            sub += f" {manual_count} item(s) also need manual verification."
         return (
             "verdict-warnings",
             "\u26a0",
@@ -625,9 +1057,7 @@ def _verdict_text(r: RunResult) -> tuple[str, str, str, str]:
 
     # NOT_READY (or any unrecognized overall) — treat as a blocker.
     # Headline counts failures/blocked/errors as the truly blocking items;
-    # warnings (now in the manual section) are mentioned in the
-    # subline so the operator knows their scale without thinking
-    # they're additional blockers.
+    # Warnings are mentioned separately because they are not blockers.
     issue_word = "issue" if failing == 1 else "issues"
     blocked_text = (
         "failing/blocked/errored" if r.blocked else "failing/errored"
@@ -635,13 +1065,13 @@ def _verdict_text(r: RunResult) -> tuple[str, str, str, str]:
     if r.warnings:
         sub = (
             f"{failing} {blocked_text} check(s) need action; "
-            f"{r.warnings} warning(s) need manual verification. "
-            "Start with \u201cAction required\u201d below."
+            f"{r.warnings} non-blocking warning(s) need review. "
+            "Start with Action items, then use the Warnings tab."
         )
     else:
         sub = (
             f"{failing} {blocked_text} check(s) need action. "
-            "See \u201cAction required\u201d below."
+            "See Action items below."
         )
     return (
         "verdict-not-ready",
@@ -677,6 +1107,7 @@ _REPORT_CSS = """
     --manual:#424242; --manual-bg:#f0f0f0; --manual-line:#d1d1d1;
     --na:#616161; --na-bg:#f5f5f5; --na-line:#e0e0e0;
     --accent:#0f6cbd; --accent-ink:#ffffff;
+    --custom-tag-border:#8764b8;
     --code-bg:#242424; --code-ink:#f2f2f2;
     --chip:#f0f0f0; --shadow:0 2px 4px rgba(0,0,0,.14),0 0 2px rgba(0,0,0,.12);
     --radius:4px;
@@ -694,6 +1125,7 @@ _REPORT_CSS = """
       --manual:#d6d6d6; --manual-bg:#333333; --manual-line:#525252;
       --na:#adadad; --na-bg:#1f1f1f; --na-line:#3d3d3d;
       --accent:#479ef5; --accent-ink:#0a0a0a;
+      --custom-tag-border:#b4a0ff;
       --code-bg:#0f0f0f; --code-ink:#e6e6e6;
       --chip:#333333;
       --ink-2:#d6d6d6; --verdict:#e0808a; --pill-warn:#f7630c;
@@ -822,6 +1254,9 @@ _REPORT_CSS = """
   .pill.na{color:var(--na);background:var(--na-bg);border-color:var(--na-line);white-space:normal;text-align:center;max-width:100%;line-height:14px}
   .check-title{font-family:'Segoe UI',system-ui,sans-serif;font-size:16px;line-height:22px;font-weight:600;flex:1 1 auto;min-width:0}
   .check-title .id{font-weight:600;color:var(--muted);font-size:12.5px;font-family:ui-monospace,monospace;margin-inline-start:6px}
+  .custom-tags{display:flex;flex-wrap:wrap;gap:6px;list-style:none;padding:0;margin:8px 0 0;min-width:0}
+  .custom-tag{font-size:12px;line-height:18px;font-weight:400;color:var(--muted);border:1px solid var(--custom-tag-border);border-radius:4px;padding:2px 8px;min-width:0;overflow-wrap:anywhere}
+  .ch-main>.custom-tags{flex-basis:100%}
   .role{flex:0 0 100%;font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;line-height:20px;color:var(--ink);font-weight:600;margin-top:4px;white-space:nowrap}
   .role::before{content:"Assigned to: "}
   .role.none{display:none}
@@ -1302,9 +1737,20 @@ def _render_header(
     verdict_icon: str,
     verdict_headline: str,
     verdict_sub: str,
+    *,
+    reading_guide: str = "",
 ) -> str:
     """Render the Fluent 2 report header with dynamic run metadata."""
-    rerun = "/flightcheck" if r.scope == "full" else f"/flightcheck --scope {r.scope}"
+    if r.rerun_command:
+        rerun = r.rerun_command
+    elif r.profile:
+        rerun = f"/flightcheck --profile {r.profile}"
+    elif r.scope.startswith("checkpoint:"):
+        rerun = f"/flightcheck --checkpoint {r.scope.partition(':')[2]}"
+    elif r.scope.startswith("profile:"):
+        rerun = f"/flightcheck --profile {r.scope.partition(':')[2]}"
+    else:
+        rerun = "/flightcheck" if r.scope == "full" else f"/flightcheck --scope {r.scope}"
     agents = sorted(
         {
             agent
@@ -1342,6 +1788,42 @@ def _render_header(
         "Employee Self-Service FlightCheck \u00b7 "
         f"{_html_escape(r.scope.title())} deployment readiness"
     )
+    extra_meta = ""
+    scope_meta = f'<div>Scope: <b>{_html_escape(r.scope)}</b></div>'
+    rerun_meta = f'<div>Re-run: <code>{_html_escape(rerun)}</code></div>'
+    if r.diagnostic_only:
+        context = r.validation_context
+        brand_title = "Employee Self-Service FlightCheck"
+        agent_meta = str(context.get("agentName") or context.get("agentSlug") or "Selected agent")
+        extra_meta = "".join(
+            f'<div>{label}: <b>{_html_escape(str(context.get(key) or "Not verified"))}</b></div>'
+            for label, key in (
+                ("Agent ID", "agentId"), ("Environment", "environmentName"),
+                ("Environment ID", "environmentId"), ("Environment URL", "environmentUrl"),
+                ("Environment type", "environmentType"),
+                ("Signed-in account", "accountEmail"),
+            )
+        )
+        manual_count = sum(row.status == Status.MANUAL.value for row in r.results)
+        if r.coverage:
+            extra_meta += (
+                f'<div>FlightChecks: <b>{len(r.coverage["planned"])} planned '
+                f'({r.coverage["automaticCompleted"]} automatically completed, '
+                f'{r.coverage["manual"]} manual, {r.coverage["notApplicable"]} not applicable, '
+                f'{r.coverage["limitations"]} unverified)</b></div>'
+            )
+        else:
+            extra_meta += (
+                f'<div>FlightChecks: <b>{len(r.results)} total '
+                f'({len(r.results) - manual_count} automated, {manual_count} manual)</b></div>'
+            )
+        scope_meta = rerun_meta = ""
+        if r.scope == "checkpoint" and r.coverage.get("requested"):
+            extra_meta += (
+                f'<div>Requested: <b>{_html_escape(", ".join(r.coverage["requested"]))}</b></div>'
+            )
+        if r.rerun_command:
+            rerun_meta = f'<div>Re-run only this selection: <code>{_html_escape(r.rerun_command)}</code></div>'
     return (
         '  <header class="report">\n'
         '    <div class="head-pad">\n'
@@ -1352,15 +1834,17 @@ def _render_header(
         '      </div>\n'
         '      <div class="meta">\n'
         f'        <div>Agent: <b>{_html_escape(agent_meta)}</b></div>\n'
-        f'        <div>Scope: <b>{_html_escape(r.scope)}</b></div>\n'
+        f'        {extra_meta}\n'
+        f'        {scope_meta}\n'
         f'        <div>Run: <b>{_html_escape(r.started)}</b></div>\n'
         f'        <div>Completed in: <b>{r.duration_secs}s</b></div>\n'
-        f'        <div>Re-run: <code>{_html_escape(rerun)}</code></div>\n'
+        f'        {rerun_meta}\n'
         '      </div>\n'
         '      <div class="hr"></div>\n'
         f'      <div class="verdict {verdict_class}">{verdict_svg} '
         f'{_html_escape(verdict_headline)}</div>\n'
         f'      <span class="verdict-note">{_html_escape(verdict_sub)}</span>\n'
+        f'      {reading_guide}\n'
         '    </div>\n'
         '  </header>\n'
     )
@@ -1649,6 +2133,16 @@ def _render_sections(
     return "".join(parts)
 
 
+def _render_custom_tags(tags: list[str]) -> str:
+    if not tags:
+        return ""
+    return (
+        '<ul class="custom-tags" aria-label="Custom tags">'
+        + "".join(f'<li class="custom-tag">{_html_escape(tag)}</li>' for tag in tags)
+        + '</ul>'
+    )
+
+
 def _render_check_card(res: CheckResult) -> str:
     """One check rendered as a Fluent 2 row with preserved data hooks."""
     pill_class, label, data_s = _STATUS_STYLE.get(
@@ -1685,6 +2179,7 @@ def _render_check_card(res: CheckResult) -> str:
         f'{priority_html}{blocked_html}</div>'
         '<div class="ch-main">'
         f'<span class="check-title">{_html_escape(res.description)}{id_html}</span>'
+        f'{_render_custom_tags(res.custom_tags)}'
         f'<span class="role{role_cls}">{role_txt}</span>'
         '</div></div>\n',
     ]

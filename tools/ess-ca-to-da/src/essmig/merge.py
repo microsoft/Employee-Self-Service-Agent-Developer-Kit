@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from essmig.convert import convert_dialog
 from essmig.discovery import AgentMetadata, CaComponent
 from essmig.ess import non_ported_pack_of, schema_suffix
 from essmig.instructions import (
@@ -35,15 +36,18 @@ from essmig.instructions import (
     InstructionReconciliationSkipped,
     reconcile_instructions,
 )
+from essmig.knowledge import rewrite_references
 from essmig.llm import LlmUnavailable
 from essmig.projection import (
     ManualConfigurationRequired,
     ProjectionError,
     _state_of,
     as_new_component,
+    block_scalar,
     describe,
     parse_ca_data,
     project,
+    rewrite_prefixes,
     shape_for,
 )
 from essmig.reference import ReferenceSet
@@ -92,6 +96,10 @@ class ComponentResult:
     """For ``CONFLICTED``: the customer's complete version, so every edit that could not
     be applied automatically is on record for manual re-application — not just the
     subset of nodes that conflicted."""
+    conversions: list[str] = field(default_factory=list)
+    """Notes for each unsupported node this tool rewrote onto supported building blocks
+    (e.g. an ``AnswerQuestionWithAI`` response-composition node turned into a
+    deterministic ``SetVariable``), so the report can say what it upgraded."""
     customer_state: str = ""
     """The customer's enabled/disabled state when it could not be applied automatically
     (i.e. it was lost to a payload conflict). Surfaced so the setting stays actionable
@@ -291,6 +299,7 @@ def merge(
     agent_result = _merge_agent_metadata(reference, agent_metadata)
     if agent_result is not None:
         results.append(agent_result)
+    renames: dict[str, str] = {}
     for component in sorted(components.values(), key=lambda c: c.schemaname):
         result = _merge_one(
             component,
@@ -301,11 +310,13 @@ def merge(
             entries,
             reconcile,
             resolver_factory,
+            renames,
         )
         results.append(result)
 
     _apply_unsupported_rules(entries, results)
     _ensure_knowledge_search(entries)
+    rewrite_references(agent, renames)
     return MergeResult(vertical=vertical, agent=agent, results=results)
 
 
@@ -335,6 +346,7 @@ def _merge_agent_metadata(
 
     applied: list[str] = []
     review: list[str] = []
+    notes: list[str] = []
 
     # Display name -> config botName / gptDisplayName (agent.yml resolves displayName
     # from botName via a ${config.values[...]} pointer).
@@ -343,9 +355,17 @@ def _merge_agent_metadata(
             _set_agent_name(values, metadata.name)
             applied.append(f'display name -> "{metadata.name}"')
         elif metadata.baseline_name is None and _differs(metadata.name, da_name):
-            review.append(
-                f'you have "{metadata.name}"; the template ships "{da_name}". '
-                "Confirm which name the agent should keep."
+            # The shipped baseline name could not be read (always the case on the
+            # package path, whose vendored gpt.default baseline carries no
+            # displayName). The customer's agent name is their data, so carry it
+            # rather than defaulting to the template name — but note that it could
+            # not be confirmed as a deliberate rename against a baseline.
+            _set_agent_name(values, metadata.name)
+            applied.append(f'display name -> "{metadata.name}"')
+            notes.append(
+                f'The shipped baseline name could not be read, so "{metadata.name}" '
+                f'was carried over the template\'s "{da_name}" without confirming it '
+                "was a deliberate rename — verify this is the title you want."
             )
 
     # Description -> agent.yml entity.description.
@@ -374,6 +394,8 @@ def _merge_agent_metadata(
     )
     if applied:
         result.detail = "Carried your agent " + " and ".join(applied) + " onto the template."
+    if notes:
+        result.detail = (result.detail + " " if result.detail else "") + " ".join(notes)
     if review:
         joined = " ".join(review)
         result.detail = (result.detail + " " if result.detail else "") + joined
@@ -430,6 +452,8 @@ def _apply_unsupported_rules(entries: list[Any], results: list[ComponentResult])
 
     Runs after the merge so it sees the final content: a customer edit may well have
     introduced the unsupported node, and an ESS rewrite may equally have removed it.
+    First it rewrites the convertible nodes onto supported building blocks; a topic is
+    only disabled for what genuinely cannot be converted.
     """
     by_suffix = {result.suffix: result for result in results}
     for entry in entries:
@@ -438,6 +462,8 @@ def _apply_unsupported_rules(entries: list[Any], results: list[ComponentResult])
         result = by_suffix.get(schema_suffix(str(entry.get("schemaName") or "")))
         if result is None or result.outcome not in (Outcome.MERGED, Outcome.CARRIED_NEW):
             continue
+        conversions = convert_dialog(entry.get("dialog"))
+        result.conversions = [c.note for c in conversions if c.converted]
         found = find_unsupported(entry.get("dialog"))
         if not found:
             continue
@@ -446,6 +472,9 @@ def _apply_unsupported_rules(entries: list[Any], results: list[ComponentResult])
         result.unsupported = [construct.reason for construct in found]
         result.guidance = [construct.advice for construct in found]
         result.owners = [construct.owner for construct in found]
+        result.guidance += [
+            f"{c.node_name}: {c.note}" for c in conversions if not c.converted
+        ]
 
 
 def _pack_label(solution_unique_name: str) -> str:
@@ -473,6 +502,7 @@ def _merge_one(
     entries: list[Any],
     reconcile: InstructionMerger,
     resolver_factory: ResolverFactory | None = None,
+    renames: dict[str, str] | None = None,
 ) -> ComponentResult:
     suffix = component.suffix
     base_result = ComponentResult(
@@ -511,7 +541,13 @@ def _merge_one(
                 )
                 base_result.configuration = describe(component, vertical)
                 return base_result
-            entries.append(as_new_component(component, vertical))
+            entry = as_new_component(component, vertical)
+            entries.append(entry)
+            if renames is not None:
+                old_schema = rewrite_prefixes(component.schemaname, vertical)
+                new_schema = entry.get("schemaName") if isinstance(entry, dict) else None
+                if isinstance(new_schema, str) and new_schema and new_schema != old_schema:
+                    renames[old_schema] = new_schema
             base_result.outcome = Outcome.CARRIED_NEW
             base_result.detail = (
                 "No template counterpart; carried as a customer-owned component."
@@ -697,7 +733,7 @@ def _reconcile_gpt_instructions(
 
     if isinstance(merged, dict):
         merged = dict(merged)
-        merged["instructions"] = reconciled
+        merged["instructions"] = block_scalar(reconciled)
     remaining = [
         conflict for conflict in conflicts if not conflict.path.endswith(".instructions")
     ]

@@ -3,14 +3,13 @@
 
 """Tests for WD-CONN-013 (Agent connection OBO parameter sharing).
 
-The check verifies that every connection the *agent* uses has
+The check verifies that every connection the selected *agent* uses has
 "Allow permission to share parameters" enabled. That setting is persisted on the
-agent's own ``connectionreference`` rows (logical name
-``{agentSchemaName}.{guid}.{connector}``) in column ``connectionparametersetconfig``
-(populated = shared, null = not shared) — confirmed empirically by toggling it
-live. Solution-template refs (``new_sharedworkdaysoap_ff0df`` etc.) are bound but
-are NOT the agent's connections, so they're excluded because their underscore-only
-logical names carry no ``.{guid}.`` segment (the agent-connection structural format).
+agent's own ``connectionreference`` rows in column
+``connectionparametersetconfig`` (populated = shared, null = not shared) —
+confirmed empirically by toggling it live. The exact selected-agent logical
+names come from the validated minimalBots components API, so sibling-agent and
+solution-template rows cannot affect the verdict.
 
 The Dataverse ``connectionreferences`` query is documented tier — stubbed here
 via ``auth.query_all`` (no cassette).
@@ -31,6 +30,7 @@ _SHARED_CFG = '{"name":"oauth","values":{}}'
 G1 = "9f1b2c3d-4e5f-6789-abcd-1234567890ab"
 G2 = "aab52569-483a-f111-8e38-0022480875be"
 G3 = "11111111-2222-3333-4444-555555555555"
+BOT_ID = "00000000-0000-0000-0000-000000001111"
 
 
 def _agent_ref(guid: str, *, connector: str = "shared_workdaysoap",
@@ -68,9 +68,34 @@ def _runner(*, config: Any = None, dv_token: str | None = "t",
     )
 
 
-def _stub(monkeypatch, refs):
+def _stub(monkeypatch, refs, selected_refs=None):
     import auth
+    from flightcheck.checks import _da_connection_refs
+
     monkeypatch.setattr(auth, "query_all", lambda *a, **k: list(refs))
+    if selected_refs is None:
+        selected_refs = [
+            ref
+            for ref in refs
+            if str(ref.get("connectionreferencelogicalname") or "").startswith(
+                f"{SCHEMA}."
+            )
+        ]
+    normalized = [
+        {
+            "connectionreferencelogicalname": ref.get(
+                "connectionreferencelogicalname"
+            ),
+            "connectorid": ref.get("connectorid"),
+            "connectionid": ref.get("connectionid"),
+        }
+        for ref in selected_refs
+    ]
+    monkeypatch.setattr(
+        _da_connection_refs,
+        "read_active_agent_connection_references",
+        lambda _runner: normalized,
+    )
 
 
 def _run(runner) -> Any:
@@ -137,6 +162,17 @@ def test_solution_refs_are_excluded(monkeypatch):
     assert "All 1 connection(s) the agent uses" in r.result
 
 
+def test_sibling_agent_refs_cannot_fail_selected_agent(monkeypatch):
+    selected = _agent_ref(G1, shared=True, display="Selected Workday")
+    sibling = _agent_ref(G2, shared=False, display="Sibling Workday")
+    _stub(monkeypatch, [selected, sibling], selected_refs=[selected])
+
+    r = _run(_runner())
+
+    assert r.status == "Passed"
+    assert "All 1 connection(s) the agent uses" in r.result
+
+
 def test_sharing_via_parameters_config_column_also_counts(monkeypatch):
     _stub(monkeypatch, [_agent_ref(G1, shared=True, via_params_config=True)])
     r = _run(_runner())
@@ -145,12 +181,11 @@ def test_sharing_via_parameters_config_column_also_counts(monkeypatch):
 
 # ── NOT_CONFIGURED / SKIPPED branches ──────────────────────────────────────
 
-def test_no_agent_refs_is_not_configured(monkeypatch):
-    # Only solution refs (no .{guid}. agent-connection segment).
+def test_no_agent_refs_fails(monkeypatch):
     _stub(monkeypatch, [_solution_ref()])
     r = _run(_runner())
-    assert r.status == "NotConfigured"
-    assert "No agent connection references found" in r.result
+    assert r.status == "Failed"
+    assert "selected agent exposes no connection references" in r.result
 
 
 def test_no_dataverse_token_is_skipped():
@@ -160,15 +195,49 @@ def test_no_dataverse_token_is_skipped():
     assert "Dataverse token not available" in r.result
 
 
-def test_query_error_is_skipped(monkeypatch):
+def test_component_fetch_failure_is_checkpoint_scoped() -> None:
+    from agentbuilder import AgentBuilderHTTPError
+
+    class FailingAgentBuilder:
+        def fetch_components(self, _bot_id: str):
+            raise AgentBuilderHTTPError(
+                "Component fetch",
+                503,
+                error_code="ServiceUnavailable",
+                request_id="sensitive-request-id",
+            )
+
+    runner = _runner(config={
+        "activeAgent": "ess-hr",
+        "agents": [{
+            "slug": "ess-hr",
+            "schemaName": SCHEMA,
+            "botId": BOT_ID,
+        }],
+    })
+    runner.agent_slug = "ess-hr"
+    runner.agentbuilder = FailingAgentBuilder()
+
+    r = _run(runner)
+
+    assert r.status == "Error"
+    assert "Unable to read selected-agent connection references" in r.result
+    assert "sensitive-request-id" not in r.result
+    assert "Refresh AgentBuilder authentication" in r.remediation
+
+
+def test_query_error_is_error(monkeypatch):
     import auth
+
+    selected = _agent_ref(G1)
+    _stub(monkeypatch, [selected], selected_refs=[selected])
 
     def _boom(*a, **k):
         raise RuntimeError("403 Forbidden")
 
     monkeypatch.setattr(auth, "query_all", _boom)
     r = _run(_runner())
-    assert r.status == "Skipped"
+    assert r.status == "Error"
     assert "Unable to read Dataverse connection references" in r.result
 
 

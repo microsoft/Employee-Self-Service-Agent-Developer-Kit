@@ -37,9 +37,15 @@ class _FakeClient:
 
 
 class _FakeRunner:
-    def __init__(self, client: _FakeClient | None, config: dict[str, Any]):
+    def __init__(
+        self,
+        client: _FakeClient | None,
+        config: dict[str, Any],
+        agent_slug: str = "",
+    ):
         self.agentbuilder = client
         self.config = config
+        self.agent_slug = agent_slug
 
 
 # --------------------------------------------------------------------------
@@ -59,6 +65,48 @@ def test_agent_bot_ids_single_only():
     assert reader.agent_bot_ids({"agent": {"botId": "SOLO"}}) == ["SOLO"]
 
 
+@pytest.mark.parametrize("canonical_id", ["Current-ID", None, ""])
+def test_agent_bot_ids_does_not_substitute_stale_same_slug(canonical_id):
+    config = {
+        "agents": [
+            {"slug": "hr", "botId": canonical_id},
+            {"slug": "it", "botId": "Other-ID"},
+        ],
+        "agent": {"slug": "hr", "botId": "Stale-ID"},
+    }
+    expected = ["Current-ID", "Other-ID"] if canonical_id else ["Other-ID"]
+    assert reader.agent_bot_ids(config) == expected
+
+
+@pytest.mark.parametrize("alias_bot_id", [
+    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+])
+def test_duplicate_canonical_bot_id_reserves_stale_compatibility_slug(alias_bot_id):
+    canonical_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    config = {
+        "agents": [
+            {"slug": "hr", "botId": canonical_id},
+            {"slug": "hr-old", "botId": alias_bot_id},
+        ],
+        "agent": {
+            "slug": "hr-old",
+            "botId": "00000000-0000-0000-0000-000000009999",
+            "expectedGrsCommitSha": "stale",
+        },
+    }
+
+    assert reader.agent_bot_ids(config) == [canonical_id]
+
+
+def test_agent_bot_ids_retains_distinct_compatibility_subject():
+    config = {
+        "agents": [{"slug": "hr", "botId": "Current-ID"}],
+        "agent": {"slug": "it", "botId": "Other-ID"},
+    }
+    assert reader.agent_bot_ids(config) == ["Current-ID", "Other-ID"]
+
+
 def test_agent_bot_ids_ignores_blank_and_non_string():
     config = {"agents": [{"botId": ""}, {"botId": None}, {"botId": "  X  "}]}
     assert reader.agent_bot_ids(config) == ["X"]
@@ -74,9 +122,34 @@ def test_read_active_none_when_no_client():
 
 
 def test_read_active_none_when_no_active_bot_id():
-    # Only multi-agent config; no config["agent"].botId -> active read SKIPs.
-    runner = _FakeRunner(_FakeClient({}), {"agents": [{"botId": "BOT"}]})
+    runner = _FakeRunner(
+        _FakeClient({}),
+        {"agents": [{"slug": "known", "botId": "BOT"}]},
+        agent_slug="missing",
+    )
     assert reader.read_active_agent_connection_references(runner) is None
+
+
+def test_read_active_honors_explicit_selected_slug():
+    payload = ab.components_with_references(
+        references=[ab.workday_connection_reference(connection_id="selected")]
+    )
+    runner = _FakeRunner(
+        _FakeClient({"BOT-SELECTED": payload}),
+        {
+            "activeAgent": "other",
+            "agents": [
+                {"slug": "other", "botId": "BOT-OTHER"},
+                {"slug": "selected", "botId": "BOT-SELECTED"},
+            ],
+        },
+        agent_slug="selected",
+    )
+
+    rows = reader.read_active_agent_connection_references(runner)
+
+    assert rows is not None
+    assert rows[0]["botid"] == "BOT-SELECTED"
 
 
 def test_read_active_normalizes_workday_row():

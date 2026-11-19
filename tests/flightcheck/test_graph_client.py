@@ -50,6 +50,186 @@ def test_empty_tenant_id_returns_empty():
     assert graph_client.resolve_tenant_display_name_silent("") == ""
 
 
+@pytest.mark.parametrize("scopes", [
+    None, ["https://graph.microsoft.com/User.Read"], graph_client.PERSON_RESOLUTION_SCOPES,
+])
+def test_authenticate_uses_preferred_cached_account(monkeypatch, scopes):
+    selected_accounts = []
+    client_ids = []
+    requested_scopes = []
+
+    class FakeCache:
+        has_state_changed = False
+
+    class FakeApp:
+        def __init__(self, *args, **kwargs):
+            client_ids.append(args[0])
+
+        def get_accounts(self):
+            return [
+                {"username": "other@example.com"},
+                {"username": "Maker@Example.com"},
+            ]
+
+        def acquire_token_silent(self, scopes, account):
+            selected_accounts.append(account)
+            requested_scopes.append(scopes)
+            return {
+                "access_token": "preferred-token",
+                "id_token_claims": {
+                    "preferred_username": "Maker@Example.com",
+                },
+            }
+
+        def acquire_token_interactive(self, scopes, **kwargs):
+            raise AssertionError("preferred cached account should be reused")
+
+    monkeypatch.setattr(
+        graph_client.msal,
+        "SerializableTokenCache",
+        FakeCache,
+    )
+    monkeypatch.setattr(
+        graph_client.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+    client = graph_client.GraphClient("organizations", scopes=scopes)
+    token = client.authenticate(preferred_username="maker@example.com")
+
+    assert token == "preferred-token"
+    assert selected_accounts == [{"username": "Maker@Example.com"}]
+    assert client_ids == [graph_client.GRAPH_CLIENT_ID]
+    assert requested_scopes == [scopes or graph_client.GRAPH_SCOPES]
+    assert client.signed_in_username == "Maker@Example.com"
+
+
+@pytest.mark.parametrize("scopes", [
+    None, ["https://graph.microsoft.com/User.Read"], graph_client.PERSON_RESOLUTION_SCOPES,
+])
+def test_interactive_auth_does_not_reuse_stale_cached_identity(monkeypatch, scopes):
+    interactive_options = {}
+    interactive_scopes = []
+
+    class FakeCache:
+        has_state_changed = False
+
+    class FakeApp:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_accounts(self):
+            return [{"username": "maker@example.com"}]
+
+        def acquire_token_silent(self, scopes, account):
+            return None
+
+        def acquire_token_interactive(self, scopes, **kwargs):
+            interactive_scopes.append(scopes)
+            interactive_options.update(kwargs)
+            return {"access_token": "interactive-token"}
+
+    monkeypatch.setattr(
+        graph_client.msal,
+        "SerializableTokenCache",
+        FakeCache,
+    )
+    monkeypatch.setattr(
+        graph_client.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+    client = graph_client.GraphClient("organizations", scopes=scopes)
+    client.authenticate(preferred_username="maker@example.com")
+
+    assert client.signed_in_username is None
+    assert interactive_scopes == [scopes or graph_client.GRAPH_SCOPES]
+    assert interactive_options == {
+        "prompt": "select_account",
+        "login_hint": "maker@example.com",
+    }
+
+
+@pytest.mark.parametrize("outcome", [
+    "cached_grant", "sso_grant", "silent_consent", "sso_consent", "sso_service_error",
+])
+def test_optional_read_uses_existing_consent_and_preserves_real_auth_errors(monkeypatch, outcome):
+    grant = {
+        "access_token": "existing-read-token",
+        "id_token_claims": {"preferred_username": "maker@example.test"},
+    }
+    # Structured response observed from the live corporate silent-token request.
+    consent_error = {
+        "error": "invalid_grant", "suberror": "consent_required", "error_codes": [65001],
+    }
+    app = MagicMock()
+    app.get_accounts.return_value = [{"username": "maker@example.test"}]
+    app.acquire_token_silent_with_error.return_value = {
+        "cached_grant": grant, "silent_consent": consent_error,
+    }.get(outcome)
+    app.acquire_token_interactive.return_value = {
+        "sso_grant": grant, "sso_consent": consent_error,
+        "sso_service_error": {"error": "temporarily_unavailable"},
+    }.get(outcome)
+    monkeypatch.setattr(
+        graph_client.msal, "SerializableTokenCache",
+        lambda: SimpleNamespace(has_state_changed=False),
+    )
+    monkeypatch.setattr(graph_client.msal, "PublicClientApplication", lambda *_a, **_k: app)
+    scopes = ["https://graph.microsoft.com/User.Read.All"]
+    client = graph_client.GraphClient("organizations", scopes=scopes)
+    options = {
+        "preferred_username": "maker@example.test",
+        "require_existing_consent": True,
+    }
+    if "consent" in outcome:
+        with pytest.raises(graph_client.GraphPermissionError, match="consent is unavailable"):
+            client.authenticate(**options)
+        assert client._token is None
+    elif outcome == "sso_service_error":
+        with pytest.raises(RuntimeError, match="temporarily_unavailable"):
+            client.authenticate(**options)
+    else:
+        assert client.authenticate(**options) == "existing-read-token"
+        assert client.signed_in_username == "maker@example.test"
+    app.acquire_token_silent.assert_not_called()
+    app.acquire_token_silent_with_error.assert_called_once_with(
+        scopes, account={"username": "maker@example.test"},
+    )
+    if outcome in {"cached_grant", "silent_consent"}:
+        app.acquire_token_interactive.assert_not_called()
+    else:
+        app.acquire_token_interactive.assert_called_once_with(
+            scopes, prompt="none", timeout=30, login_hint="maker@example.test",
+        )
+
+
+@pytest.mark.parametrize("self_profile", [True, False])
+def test_consent_denial_preserves_required_auth_gates(monkeypatch, tmp_path, self_profile):
+    monkeypatch.chdir(tmp_path)
+    app = MagicMock()
+    app.get_accounts.return_value = [{"username": "maker@example.test"}]
+    app.acquire_token_silent.return_value = None
+    app.acquire_token_interactive.return_value = {
+        "error": "invalid_grant", "suberror": "consent_required", "error_codes": [65001],
+    }
+    monkeypatch.setattr(graph_client.msal, "SerializableTokenCache", MagicMock())
+    monkeypatch.setattr(graph_client.msal, "PublicClientApplication", lambda *_a, **_k: app)
+    scopes = ["https://graph.microsoft.com/User.Read"] if self_profile else None
+    client = graph_client.GraphClient("organizations", scopes=scopes)
+    expected_error = graph_client.GraphPermissionError if self_profile else graph_client.GraphConsentError
+    with pytest.raises(expected_error, match="consent") as failed:
+        client.authenticate(preferred_username="maker@example.test")
+    app.acquire_token_interactive.assert_called_once_with(
+        scopes or graph_client.GRAPH_SCOPES, prompt="select_account", login_hint="maker@example.test",
+    )
+    if not self_profile:
+        assert isinstance(failed.value, RuntimeError) and not isinstance(failed.value, PermissionError)
+    assert client._token is None
+
+
 def test_no_cached_account_returns_empty_without_prompt():
     app = _fake_app(accounts=[], silent_result=None)
     with patch.object(graph_client.msal, "PublicClientApplication", return_value=app):

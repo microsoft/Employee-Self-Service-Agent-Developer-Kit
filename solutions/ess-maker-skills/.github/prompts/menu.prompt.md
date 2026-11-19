@@ -13,11 +13,13 @@ Here's what I can help you with:
 
 | Command | What it does |
 |---------|-------------|
+| `/planner` | Type Enter to plan an ESS rollout — grounded scenarios, tasks, and owners (works before setup) |
+| `/roles` | Assign a rollout role (Workday/ServiceNow admin) to a person so they can see and pick up their tasks |
 | `/landing-page` | Configure the branding and content employees see when they open the ESS agent |
 | `/connect-workday` | Connect the active ESS HR agent to Workday |
 | `/connect` | Choose an available integration |
-| `/create` | Create a topic, workflow, or evaluation test set locally |
-| `/update` | Update a topic, workflow, or evaluation test set locally |
+| `/create` | Create a workflow or evaluation test set locally |
+| `/update` | Update a workflow or evaluation test set locally |
 | `/delete` | Show DA-GA deletion availability |
 | `/scan` | Type Enter to scan your agent for compile errors and fix them |
 | `/review` | Type Enter to review a topic or evaluation test sets tagged for review |
