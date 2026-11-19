@@ -3141,9 +3141,8 @@ def test_wired_capabilities_are_in_canonical_list():
         "connect",
         "topic_create", "topic_update", "topic_delete",
         "topic_review", "topic_test",
-        "workflow_create", "workflow_update",
         "workflow_test",
-        "evaluation_create", "evaluation_update", "evaluation_delete",
+        "evaluation_create", "evaluation_update",
         "cleanup", "troubleshoot",
         "publishing",
     }
@@ -3202,8 +3201,12 @@ def test_every_active_canonical_capability_is_actually_emitted():
             emitted.add(m.group(1))
 
     canonical = set(adk.ADK_CAPABILITIES)
-    # Workflow deletion has no active entry point in this release.
-    inactive = {"workflow_delete"}
+    inactive = {
+        # Maker-facing workflow authoring and deletion are outside ADK.
+        "workflow_create", "workflow_update", "workflow_delete",
+        # Deployed evaluation-set deletion is delegated to Copilot Studio.
+        "evaluation_delete",
+    }
     assert inactive.isdisjoint(emitted)
     dead = canonical - emitted - inactive
     assert not dead, (
