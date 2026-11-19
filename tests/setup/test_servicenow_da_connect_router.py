@@ -820,6 +820,9 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "record `--result untested`" in test
     assert "--prompt-category list-my-open-hr-cases" in test
     assert "--failure-category" not in test
+    assert "decides pass, fail, or untested" in " ".join(test.split())
+    assert "Do not require a non-empty" not in test
+    assert "automatically treat" not in test
     assert "Never store response text, case/ticket data, URLs" in test
     assert "--prompt " not in test
     assert "--details" not in test
@@ -1162,7 +1165,9 @@ def test_da_servicenow_itsm_skill_uses_isolated_shared_lifecycle() -> None:
     assert '"label": "It returned an empty result or an error"' in test
     assert '"label": "Finish without testing"' in test
     assert "--failure-category" not in test
-    assert "Do not require a non-empty ticket result" in test
+    assert "decides pass, fail, or untested" in " ".join(test.split())
+    assert "Do not require a non-empty" not in test
+    assert "automatically treat" not in test
     assert "Do not ask a second failure-classification question" in (
         " ".join(test.split())
     )

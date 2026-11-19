@@ -16,8 +16,9 @@ Open the `Test` pane from this exact agent landing; do not invent a
 tab-specific URL.
 
 The maker decides whether the ServiceNow functionality worked correctly.
-Do not require a non-empty case result, and do not automatically treat a
-sample, empty result, or conversational response as pass or fail.
+The maker's answer to the result question decides pass, fail, or untested.
+Do not infer the outcome from a sample, an empty result, or a conversational
+reply; record only what the maker chose.
 
 Render the target link, saved-draft instruction, and privacy boundary above in the ordinary current-task reply after its controller-built lead-in, which is shown verbatim and already carries the ready message, the example request, and the finish-without-testing option. Do not restate or reword it, and do not add a "Required prompt" line. Then use this compact
 result question:

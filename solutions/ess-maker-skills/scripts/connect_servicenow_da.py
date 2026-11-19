@@ -173,7 +173,7 @@ HRSD_PROFILE = ServiceNowProductProfile(
     portal_variable_name="Global.ServiceNowHRSDPortalBaseURI",
     connection_display_name="ESS HR ServiceNow HRSD Connection",
     test_prompt_category="list-my-open-hr-cases",
-    test_prompt="List my open HR cases",
+    test_prompt="Show my open HR cases",
     requires_hr_core=True,
     admin_phases=frozenset(
         {
@@ -198,7 +198,7 @@ ITSM_PROFILE = ServiceNowProductProfile(
     portal_variable_name="Global.ServiceNowITSMPortalBaseURI",
     connection_display_name="ESS IT ServiceNow ITSM Connection",
     test_prompt_category="list-my-open-it-tickets",
-    test_prompt="List my open IT tickets",
+    test_prompt="Show my open IT tickets",
     requires_hr_core=False,
     admin_phases=frozenset(
         {
