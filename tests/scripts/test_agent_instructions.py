@@ -266,6 +266,70 @@ def test_instruction_ack_preserves_other_baseline_fields_and_later_edits(tmp_pat
     assert working.read_text(encoding="utf-8") == "instructions: Later local edit\n"
 
 
+@pytest.mark.parametrize(("original_section", "submitted_section"), [
+    ("instructions: |-\n  Original instruction.\n", "instructions: 'Approved literal'\n"),
+    (
+        "instructions: |-\n  Original instruction.\n",
+        "instructions: |-\n  Approved line one.  \n  Approved line two.\n",
+    ),
+    (
+        "instructions:\n  - Original text\n  - kind: ExpressionSegment\n    expression: System.User.Name\n",
+        "instructions: 'Approved literal'\n",
+    ),
+])
+def test_instruction_ack_preserves_unrelated_yaml_text(tmp_path, original_section, submitted_section):
+    baseline = tmp_path / ".baseline" / "agent.mcs.yml"
+    baseline.parent.mkdir()
+    prefix = "# Keep this comment\nkind: GptComponentMetadata\ndisplayName: 'Original name'\n"
+    suffix = (
+        "# Preserve ordering and indentation\n"
+        "conversationStarters:\n"
+        "  - title: 'Help'\n"
+        "    text: Ask a question\n"
+        "gptCapabilities: {} # Keep this inline comment\n"
+    )
+    baseline.write_text(prefix + original_section + suffix, encoding="utf-8")
+    submitted = "kind: GptComponentMetadata\n" + submitted_section + "displayName: Not approved\n"
+
+    cli.acknowledge_instruction_baseline(tmp_path, submitted)
+
+    assert baseline.read_text(encoding="utf-8") == prefix + submitted_section + suffix
+
+
+def test_acknowledged_baseline_round_trips_through_real_object_model(tmp_path):
+    from agentbuilder_object_model_packages import assembly_paths
+
+    if not all(path.is_file() for path in assembly_paths()):
+        pytest.skip("Install the Object Model packages to run the real-converter check.")
+    instructions = {
+        "$kind": "TemplateLine",
+        "segments": [{"$kind": "TextSegment", "value": "Approved line one.  \nLine two."}],
+    }
+    metadata = {
+        "$kind": "GptComponentMetadata",
+        "displayName": "Original name",
+        "instructions": {
+            "$kind": "TemplateLine",
+            "segments": [{"$kind": "TextSegment", "value": "Original instruction."}],
+        },
+        "conversationStarters": [{"$kind": "ConversationStarter", "title": "Help", "text": "Ask"}],
+    }
+    original = cli._project_metadata(metadata, "agent").replace("\r\n", "\n")
+    submitted = cli._project_metadata(
+        {**metadata, "displayName": "Unsubmitted name", "instructions": instructions}, "agent",
+    )
+    baseline = tmp_path / ".baseline" / "agent.mcs.yml"
+    baseline.parent.mkdir()
+    baseline.write_text(original, encoding="utf-8")
+
+    cli.acknowledge_instruction_baseline(tmp_path, submitted)
+
+    converted = cli._metadata_from_yaml(baseline.read_text(encoding="utf-8"), "agent:baseline")
+    assert converted["instructions"] == instructions
+    assert converted["displayName"] == metadata["displayName"]
+    assert converted["conversationStarters"] == metadata["conversationStarters"]
+
+
 @pytest.fixture
 def instruction_cli(component, monkeypatch, tmp_path, fake_tenant_id):
     agent_folder = tmp_path / "workspace" / "agents" / "selected"

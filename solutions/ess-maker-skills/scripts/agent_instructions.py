@@ -106,18 +106,46 @@ def _project_metadata(metadata: dict[str, Any], key: str) -> str:
     return yaml_content
 
 
-def acknowledge_instruction_baseline(agent_dir: Path, submitted_yaml: str) -> None:
-    """Acknowledge submitted instructions only; leave later drafts untouched."""
-    path = Path(agent_dir) / ".baseline" / "agent.mcs.yml"
-    baseline = yaml.safe_load(path.read_text(encoding="utf-8"))
-    submitted = yaml.safe_load(submitted_yaml)
-    if not isinstance(baseline, dict) or not isinstance(submitted, dict):
+def _instruction_yaml_span(content: str) -> tuple[int, int]:
+    try:
+        document = yaml.compose(content)
+    except yaml.YAMLError as exc:
+        raise ValueError("Instruction acknowledgement requires valid agent YAML.") from exc
+    if not isinstance(document, yaml.MappingNode):
         raise ValueError("Instruction acknowledgement requires agent YAML mappings.")
-    if "instructions" not in submitted:
-        raise ValueError("Submitted agent YAML has no instructions section.")
-    baseline["instructions"] = submitted["instructions"]
+    sections = [
+        (key, value) for key, value in document.value
+        if isinstance(key, yaml.ScalarNode) and key.value == "instructions"
+    ]
+    if len(sections) != 1:
+        raise ValueError("Agent YAML must contain exactly one instructions section.")
+    key, value = sections[0]
+    if value.start_mark.index < key.end_mark.index:
+        raise ValueError("The instructions section must contain an explicit value.")
+    # Block collection end marks include comments preceding the next field.
+    while isinstance(value, (yaml.MappingNode, yaml.SequenceNode)) and not value.flow_style and value.value:
+        value = value.value[-1][1] if isinstance(value, yaml.MappingNode) else value.value[-1]
+    return key.end_mark.index, value.end_mark.index
+
+
+def acknowledge_instruction_baseline(agent_dir: Path, submitted_yaml: str) -> None:
+    """Replace only the acknowledged instruction section; leave later drafts untouched."""
+    path = Path(agent_dir) / ".baseline" / "agent.mcs.yml"
+    baseline = path.read_text(encoding="utf-8")
+    submitted = submitted_yaml.replace("\r\n", "\n")
+    start, end = _instruction_yaml_span(baseline)
+    submitted_start, submitted_end = _instruction_yaml_span(submitted)
+    replacement = submitted[submitted_start:submitted_end]
+    if baseline[start:end].endswith("\n") and not replacement.endswith("\n"):
+        replacement += "\n"
+    elif (
+        not baseline[start:end].endswith("\n")
+        and replacement.endswith("\n")
+        and baseline[end:].startswith("\n")
+    ):
+        replacement = replacement[:-1]
     _atomic_write_text(
-        path, yaml.safe_dump(baseline, sort_keys=False, allow_unicode=True),
+        path, baseline[:start] + replacement + baseline[end:],
     )
 
 
