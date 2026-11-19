@@ -39,7 +39,9 @@ write to the authenticated tenant's backend, so use a test agent.
 
 Authoring sign-in runs on a worker thread. API tools, audience search, and
 saved-group name resolution share one client-initialization lock. MCP resource
-reads remain responsive while browser sign-in is pending.
+reads remain responsive while browser sign-in is pending. The worker holds the
+lock through initialization even when the requesting tool call is cancelled;
+subsequent tool calls wait for and reuse the initialized client.
 
 After editing Vorpal code, wait for the watch build and request a fresh widget.
 The compose widget creates enabled definitions with Submit and disabled
@@ -140,6 +142,9 @@ Graph uses separate delegated `Directory.Read.All` consent with the established
 Graph Command Line Tools public client and solution-root
 `.local/.token_cache.bin` cache populated by `/setup`. Token acquisition first
 tries the captured authoring tenant/account silently, then opens browser sign-in.
+After a Graph 401, the next request forces a refresh for that same account.
+The failed Graph request returns an authentication-required error; the retry
+validates the refreshed token's identity before accessing the directory.
 The Graph token must match both the authenticated AgentConfiguration `tid` and
 `oid`; consent and Conditional Access remain tenant requirements. The optional
 `GRAPH_ACCESS_TOKEN` environment variable accepts a matching delegated Graph

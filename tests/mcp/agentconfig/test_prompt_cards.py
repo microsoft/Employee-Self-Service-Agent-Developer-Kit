@@ -10,11 +10,12 @@ PromptCardDefinitionValidation.cs. These are not live-deployment/FlightCheck tes
 
 import asyncio
 import base64
+from contextlib import asynccontextmanager
 import importlib.util
 import json
 from pathlib import Path
 import sys
-from threading import Event
+from threading import Event, Lock
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 import warnings
@@ -65,7 +66,7 @@ def isolate_auth_and_telemetry(monkeypatch):
     monkeypatch.setattr(server, "_client", None)
     monkeypatch.setattr(server, "_graph_client", None)
     monkeypatch.setattr(server, "_graph_client_users", {})
-    monkeypatch.setattr(server, "_client_auth_lock", asyncio.Lock())
+    monkeypatch.setattr(server, "_client_auth_lock", Lock())
 
 
 def run(awaitable):
@@ -262,6 +263,66 @@ def test_resource_read_remains_responsive_during_shared_authoring_sign_in(monkey
             results = await asyncio.gather(opened, searched)
         assert all(not result.isError for result in results)
         constructor.assert_called_once()
+
+    run(scenario())
+
+
+@pytest.mark.parametrize("first_operation", ["open", "search"])
+def test_cancelled_authoring_sign_in_keeps_initialization_serialized(monkeypatch, first_operation):
+    started = Event()
+    release = Event()
+    client = SimpleNamespace(
+        tenant_id=TENANT, object_id=ID, validate_scope=lambda *args: None,
+        list_definitions=AsyncMock(return_value=[]),
+    )
+
+    def authenticate():
+        if not started.is_set():
+            started.set()
+            assert release.wait(timeout=5)
+        return client
+
+    constructor = Mock(side_effect=authenticate)
+    monkeypatch.setattr(server, "PromptCardsClient", constructor)
+    graph = SimpleNamespace(
+        search_groups=AsyncMock(return_value={
+            "groups": [], "exhausted": True, "pagesExamined": 1,
+        }),
+    )
+
+    @asynccontextmanager
+    async def directory_client(*args):
+        yield graph
+
+    monkeypatch.setattr(server, "get_graph_client", directory_client)
+
+    async def scenario():
+        calls = {
+            "open": lambda: server.open_prompt_cards(TITLE),
+            "search": lambda: server.search_audience_groups("finance"),
+        }
+        first = asyncio.create_task(calls[first_operation]())
+        second = None
+        try:
+            assert await asyncio.to_thread(started.wait, 5)
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+            other_operation = "search" if first_operation == "open" else "open"
+            second = asyncio.create_task(calls[other_operation]())
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(asyncio.shield(second), timeout=0.1)
+            resource = await server.mcp.read_resource(server.RESOURCE_URI)
+            assert "mcp-root" in resource[0].content
+            constructor.assert_called_once()
+        finally:
+            release.set()
+            await asyncio.gather(first, return_exceptions=True)
+            if second is not None:
+                result = await second
+                assert not result.isError
+        constructor.assert_called_once()
+        assert server._client is client
 
     run(scenario())
 

@@ -781,7 +781,7 @@ def test_constructing_the_client_acquires_no_token(monkeypatch) -> None:
     """Auth must be lazy: __init__ runs on the event loop."""
     calls: list[int] = []
 
-    def _never(tenant_id, object_id) -> str:
+    def _never(tenant_id, object_id, *, force_refresh=False) -> str:
         calls.append(1)
         raise AssertionError("token acquired during construction")
 
@@ -803,7 +803,7 @@ def test_the_token_is_acquired_off_the_event_loop_on_first_use(monkeypatch) -> N
     """A blocking MSAL sign-in must never run inside the running loop."""
     threads: list[int] = []
 
-    def _acquire(tenant_id, object_id) -> str:
+    def _acquire(tenant_id, object_id, *, force_refresh=False) -> str:
         assert tenant_id == TENANT_ID
         assert object_id == OBJECT_ID
         threads.append(threading.get_ident())
@@ -835,7 +835,7 @@ def test_concurrent_first_calls_share_one_sign_in(monkeypatch) -> None:
     """Two racing tool calls must not open two browser prompts."""
     calls: list[int] = []
 
-    def _acquire(tenant_id, object_id) -> str:
+    def _acquire(tenant_id, object_id, *, force_refresh=False) -> str:
         assert tenant_id == TENANT_ID
         calls.append(1)
         return _token("lazy-token")
@@ -1084,7 +1084,7 @@ def test_fully_cached_repeat_resolution_does_not_reacquire_a_token(
     acquisitions: list[int] = []
     requests: list[int] = []
 
-    def acquire(tenant_id, object_id) -> str:
+    def acquire(tenant_id, object_id, *, force_refresh=False) -> str:
         assert tenant_id == TENANT_ID
         assert object_id == OBJECT_ID
         acquisitions.append(1)
@@ -1261,7 +1261,7 @@ def _client_with_responses(responses, monkeypatch, tokens=None):
     issued = list(tokens or ["token-2", "token-3", "token-4"])
     acquisitions: list[str] = []
 
-    def _acquire(tenant_id, object_id) -> str:
+    def _acquire(tenant_id, object_id, *, force_refresh=False) -> str:
         assert tenant_id == TENANT_ID
         token = issued.pop(0)
         acquisitions.append(token)
@@ -1341,6 +1341,69 @@ def test_the_call_after_a_401_reacquires_and_succeeds(monkeypatch) -> None:
     assert seen[1].headers["Authorization"] == f"Bearer {_token('token-2')}"
 
 
+@pytest.mark.parametrize("refreshed_object_id", [OBJECT_ID, OTHER_OBJECT_ID])
+def test_401_recovery_refreshes_the_matching_msal_account(
+    monkeypatch, refreshed_object_id,
+) -> None:
+    import msal
+    from types import SimpleNamespace
+
+    wrong = {"home_account_id": "wrong", "realm": TENANT_ID, "local_account_id": OTHER_OBJECT_ID}
+    right = {"home_account_id": "right", "realm": TENANT_ID, "local_account_id": OBJECT_ID}
+    cache = SimpleNamespace(search=lambda credential_type: iter([wrong, right]))
+    acquisitions = []
+
+    class App:
+        token_cache = cache
+
+        def get_accounts(self):
+            return [wrong, right]
+
+        def acquire_token_silent(self, scopes, account, **kwargs):
+            assert scopes == graph.GRAPH_SCOPES
+            acquisitions.append((account, kwargs.get("force_refresh", False)))
+            return {"access_token": (
+                _token("fresh", object_id=refreshed_object_id)
+                if kwargs.get("force_refresh") else _token("revoked")
+            )}
+
+        def acquire_token_interactive(self, *args, **kwargs):
+            pytest.fail("the matching cached account can refresh silently")
+
+    monkeypatch.setattr(graph, "create_token_cache", lambda path: cache)
+    monkeypatch.setattr(msal, "PublicClientApplication", lambda *args, **kwargs: App())
+    monkeypatch.delenv("GRAPH_ACCESS_TOKEN", raising=False)
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        if request.headers["Authorization"] == f"Bearer {_token('revoked')}":
+            return httpx.Response(401)
+        return httpx.Response(200, json={"value": [_group(GROUP_A)]})
+
+    client = graph.GraphDirectoryClient(
+        tenant_id=TENANT_ID, object_id=OBJECT_ID, transport=httpx.MockTransport(handle),
+    )
+
+    async def scenario():
+        try:
+            with pytest.raises(graph.GraphDirectoryError):
+                await client.search_groups("finance")
+            if refreshed_object_id == OBJECT_ID:
+                result = await client.resolve_groups([GROUP_A])
+                assert result[GROUP_A]["id"] == GROUP_A
+                assert requests[-1].headers["Authorization"] == f"Bearer {_token('fresh')}"
+            else:
+                with pytest.raises(graph.GraphAuthenticationError):
+                    await client.resolve_groups([GROUP_A])
+                assert len(requests) == 1
+        finally:
+            await client.aclose()
+
+    asyncio.run(scenario())
+    assert acquisitions == [(right, False), (right, True)]
+
+
 def test_a_401_does_not_replay_the_failed_request(monkeypatch) -> None:
     """No automatic replay: reacquisition can open a browser mid-call.
 
@@ -1415,7 +1478,7 @@ def test_a_late_401_does_not_wipe_a_concurrently_refreshed_token(
     monkeypatch.setattr(
         graph,
         "acquire_graph_token",
-        lambda tenant_id, object_id: (_ for _ in ()).throw(AssertionError("must not reacquire")),
+        lambda tenant_id, object_id, **kwargs: (_ for _ in ()).throw(AssertionError("must not reacquire")),
     )
     client = graph.GraphDirectoryClient(
         tenant_id=TENANT_ID,
@@ -1441,7 +1504,7 @@ def test_concurrent_callers_share_one_reacquisition_after_a_401(
     """Two tool calls recovering at once must not open two browser prompts."""
     acquisitions: list[int] = []
 
-    def _acquire(tenant_id, object_id) -> str:
+    def _acquire(tenant_id, object_id, *, force_refresh=False) -> str:
         assert tenant_id == TENANT_ID
         acquisitions.append(1)
         return _token("token-2")
@@ -1476,7 +1539,7 @@ def test_concurrent_callers_share_one_reacquisition_after_a_401(
 def test_invalidation_closes_the_client_it_drops(monkeypatch) -> None:
     """A live client keeps sending the dead bearer from its default headers."""
     monkeypatch.setattr(
-        graph, "acquire_graph_token", lambda tenant_id, object_id: _token("token-2")
+        graph, "acquire_graph_token", lambda tenant_id, object_id, **kwargs: _token("token-2")
     )
     client = graph.GraphDirectoryClient(
         tenant_id=TENANT_ID,
@@ -1530,7 +1593,7 @@ def test_graph_acquisition_is_bound_to_authoring_tenant_and_account(
         def get_accounts(self):
             return [{"home_account_id": "cached-account"}]
 
-        def acquire_token_silent(self, scopes, account):
+        def acquire_token_silent(self, scopes, account, *, force_refresh=False):
             calls["scopes"] = scopes
             return {"access_token": token} if source == "silent" else None
 
@@ -1581,7 +1644,7 @@ def test_wrong_lazy_token_is_rejected_before_directory_io_or_cache_hit(monkeypat
     cache.put(GROUP_A, graph.to_audience_group(_group(GROUP_A)))
     requests = []
     monkeypatch.setattr(
-        graph, "acquire_graph_token", lambda tenant_id, object_id: _token("wrong", OTHER_TENANT_ID)
+        graph, "acquire_graph_token", lambda tenant_id, object_id, **kwargs: _token("wrong", OTHER_TENANT_ID)
     )
     client = graph.GraphDirectoryClient(
         tenant_id=TENANT_ID,
@@ -1611,7 +1674,7 @@ def test_tenant_is_not_mutable_on_an_existing_client() -> None:
 
 def test_credential_reset_replaces_metadata_and_forces_fresh_resolution(monkeypatch) -> None:
     seen = []
-    monkeypatch.setattr(graph, "acquire_graph_token", lambda tenant_id, object_id: _token("new"))
+    monkeypatch.setattr(graph, "acquire_graph_token", lambda tenant_id, object_id, **kwargs: _token("new"))
 
     def handler(request):
         seen.append(request)
@@ -1639,7 +1702,7 @@ def test_credential_reset_replaces_metadata_and_forces_fresh_resolution(monkeypa
 
 
 def test_late_resolution_cannot_populate_the_replacement_cache(monkeypatch) -> None:
-    monkeypatch.setattr(graph, "acquire_graph_token", lambda tenant_id, object_id: _token("new"))
+    monkeypatch.setattr(graph, "acquire_graph_token", lambda tenant_id, object_id, **kwargs: _token("new"))
 
     async def run():
         started = asyncio.Event()
@@ -1685,7 +1748,7 @@ def test_paging_does_not_adopt_replacement_credentials_mid_request(monkeypatch) 
     acquisitions = []
     seen = []
 
-    def acquire(tenant_id, object_id):
+    def acquire(tenant_id, object_id, *, force_refresh=False):
         acquisitions.append(tenant_id)
         return _token("new")
 
@@ -1722,7 +1785,7 @@ def test_cache_acquisition_errors_are_safe_domain_errors_with_private_causes(
     detail = "/private/graph-cache PRIVATE_CREDENTIAL_DETAIL"
     original = error_type(detail)
 
-    def acquire(tenant_id, object_id):
+    def acquire(tenant_id, object_id, *, force_refresh=False):
         assert tenant_id == TENANT_ID
         raise original
 
@@ -1750,7 +1813,7 @@ def test_cache_acquisition_errors_are_safe_domain_errors_with_private_causes(
 def test_unrelated_graph_acquisition_errors_are_not_blanket_caught(monkeypatch) -> None:
     original = RuntimeError("unexpected implementation failure")
 
-    def acquire(tenant_id, object_id):
+    def acquire(tenant_id, object_id, *, force_refresh=False):
         raise original
 
     monkeypatch.setattr(graph, "acquire_graph_token", acquire)
@@ -1821,7 +1884,7 @@ def test_graph_silent_acquisition_uses_matching_account_not_first_account(monkey
         def get_accounts(self):
             return [wrong, right]
 
-        def acquire_token_silent(self, scopes, account):
+        def acquire_token_silent(self, scopes, account, *, force_refresh=False):
             calls.append((scopes, account))
             return {"access_token": _token()}
 
@@ -1852,7 +1915,7 @@ def test_same_tenant_wrong_account_cannot_use_cached_metadata(monkeypatch):
     cache.put(GROUP_A, graph.to_audience_group(_group(GROUP_A)))
     monkeypatch.setattr(
         graph, "acquire_graph_token",
-        lambda tenant_id, object_id: _token(object_id=OTHER_OBJECT_ID),
+        lambda tenant_id, object_id, **kwargs: _token(object_id=OTHER_OBJECT_ID),
     )
     client = graph.GraphDirectoryClient(
         tenant_id=TENANT_ID, object_id=OBJECT_ID, metadata_cache=cache,

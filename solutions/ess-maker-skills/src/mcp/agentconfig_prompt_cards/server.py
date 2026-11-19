@@ -10,6 +10,7 @@ import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from threading import Lock
 from typing import Annotated, Any
 from urllib.parse import urlsplit
 
@@ -81,18 +82,19 @@ mcp = FastMCP(
 _client: PromptCardsClient | None = None
 _graph_client: GraphDirectoryClient | None = None
 _graph_client_users: dict[GraphDirectoryClient, int] = {}
-_client_auth_lock = asyncio.Lock()
+_client_auth_lock = Lock()
 
 
 def get_client() -> PromptCardsClient:
     global _client
-    if _client is None:
-        _client = PromptCardsClient()
-        adk_telemetry.initialize_tenant_identity(
-            _client.tenant_id,
-            local_dir=os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".local")),
-        )
-    return _client
+    with _client_auth_lock:
+        if _client is None:
+            _client = PromptCardsClient()
+            adk_telemetry.initialize_tenant_identity(
+                _client.tenant_id,
+                local_dir=os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".local")),
+            )
+        return _client
 
 
 @asynccontextmanager
@@ -142,8 +144,7 @@ async def _run(
     scope = {"tenantId": None, "titleId": title_id}
     outcome = "failure"
     try:
-        async with _client_auth_lock:
-            client = await asyncio.to_thread(get_client)
+        client = await asyncio.to_thread(get_client)
         # Never echo an untrusted tenant in a result as the authenticated scope.
         scope["tenantId"] = client.tenant_id
         client.validate_scope(tenant_id if tenant_id is not None else client.tenant_id, title_id)
@@ -237,8 +238,7 @@ async def _run_directory(
     outcome = "failure"
     try:
         try:
-            async with _client_auth_lock:
-                client = await asyncio.to_thread(get_client)
+            client = await asyncio.to_thread(get_client)
         except (ValueError, LockException, OSError):
             return _result(
                 {"status": "failure", "code": "AuthenticationRequired", "retryable": False},

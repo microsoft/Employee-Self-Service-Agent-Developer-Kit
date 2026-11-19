@@ -205,7 +205,9 @@ def _validate_graph_token(token: str, tenant_id: str, object_id: Optional[str]) 
         ) from error
 
 
-def acquire_graph_token(tenant_id: str, object_id: Optional[str]) -> str:
+def acquire_graph_token(
+    tenant_id: str, object_id: Optional[str], *, force_refresh: bool = False,
+) -> str:
     """Acquire a delegated Graph token from the shared ADK cache.
 
     Silent first, so a maker who already signed in for `/setup` is not prompted
@@ -241,7 +243,7 @@ def acquire_graph_token(tenant_id: str, object_id: Optional[str]) -> str:
 
     account = account_for_identity(app, tenant_id, object_id)
     result = (
-        app.acquire_token_silent(GRAPH_SCOPES, account=account)
+        app.acquire_token_silent(GRAPH_SCOPES, account=account, force_refresh=force_refresh)
         if account is not None
         else None
     )
@@ -347,6 +349,7 @@ class GraphDirectoryClient:
             _validate_graph_token(access_token.strip(), self._tenant_id, self.object_id)
             if access_token else ""
         )
+        self._force_refresh = False
         self._token_lock = asyncio.Lock()
         self._transport = transport
         self._client: Optional[httpx.AsyncClient] = None
@@ -382,7 +385,8 @@ class GraphDirectoryClient:
             if not self._token:
                 try:
                     token = await asyncio.to_thread(
-                        acquire_graph_token, self.tenant_id, self.object_id
+                        acquire_graph_token, self.tenant_id, self.object_id,
+                        force_refresh=self._force_refresh,
                     )
                 except (LockException, OSError) as error:
                     # Keep persistence failures inside the feature's normal error
@@ -391,6 +395,7 @@ class GraphDirectoryClient:
                         "Microsoft Graph sign-in could not be completed. Try again."
                     ) from error
                 self._token = _validate_graph_token(token, self.tenant_id, self.object_id)
+                self._force_refresh = False
         return self._token
 
     async def _ensure_client(self) -> httpx.AsyncClient:
@@ -449,6 +454,7 @@ class GraphDirectoryClient:
                 # Someone already refreshed; their token is still good.
                 return
             client = self._discard_credentials()
+            self._force_refresh = True
 
         # Closed outside the lock: aclose() awaits connection teardown and must
         # not hold up a concurrent re-acquisition.
@@ -473,17 +479,8 @@ class GraphDirectoryClient:
         except httpx.HTTPStatusError as error:
             status = error.response.status_code
             if status == 401:
-                # Expired or revoked credential. Invalidate so the *next* call
-                # re-runs silent-first acquisition, which usually refreshes from
-                # the shared cache with no prompt at all.
-                #
-                # The failed request is deliberately NOT replayed here. These
-                # are idempotent GETs so a replay would be safe, but
-                # re-acquisition can fall through to an interactive browser
-                # sign-in, and blocking an in-flight tool call on a surprise
-                # prompt is worse than returning a clear, actionable
-                # AuthenticationRequired the maker can act on. The next call
-                # succeeds silently in the common case.
+                # Recovery refreshes the captured account on the next tool call;
+                # interactive sign-in remains an explicit retry operation.
                 await self._invalidate_credentials(request_token)
                 raise GraphDirectoryError(
                     "Microsoft Graph rejected the cached sign-in. Try the "
