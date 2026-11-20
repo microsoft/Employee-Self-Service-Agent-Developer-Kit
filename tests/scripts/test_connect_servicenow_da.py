@@ -5722,7 +5722,23 @@ def test_it_cli_resume_offers_compatible_hr_reuse_before_availability(
     if decision == "not-now":
         assert snow.main(resume) == 0
         repeated = json.loads(capsys.readouterr().out)
-        assert repeated == first
+
+        def stable(output: dict) -> dict:
+            # The checklist is shown once per change, so only the text differs.
+            kept = {
+                key: value
+                for key, value in output.items()
+                if key not in {"chatMessage", "renderBlock", "transport"}
+            }
+            internal = dict(output["transport"]["internal"])
+            internal.pop("ordinaryReply", None)
+            kept["transport"] = {
+                **output["transport"],
+                "internal": internal,
+            }
+            return kept
+
+        assert stable(repeated) == stable(first)
         assert target_path.read_bytes() == target_before
     else:
         assert snow.main(
@@ -14346,7 +14362,7 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
         ] is None
         plugin_guidance = plugin_yes["transport"]["internal"]["ordinaryReply"]["text"]
         assert "**Current task**" not in plugin_guidance
-        assert "Confirm HR ServiceNow prerequisites" in plugin_guidance
+        assert "Set up ServiceNow HR" not in plugin_guidance
         assert "First, your ServiceNow administrator needs to confirm" in (
             plugin_guidance
         )
@@ -14385,7 +14401,8 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             availability_context_sha256=entra["contextIdentitySha256"],
         )
         entra_guidance = entra_yes["transport"]["internal"]["ordinaryReply"]["text"]
-        assert "Confirm Microsoft Entra identity details" in entra_guidance
+        # gate() already showed this unchanged checklist, so it is not repeated.
+        assert "Set up ServiceNow HR" not in entra_guidance
         for technical in _TECHNICAL_CARD_BLOCKS[:4] + (
             "guide-entra-registration.md",
             "does not prove app configuration",
@@ -14437,7 +14454,7 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             availability_context_sha256=sso["contextIdentitySha256"],
         )
         sso_guidance = sso_yes["transport"]["internal"]["ordinaryReply"]["text"]
-        assert "Confirm ServiceNow single sign-on and user mapping" in sso_guidance
+        assert "Set up ServiceNow HR" not in sso_guidance
         for technical in _TECHNICAL_CARD_BLOCKS[:4] + (
             "guide-servicenow-oidc.md",
             "Manual evidence does not prove a real employee token",
@@ -14480,7 +14497,7 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             availability_context_sha256=maker["contextIdentitySha256"],
         )
         maker_guidance = maker_yes["transport"]["internal"]["ordinaryReply"]["text"]
-        assert "Create and connect ServiceNow" in maker_guidance
+        assert "Set up ServiceNow HR" not in maker_guidance
         auth_index = maker_guidance.index("Authentication type")
         resource_index = maker_guidance.index("Resource URI")
         instance_index = maker_guidance.index("Instance name")
@@ -17263,3 +17280,113 @@ def test_hr_and_it_maker_messages_share_the_same_wording(
         ), key
     assert rendered["hrsd"]["title"] == "Set up ServiceNow HR"
     assert rendered["itsm"]["title"] == "Set up ServiceNow IT"
+
+
+@pytest.mark.parametrize(
+    ("profile", "slug", "title"),
+    (
+        ("hrsd", "employee-self-service-hr", "Set up ServiceNow HR"),
+        ("itsm", "employee-self-service-it", "Set up ServiceNow IT"),
+    ),
+)
+def test_setup_checklist_shows_only_when_progress_changes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    slug: str,
+    title: str,
+) -> None:
+    product = snow.HRSD_PROFILE if profile == "hrsd" else snow.ITSM_PROFILE
+    context = _profile_context(profile, agent_id=AGENT_ID, agent_slug=slug)
+    context["root"] = tmp_path
+    source_contract = (
+        snow.SOLUTION_ROOT / "src" / "skills" / "connect"
+        / product.provider_key / "contract.json"
+    )
+    contract = json.loads(source_contract.read_text(encoding="utf-8"))
+    target_contract = tmp_path / product.contract_path
+    target_contract.parent.mkdir(parents=True, exist_ok=True)
+    target_contract.write_bytes(source_contract.read_bytes())
+    monkeypatch.chdir(tmp_path)
+    with snow.product_profile_context(profile):
+        state = snow._state_base(
+            context,
+            _target_profile_components(profile, instance_name="dev123"),
+        )
+        state["attested"] = True
+        state["adminSetup"]["preflight"]["instanceName"] = "dev123"
+        state["attestedAt"] = "2026-11-02T00:00:00Z"
+        state["acceptedContractRevision"] = contract["contractRevision"]
+        state["phases"] = {
+            phase["id"]: {
+                "status": (
+                    "done" if phase["id"] == "preflight" else "pending"
+                ),
+                "checkpointResults": (
+                    {phase["checkpoints"][0]: "Passed"}
+                    if phase["id"] == "preflight"
+                    else {}
+                ),
+            }
+            for phase in contract["phases"]
+        }
+        snow._write_lifecycle_state(context, state)
+        lifecycle_before = snow._lifecycle_state_path(context).read_bytes()
+
+        def resume(verified: set[str]) -> str:
+            handoff = snow.resume_handoff(
+                context, verified_phases=frozenset(verified)
+            )
+            # The current question is kept even when the checklist is hidden.
+            assert handoff["transport"]["businessGroupAvailability"][
+                "question"
+            ]
+            return "\n".join(
+                [
+                    str((handoff.get("renderBlock") or {}).get("text") or ""),
+                    str(
+                        handoff["transport"]["internal"]["ordinaryReply"]
+                        ["text"]
+                    ),
+                ]
+            )
+
+        first = resume({"preflight"})
+        second = resume({"preflight"})
+        assert title in first
+        assert title not in second
+        assert snow._lifecycle_state_path(context).read_bytes() == (
+            lifecycle_before
+        )
+
+        state = json.loads(
+            snow._lifecycle_state_path(context).read_text(encoding="utf-8")
+        )
+        for phase_id in ("plugin-prerequisites", "entra-registration"):
+            if phase_id in state["phases"]:
+                state["phases"][phase_id]["status"] = "done"
+                state["phases"][phase_id]["checkpointResults"] = {
+                    "X": "Manual"
+                }
+        snow._write_lifecycle_state(context, state)
+        changed = resume(
+            {"preflight", "plugin-prerequisites", "entra-registration"}
+        )
+        assert title in changed
+        assert "✅" in changed
+        assert title not in resume(
+            {"preflight", "plugin-prerequisites", "entra-registration"}
+        )
+
+
+def test_checklist_due_always_shows_the_final_state(tmp_path: Path) -> None:
+    context = _profile_context(
+        "hrsd", agent_id=AGENT_ID, agent_slug="employee-self-service-hr"
+    )
+    context["root"] = tmp_path
+    with snow.product_profile_context("hrsd"):
+        assert snow._checklist_due(context, "a") is True
+        assert snow._checklist_due(context, "a") is False
+        assert snow._checklist_due(context, "b") is True
+        assert snow._checklist_due(context, "b", force=True) is True
+        assert snow._checklist_due(context, "b") is False

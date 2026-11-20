@@ -10513,6 +10513,36 @@ def _take_dev_opening(
     return text
 
 
+def _checklist_shown_path(context: dict[str, Any]) -> Path:
+    return _lifecycle_state_path(context).with_name("checklist-shown.json")
+
+
+def _checklist_due(
+    context: dict[str, Any],
+    checklist_text: str,
+    *,
+    force: bool = False,
+) -> bool:
+    """True when the setup checklist should be shown to the maker.
+
+    The checklist is shown at the start, whenever its checked state changed
+    since it was last shown, and always at the end. The last shown state is
+    kept beside, not inside, the lifecycle state so read-only resumes never
+    change the lifecycle file.
+    """
+    path = _checklist_shown_path(context)
+    digest = hashlib.sha256(checklist_text.encode("utf-8")).hexdigest()
+    shown = _load_json(path) if path.exists() else None
+    if (
+        not force
+        and isinstance(shown, dict)
+        and shown.get("sha256") == digest
+    ):
+        return False
+    _write_json_atomic(path, {"sha256": digest, "shownAt": _utc_now()})
+    return True
+
+
 _DEV_TEST_COPY = {
     "hrsd": {
         "article": "an",
@@ -10747,10 +10777,13 @@ def _business_group_transport(
     roles_available: bool | None,
     availability_group_id: str | None,
     availability_context_sha256: str | None,
+    show_checklist: bool = True,
 ) -> dict[str, Any]:
     groups = _business_groups(contract)
-    ordinary_text = _render_grouped_phases(
-        contract, phase_items, title=title
+    ordinary_text = (
+        _render_grouped_phases(contract, phase_items, title=title)
+        if show_checklist
+        else ""
     )
     group_context = (
         _business_group_context(context, contract, current_group)
@@ -10799,7 +10832,9 @@ def _business_group_transport(
             role=current_group["role"],
         )
         if guidance:
-            ordinary_text += "\n\n" + guidance
+            ordinary_text = (
+                f"{ordinary_text}\n\n{guidance}" if ordinary_text else guidance
+            )
     question = (
         _business_group_availability_question(current_group)
         if gate_required
@@ -11156,6 +11191,7 @@ def _resume_render_block(
     *,
     group_changed: bool,
     waiting: bool = False,
+    show_checklist: bool = True,
 ) -> dict[str, Any]:
     availability = transport["businessGroupAvailability"]
     internal = progress["internal"]
@@ -11168,7 +11204,7 @@ def _resume_render_block(
     elif waiting and isinstance(current, dict):
         kind = "waiting"
         parts = [
-            str(current["groupedWaitingText"]),
+            str(current["groupedWaitingText"]) if show_checklist else "",
             str(current["waitingText"]),
             _WAITING_RESUME_NOTE,
         ]
@@ -11179,7 +11215,7 @@ def _resume_render_block(
     ):
         kind = "error"
         parts = [
-            str(current["groupedErrorText"]),
+            str(current["groupedErrorText"]) if show_checklist else "",
             str(current["needsAttentionText"]),
         ]
     else:
@@ -11193,14 +11229,14 @@ def _resume_render_block(
             str(
                 transport["internal"]["ordinaryReply"]["text"]
                 if plan
-                else internal["groupedText"]
+                else (internal["groupedText"] if show_checklist else "")
             )
         ]
         if isinstance(current, dict) and not availability["gateRequired"]:
             parts.append(str(current["startText"]))
     return {
         "kind": kind,
-        "text": "\n\n".join(parts),
+        "text": "\n\n".join(part for part in parts if part),
         "instruction": _RENDER_INSTRUCTION,
     }
 
@@ -11232,14 +11268,14 @@ def _checkpoint_render_block(
     current = progress["internal"]["currentPhase"]
     if outcome == "blocked":
         kind = "error"
-        parts = [current["groupedErrorText"], current["needsAttentionText"]]
+        checklist = current["groupedErrorText"]
+        parts = [current["needsAttentionText"]]
     else:
         kind = "waiting"
-        parts = [
-            current["groupedWaitingText"],
-            current["waitingText"],
-            _WAITING_RESUME_NOTE,
-        ]
+        checklist = current["groupedWaitingText"]
+        parts = [current["waitingText"], _WAITING_RESUME_NOTE]
+    if _checklist_due(context, checklist):
+        parts.insert(0, checklist)
     return {
         "kind": kind,
         "text": "\n\n".join(parts),
@@ -11287,6 +11323,12 @@ def resume_handoff(
         verified_phases=verified_phases,
     )
     current_group = _current_business_group(contract, progress)
+    is_final = bool(progress["internal"].get("groupedFinalText"))
+    show_checklist = _checklist_due(
+        context,
+        str(progress["internal"]["groupedText"]),
+        force=is_final,
+    )
     pre_action_handoff, bypass_availability = (
         _shared_reuse_before_availability(
             context,
@@ -11306,6 +11348,7 @@ def resume_handoff(
         roles_available=roles_available,
         availability_group_id=availability_group_id,
         availability_context_sha256=availability_context_sha256,
+        show_checklist=show_checklist,
     )
     opening = _take_dev_opening(context, state, progress)
 
@@ -11329,6 +11372,7 @@ def resume_handoff(
                 progress,
                 transport,
                 group_changed=group_changed,
+                show_checklist=show_checklist,
             )
         ),
     }
@@ -11377,6 +11421,7 @@ def resume_handoff(
                 transport,
                 group_changed=group_changed,
                 waiting=True,
+                show_checklist=show_checklist,
             )
         )
         return result
