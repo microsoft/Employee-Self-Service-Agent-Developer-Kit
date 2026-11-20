@@ -55,8 +55,7 @@ evidence summary and completion decision:
     "question": "Your ServiceNow administrator should see **Human Resources Scoped App: Core** (`com.sn_hr_core`) listed as Installed, with the message `Your application is installed and ready for you to use on your instance`.",
     "options": [
       { "label": "Yes" },
-      { "label": "No" },
-      { "label": "Not sure" }
+      { "label": "No" }
     ],
     "allowFreeformInput": false
   }
@@ -68,7 +67,7 @@ Leave the selection unset.
 - **Yes:** record the phase
   handoff with `reused` when it was already valid, or `completed` when the
   administrator completed the installation.
-- **No** / **Not sure:** show the direct link and identifiers
+- **No:** show the direct link and identifiers
   above, then show this fixed waiting text verbatim (do not paraphrase it),
   return `ACTION_RESULT = "waiting"`, and do not record completion:
 
@@ -84,4 +83,7 @@ After **Yes**, record the single phase handoff:
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-admin-phase --phase plugin-prerequisites --status <completed|reused>
 ```
 
-Return `ACTION_RESULT = "recorded"` after the whole step is recorded.
+Return `ACTION_RESULT = "recorded"` after the whole step is recorded, then run
+the `nextCommand` from that record output exactly as given. Do not run a bare
+`resume-handoff`; the flags in `nextCommand` tell the controller this action
+is already applied.

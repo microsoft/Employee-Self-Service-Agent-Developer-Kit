@@ -11823,7 +11823,9 @@ def record_checkpoint_results(
         "acknowledged": sorted(acknowledgements),
         "reasons": reasons,
         "resumeArguments": (
-            ["--verified-phase", phase_id] if outcome == "done" else []
+            _verified_prefix_arguments(context, phase_id, include_self=True)
+            if outcome == "done"
+            else []
         ),
     }
     block = _checkpoint_render_block(
@@ -11832,6 +11834,37 @@ def record_checkpoint_results(
     if block is not None:
         result = {"renderBlock": block, **result}
     return result
+
+
+def _verified_prefix_arguments(
+    context: dict[str, Any],
+    phase_id: str,
+    *,
+    include_self: bool,
+) -> list[str]:
+    """`--verified-phase` pairs for the done phases up to ``phase_id``.
+
+    Only the contract-order prefix is listed, so a later done phase that has not
+    been reached yet is still re-verified by the controller.
+    """
+    contract = _load_json(Path(context["root"]) / CONTRACT_PATH)
+    state = _load_json(_lifecycle_state_path(context))
+    phases = state.get("phases") if isinstance(state, dict) else None
+    arguments: list[str] = []
+    if not isinstance(phases, dict):
+        return arguments
+    for phase in contract.get("phases") or []:
+        current = phase.get("id") if isinstance(phase, dict) else None
+        if not isinstance(current, str):
+            continue
+        if current == phase_id and not include_self:
+            break
+        value = phases.get(current)
+        if isinstance(value, dict) and value.get("status") == "done":
+            arguments.extend(["--verified-phase", current])
+        if current == phase_id:
+            break
+    return arguments
 
 
 def _recovery_handoff(
@@ -13719,8 +13752,36 @@ def _next_command(
     if isinstance(action, dict) and action.get("actionDoc"):
         return (
             f"Read {action['actionDoc']} now and follow it (apply the shared "
-            "permission and rollback gates first)."
+            "permission and rollback gates first). When the action is done, "
+            f"continue with: {_resume_command(result, args, executed=_running_phase(result))}"
         )
+    return _resume_command(result, args)
+
+
+def _running_phase(result: dict[str, Any]) -> list[str]:
+    lifecycle = result.get("lifecycle")
+    if (
+        isinstance(lifecycle, dict)
+        and lifecycle.get("decision") == "run-action"
+        and isinstance(lifecycle.get("phase"), dict)
+        and isinstance(lifecycle["phase"].get("id"), str)
+    ):
+        return [lifecycle["phase"]["id"]]
+    return []
+
+
+def _resume_command(
+    result: dict[str, Any],
+    args: Any,
+    *,
+    executed: list[str] | None = None,
+    extra_args: list[str] | None = None,
+) -> str:
+    """Exact resume-handoff command that carries this invocation's phase flags.
+
+    The controller keeps no per-invocation memory: every phase that is already
+    done must be passed again as ``--verified-phase`` or it is re-read.
+    """
     slug = result.get("agentSlug") or getattr(args, "agent_slug", None)
     provider = result.get("provider") or getattr(args, "provider", None)
     parts = ["python scripts/connect_servicenow_da.py"]
@@ -13729,8 +13790,24 @@ def _next_command(
     if slug:
         parts.append(f"--agent-slug {slug}")
     parts.append("resume-handoff")
+    flags: list[tuple[str, str]] = []
+    for flag, carried, extra in (
+        ("--executed-action", getattr(args, "executed_action", None), executed),
+        ("--verified-phase", getattr(args, "verified_phase", None), None),
+    ):
+        for phase_id in [*(carried or []), *(extra or [])]:
+            if (flag, phase_id) not in flags:
+                flags.append((flag, phase_id))
+    extra_list = list(extra_args or [])
+    for index in range(0, len(extra_list) - 1, 2):
+        pair = (extra_list[index], extra_list[index + 1])
+        if pair not in flags:
+            flags.append(pair)
+    parts.extend(f"{flag} {value}" for flag, value in flags)
     return " ".join(parts)
 
+
+_RECORD_COMMANDS = frozenset({"record-admin-phase", "record-checkpoint-results"})
 
 _ASK_CARD_NEXT = (
     "Ask the question in pendingCard now with one ask_user call using "
@@ -13770,11 +13847,25 @@ def _with_agent_rules(
                 ordered["afterReply"] = (
                     f"When the maker replies, read {action['actionDoc']} and "
                     "continue from its step that follows the maker's reply. "
-                    "Do not repeat or reword the message above."
+                    "Do not repeat or reword the message above. Afterwards "
+                    "continue with: "
+                    + _resume_command(
+                        result, args, executed=_running_phase(result)
+                    )
                 )
         else:
             ordered["endTurn"] = False
             ordered["nextCommand"] = _next_command(result, command, args)
+    elif command in _RECORD_COMMANDS and result.get("resumeArguments"):
+        ordered["endTurn"] = False
+        ordered["nextCommand"] = (
+            "Continue now with: "
+            + _resume_command(
+                result,
+                args,
+                extra_args=[str(item) for item in result["resumeArguments"]],
+            )
+        )
     if "renderBlock" in result:
         ordered["renderBlock"] = result["renderBlock"]
     ordered["agentRules"] = list(AGENT_RULES)
@@ -13929,6 +14020,16 @@ def main(argv: list[str] | None = None) -> int:
                     args.confirm_active_user_match
                 ),
             )
+            result = {
+                **result,
+                "resumeArguments": [
+                    "--executed-action",
+                    args.phase,
+                    *_verified_prefix_arguments(
+                        context, args.phase, include_self=False
+                    ),
+                ],
+            }
         elif args.command == "create":
             result = prepare_manual_connection(
                 context,

@@ -807,7 +807,10 @@ It validates ids, status, phase order and evidence, writes `status`,
 `lastVerifiedAt`, `checkpointResults` and `checkpointAcknowledgements`, and
 returns `outcome` (`done`, `in-progress` or `blocked`) plus `resumeArguments`.
 Pass `resumeArguments` to the next `resume-handoff`. The hand-write bullets
-below apply only to providers without this flag.
+below apply only to providers without this flag. The ServiceNow controller also
+puts the full command in `nextCommand`; run that command exactly. Never run a
+bare `resume-handoff` after an action or a record command, because the
+controller keeps no memory between calls and would select the same phase again.
 
 - **All checkpoints "count toward done"** (after any needed attestation for
   `Manual`/`Warning` results — ask the same style of yes/no confirmation

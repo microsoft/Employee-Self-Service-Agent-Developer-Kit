@@ -901,10 +901,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert (
         '"label": "No"' in plugins
     )
-    assert (
-        '"label": "Not sure"'
-        in plugins
-    )
+    assert '"label": "Not sure"' not in plugins
     assert "[Open HR Service Delivery Core]({HR_CORE_PLUGIN_URL})" in plugins
     assert "OIDC capability belongs to the later ServiceNow OIDC phase" in (
         plugins

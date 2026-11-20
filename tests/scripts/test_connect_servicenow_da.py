@@ -16427,6 +16427,7 @@ def test_record_checkpoint_results_walks_every_phase_without_hand_edits(
 ) -> None:
     context, contract, _ = _recording_setup(monkeypatch, tmp_path, profile)
     assert contract["checkpointRecording"] == "provider-command-v1"
+    walked: list[str] = []
     for phase_contract in contract["phases"]:
         phase = phase_contract["id"]
         status = (phase_contract.get("completionStatuses") or ["Passed"])[0]
@@ -16443,7 +16444,10 @@ def test_record_checkpoint_results_walks_every_phase_without_hand_edits(
         )
         assert result["schemaVersion"] == "servicenow.checkpoint-recording.v1"
         assert result["outcome"] == "done", result["reasons"]
-        assert result["resumeArguments"] == ["--verified-phase", phase]
+        walked.append(phase)
+        assert result["resumeArguments"] == [
+            item for done_phase in walked for item in ("--verified-phase", done_phase)
+        ]
         recorded = _recorded_phase(context, profile, phase)
         assert recorded["status"] == "done"
         assert recorded["lastVerifiedAt"]
@@ -16735,7 +16739,11 @@ def test_every_command_output_carries_agent_rules(
     assert "lifecycle.json by hand" in rules
     assert "*> $null" in rules
     assert "lifecycle-runner.md" in rules
-    assert next(iter(output)) == "agentRules"
+    assert list(output)[:2] == ["endTurn", "nextCommand"]
+    assert output["endTurn"] is False
+    assert "resume-handoff" in output["nextCommand"]
+    assert "--verified-phase preflight" in output["nextCommand"]
+    assert list(output).index("agentRules") == 2
 
     assert snow.main(
         [
@@ -16753,6 +16761,54 @@ def test_every_command_output_carries_agent_rules(
     error = json.loads(capsys.readouterr().out)
     assert error["status"] == "error"
     assert error["agentRules"] == output["agentRules"]
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_record_outputs_carry_exact_resume_flags_so_preflight_does_not_loop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    profile: str,
+) -> None:
+    context, _, _ = _recording_setup(monkeypatch, tmp_path, profile)
+    monkeypatch.setattr(snow, "load_context", lambda **_kwargs: context)
+    monkeypatch.setattr(snow, "ACTIVE_PROFILE", snow.ACTIVE_PROFILE)
+    provider = context["provider"] if "provider" in context else None
+    provider = provider or (
+        "servicenow-da-hrsd" if profile == "hrsd" else "servicenow-da-itsm"
+    )
+    base = ["--provider", provider]
+    capsys.readouterr()
+    checkpoint = (
+        "SN-DA-HRSD-ADMIN-PREFLIGHT-001"
+        if profile == "hrsd"
+        else "SN-DA-ITSM-ADMIN-PREFLIGHT-001"
+    )
+    assert snow.main(
+        [
+            *base,
+            "record-checkpoint-results",
+            "--phase",
+            "preflight",
+            "--result",
+            f"{checkpoint}=Passed",
+        ]
+    ) == 0
+    recorded = json.loads(capsys.readouterr().out)
+    assert recorded["endTurn"] is False
+    command = recorded["nextCommand"]
+    assert "resume-handoff" in command
+    assert "--verified-phase preflight" in command
+
+    flags = command.split("resume-handoff", 1)[1].split()
+    assert snow.main([*base, "resume-handoff"]) == 0
+    bare = json.loads(capsys.readouterr().out)
+    assert bare["lifecycle"]["phase"]["id"] == "preflight"
+    assert bare["lifecycle"]["phase"]["mode"] == "reverify-done"
+
+    assert snow.main([*base, "resume-handoff", *flags]) == 0
+    followed = json.loads(capsys.readouterr().out)
+    assert followed["lifecycle"]["phase"]["id"] != "preflight"
 
 
 def test_agent_rules_put_chat_message_first_and_skip_adapt_question() -> None:

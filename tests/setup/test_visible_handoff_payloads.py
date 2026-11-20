@@ -389,7 +389,6 @@ def test_hr_plugin_completion_header_and_question_are_distinct() -> None:
     assert [option["label"] for option in payload["options"]] == [
         "Yes",
         "No",
-        "Not sure",
     ]
 
 
