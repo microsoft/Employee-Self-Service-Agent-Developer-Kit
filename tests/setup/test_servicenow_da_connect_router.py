@@ -1378,3 +1378,15 @@ def test_servicenow_da_cards_offer_only_yes_no_choices() -> None:
             assert banned not in text
         for banned in ("**Not now**", "**Not sure**"):
             assert banned not in text
+
+
+def test_plugin_not_active_reply_is_only_the_two_waiting_sentences() -> None:
+    root = _ROOT / "solutions" / "ess-maker-skills" / "src" / "skills" / "connect"
+    doc = (
+        root / "servicenow-da-hrsd" / "actions" / "verify-plugin-prerequisites.md"
+    ).read_text(encoding="utf-8")
+    no_branch = doc.split("- **No:**", 1)[1].split("After **Yes**", 1)[0]
+    assert "show only this fixed waiting text" in no_branch
+    assert "direct link and identifiers" not in no_branch
+    assert "HR setup is waiting for your ServiceNow administrator" in no_branch
+    assert "Bring back that confirmation when it's ready" in no_branch

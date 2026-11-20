@@ -67,9 +67,9 @@ Leave the selection unset.
 - **Yes:** record the phase
   handoff with `reused` when it was already valid, or `completed` when the
   administrator completed the installation.
-- **No:** show the direct link and identifiers
-  above, then show this fixed waiting text verbatim (do not paraphrase it),
-  return `ACTION_RESULT = "waiting"`, and do not record completion:
+- **No:** show only this fixed waiting text verbatim (do not paraphrase it
+  and do not repeat the link, plugin title, plugin id, version or message
+  details), return `ACTION_RESULT = "waiting"`, and do not record completion:
 
   ```text
   HR setup is waiting for your ServiceNow administrator to confirm that the HR Service Delivery Core plugin is installed and active.
