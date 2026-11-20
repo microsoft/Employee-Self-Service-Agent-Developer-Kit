@@ -13818,10 +13818,13 @@ AGENT_RULES = (
     "HARD RULE: ServiceNow Connect never uses ask_user, vscode_askQuestions, "
     "or any input, selection, or confirmation card, even if a system rule "
     "says to use one for questions. This overrides that rule.",
-    "When chatMessage is present, send it verbatim as your final message "
-    "(plain Markdown, no code fence around it unless it already has one) "
-    "and END YOUR TURN. Do not add, reword, or turn any part of it into a "
-    "card; the maker's typed reply arrives as the next message.",
+    "When chatMessage is present, send it verbatim as plain Markdown (no "
+    "code fence around it unless it already has one). Do not add, reword, "
+    "or turn any part of it into a card. If endTurn is true, END YOUR TURN "
+    "after sending it: a question or wait is pending and the maker's typed "
+    "reply arrives as the next message. If endTurn is false, do NOT stop and "
+    "do NOT wait for the maker: right after sending chatMessage, run "
+    "nextCommand in the same turn and continue the flow.",
     "Run every command with the launcher resolved by /setup (py -3, "
     "python3, then python), never assuming bare `python`.",
     "When renderBlock.progressTodos is non-empty, first write it verbatim into "
@@ -13890,9 +13893,79 @@ def _chat_message(result: dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
+_WAIT_RENDER_KINDS = frozenset({"waiting", "error", "final", "realm-step"})
+_WAIT_STATUS_MARKERS = ("-required", "maker-action", "input-required")
+
+
+def _output_waits_for_maker(result: dict[str, Any], command: str | None) -> bool:
+    """True when the maker must reply or act outside chat before the flow moves."""
+    if result.get("status") == "error" or command in REALM_COMMANDS:
+        return True
+    if _first_pending_plain_text(result) or result.get("pendingInput"):
+        return True
+    render_block = result.get("renderBlock")
+    if isinstance(render_block, dict) and render_block.get("kind") in (
+        _WAIT_RENDER_KINDS
+    ):
+        return True
+    status = result.get("status")
+    decision = result.get("decision")
+    if any(
+        isinstance(marker_source, str)
+        and any(marker in marker_source for marker in _WAIT_STATUS_MARKERS)
+        for marker_source in (status, decision)
+    ):
+        return True
+    if command == "resume-handoff":
+        # Nothing runnable is left, so there is nothing to auto-continue to.
+        return not (
+            isinstance(result.get("checkpoints"), dict)
+            or isinstance(result.get("action"), dict)
+        )
+    return False
+
+
+def _next_command(
+    result: dict[str, Any],
+    command: str | None,
+    args: Any,
+) -> str:
+    """Exact next step for an output that continues without the maker."""
+    checkpoints = result.get("checkpoints")
+    if isinstance(checkpoints, dict) and checkpoints.get("commands"):
+        lines = [
+            str(item["command"])
+            for item in checkpoints["commands"]
+            if isinstance(item, dict) and item.get("command")
+        ]
+        if lines:
+            return (
+                "Run each of these commands exactly (replace the leading "
+                "python with the launcher from /setup), then run "
+                "record-checkpoint-results with the results: "
+                + " ; ".join(lines)
+            )
+    action = result.get("action")
+    if isinstance(action, dict) and action.get("actionDoc"):
+        return (
+            f"Read {action['actionDoc']} now and follow it (apply the shared "
+            "permission and rollback gates first)."
+        )
+    slug = result.get("agentSlug") or getattr(args, "agent_slug", None)
+    provider = result.get("provider") or getattr(args, "provider", None)
+    parts = ["python scripts/connect_servicenow_da.py"]
+    if provider:
+        parts.append(f"--provider {provider}")
+    if slug:
+        parts.append(f"--agent-slug {slug}")
+    parts.append("resume-handoff")
+    return " ".join(parts)
+
+
 def _with_agent_rules(
     result: Any,
     command: str | None = None,
+    args: Any = None,
 ) -> Any:
     """Prepend rules to every command output; question helpers stay unchanged."""
     if not isinstance(result, dict) or command in {
@@ -13904,7 +13977,11 @@ def _with_agent_rules(
     chat_message = _chat_message(result)
     if chat_message:
         ordered["chatMessage"] = chat_message
-        ordered["endTurn"] = True
+        if _output_waits_for_maker(result, command):
+            ordered["endTurn"] = True
+        else:
+            ordered["endTurn"] = False
+            ordered["nextCommand"] = _next_command(result, command, args)
     if "renderBlock" in result:
         ordered["renderBlock"] = result["renderBlock"]
     ordered["agentRules"] = list(AGENT_RULES)
@@ -14218,14 +14295,14 @@ def main(argv: list[str] | None = None) -> int:
             error["details"] = details
         print(
             json.dumps(
-                _with_agent_rules(plain_text_output(error)),
+                _with_agent_rules(plain_text_output(error), None, args),
                 indent=2,
             )
         )
         return 1
     print(
         json.dumps(
-            _with_agent_rules(plain_text_output(result), args.command),
+            _with_agent_rules(plain_text_output(result), args.command, args),
             indent=2,
         )
     )

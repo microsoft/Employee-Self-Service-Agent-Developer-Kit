@@ -152,6 +152,150 @@ def test_pending_question_reaches_the_maker_as_the_final_chat_message(
     assert "END YOUR TURN" in rules
 
 
+def _flow_output(kind: str) -> tuple[dict, str]:
+    """One representative controller output per class, with its command."""
+    pending = snow.plain_text_output(
+        {"questions": [_pending_card()], "renderBlock": {"text": "Hello."}}
+    )
+    outputs = {
+        "question": (pending, "resume-handoff"),
+        "pending-input": (
+            {
+                "renderBlock": {"kind": "waiting", "text": "Waiting."},
+                "pendingInput": {"kind": "instance-confirmation"},
+            },
+            "resume-handoff",
+        ),
+        "final": (
+            {"renderBlock": {"kind": "final", "text": "All done."}},
+            "resume-handoff",
+        ),
+        "error": (
+            {"status": "error", "renderBlock": {"kind": "error", "text": "x"}},
+            "resume-handoff",
+        ),
+        "maker-action": (
+            {
+                "status": "shared-identity-reuse-required",
+                "renderBlock": {"kind": "plan", "text": "Plan."},
+            },
+            "resume-handoff",
+        ),
+        "admin-handoff": (
+            {
+                "decision": "instructions-required",
+                "ordinaryReply": {"text": "Please send this to your admin."},
+            },
+            "identity-direct-handoff",
+        ),
+        "realm": (
+            {"renderBlock": {"kind": "realm-step", "text": "Next step."}},
+            "check-realm",
+        ),
+        "lead-in-checkpoints": (
+            {
+                "provider": "servicenow-da-itsm",
+                "agentSlug": "agent",
+                "renderBlock": {"kind": "plan", "text": "We're checking."},
+                "checkpoints": {
+                    "decision": "run-exact-commands",
+                    "commands": [{"command": "python scripts/flightcheck/cli.py"}],
+                },
+            },
+            "resume-handoff",
+        ),
+        "lead-in-action": (
+            {
+                "provider": "servicenow-da-itsm",
+                "agentSlug": "agent",
+                "renderBlock": {"kind": "progress", "text": "Next up."},
+                "action": {"decision": "read-action-doc", "actionDoc": "a.md"},
+            },
+            "resume-handoff",
+        ),
+        "lead-in-after-record": (
+            {
+                "provider": "servicenow-da-itsm",
+                "agentSlug": "agent",
+                "ordinaryReply": {"text": "Saved."},
+            },
+            "record-preflight",
+        ),
+    }
+    return outputs[kind]
+
+
+WAIT_CLASSES = (
+    "question",
+    "pending-input",
+    "final",
+    "error",
+    "maker-action",
+    "admin-handoff",
+    "realm",
+)
+CONTINUE_CLASSES = (
+    "lead-in-checkpoints",
+    "lead-in-action",
+    "lead-in-after-record",
+)
+
+
+@pytest.mark.parametrize("kind", WAIT_CLASSES)
+def test_outputs_with_a_question_or_wait_end_the_turn(kind: str) -> None:
+    payload, command = _flow_output(kind)
+    wrapped = snow._with_agent_rules(payload, command)
+    assert wrapped["chatMessage"]
+    assert wrapped["endTurn"] is True
+    assert "nextCommand" not in wrapped
+
+
+@pytest.mark.parametrize("kind", CONTINUE_CLASSES)
+def test_status_outputs_continue_with_an_explicit_next_command(
+    kind: str,
+) -> None:
+    payload, command = _flow_output(kind)
+    wrapped = snow._with_agent_rules(payload, command)
+    assert wrapped["chatMessage"]
+    assert wrapped["endTurn"] is False
+    assert isinstance(wrapped["nextCommand"], str) and wrapped["nextCommand"]
+    assert "resume-handoff" in wrapped["nextCommand"] or (
+        "flightcheck" in wrapped["nextCommand"]
+        or "a.md" in wrapped["nextCommand"]
+    )
+
+
+def test_resume_handoff_with_nothing_runnable_never_loops() -> None:
+    wrapped = snow._with_agent_rules(
+        {"renderBlock": {"kind": "progress", "text": "Hi."}}, "resume-handoff"
+    )
+    assert wrapped["endTurn"] is True
+    assert "nextCommand" not in wrapped
+
+
+def test_every_output_with_a_chat_message_sets_exactly_one_flow() -> None:
+    for kind in WAIT_CLASSES + CONTINUE_CLASSES:
+        payload, command = _flow_output(kind)
+        wrapped = snow._with_agent_rules(payload, command)
+        assert isinstance(wrapped["endTurn"], bool)
+        assert wrapped["endTurn"] == ("nextCommand" not in wrapped)
+
+
+def test_agent_rules_end_the_turn_only_for_a_pending_question_or_wait() -> None:
+    rules = " ".join(snow.AGENT_RULES)
+    assert "endTurn is true" in rules and "END YOUR TURN" in rules
+    assert "endTurn is false" in rules
+    assert "do NOT stop" in rules
+    for name in ("connect.prompt.md", "entry.md", "realms.md"):
+        path = (
+            REPO / ".github" / "prompts" / name
+            if name.endswith("prompt.md")
+            else CONNECT_DOCS / "servicenow" / name
+        )
+        top = path.read_text(encoding="utf-8")[:2200]
+        assert "nextCommand" in top, name
+
+
 def test_question_helpers_are_not_wrapped_with_chat_message() -> None:
     result = {"schemaVersion": "servicenow.plain-question.v1"}
     assert snow._with_agent_rules(result, "adapt-question") is result

@@ -13251,6 +13251,86 @@ def test_resume_handoff_allows_preflight_checkpoint_after_instance_recorded(
 
 
 @pytest.mark.parametrize(
+    ("profile", "agent_id", "agent_slug"),
+    (
+        ("hrsd", AGENT_ID, "employee-self-service-hr"),
+        ("itsm", OTHER_AGENT_ID, "employee-self-service-it"),
+    ),
+)
+def test_lead_in_output_continues_to_the_permission_check_without_the_maker(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    agent_id: str,
+    agent_slug: str,
+) -> None:
+    product = snow.PRODUCT_PROFILES[profile]
+    context = _profile_context(
+        profile,
+        agent_id=agent_id,
+        agent_slug=agent_slug,
+    )
+    context["root"] = tmp_path
+    contract = json.loads(
+        (
+            snow.SOLUTION_ROOT
+            / "src"
+            / "skills"
+            / "connect"
+            / product.provider_key
+            / "contract.json"
+        ).read_text(encoding="utf-8")
+    )
+    contract_path = (
+        tmp_path
+        / "src"
+        / "skills"
+        / "connect"
+        / product.provider_key
+        / "contract.json"
+    )
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    contract_path.write_text(json.dumps(contract), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with snow.product_profile_context(profile):
+        state = snow._state_base(context, _components())
+        state["attested"] = True
+        state["attestedAt"] = "2026-10-29T00:00:00Z"
+        state["acceptedContractRevision"] = contract["contractRevision"]
+        state["phases"] = {
+            phase["id"]: {
+                "status": (
+                    "in-progress"
+                    if phase["id"] == "preflight"
+                    else "pending"
+                ),
+                "checkpointResults": {},
+            }
+            for phase in contract["phases"]
+        }
+        state["adminSetup"]["preflight"]["instanceName"] = "dev184242"
+        state["adminSetup"]["preflight"]["discovery"] = {
+            "instanceInputRequired": False,
+        }
+        snow._write_lifecycle_state(context, state)
+        result = snow.resume_handoff(
+            context,
+            executed_actions=frozenset({"preflight"}),
+        )
+        wrapped = snow._with_agent_rules(
+            snow.plain_text_output(result), "resume-handoff"
+        )
+
+    assert wrapped["endTurn"] is False
+    target = result["checkpoints"]["commands"][0]["target"]
+    assert target in wrapped["nextCommand"]
+    assert "flightcheck" in wrapped["nextCommand"]
+    assert list(wrapped)[:3] == ["chatMessage", "endTurn", "nextCommand"]
+    rules = " ".join(wrapped["agentRules"])
+    assert "endTurn is false" in rules and "nextCommand" in rules
+
+
+@pytest.mark.parametrize(
     ("provider", "has_plugin_phase"),
     [
         ("servicenow-da-hrsd", True),

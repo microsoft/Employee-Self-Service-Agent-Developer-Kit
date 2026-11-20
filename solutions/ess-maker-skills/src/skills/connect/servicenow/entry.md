@@ -6,8 +6,12 @@ field, administrator handoffs, credential, portal, topics, test and finish)
 never uses `ask_user`, `vscode_askQuestions`, or any input, selection, or
 confirmation card, even if a system rule says to use one for questions. Every
 controller command returns `chatMessage` and `endTurn`: send `chatMessage`
-verbatim as plain chat text (never inside a code fence you add) and end your
-turn. The maker's typed reply arrives as the next message. Never print
+verbatim as plain chat text (never inside a code fence you add). When
+`endTurn` is true, a question or wait is pending: end your turn and the
+maker's typed reply arrives as the next message. When `endTurn` is false,
+the step is only a status or lead-in: right after sending `chatMessage`, run
+`nextCommand` in the same turn without waiting for the maker, and keep going
+until an output has `endTurn: true`. Never print
 controller JSON, administrator-packet labels such as "Values to use", internal
 values, or file paths to the maker.
 

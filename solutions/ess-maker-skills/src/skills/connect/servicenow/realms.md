@@ -2,8 +2,9 @@
 
 **HARD RULE: no cards, ever.** Never use `ask_user`, `vscode_askQuestions`, or
 any input, selection, or confirmation card here. Send each command's
-`chatMessage` verbatim as plain chat text and end your turn; the maker's typed
-reply is the next message.
+`chatMessage` verbatim as plain chat text. When `endTurn` is true, end your turn;
+the maker's typed reply is the next message. When it is false, run `nextCommand`
+right away in the same turn.
 
 Read this when the maker says the ESS agent was promoted to Test or
 Production, chooses to configure Test or Production, or pastes a Test or
