@@ -73,16 +73,17 @@ adapter envelope; the active host currently has a known defect that exposes
 and accepts custom enum answers because its schema has no freeform-control
 field. Do not patch the host or invent a business reject/re-ask flow here.
 
-**STOP — render before acting.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant message — before any other tool call — must contain `renderBlock.text` verbatim (the grouped phases view; it already ends with the current step line). `renderBlock.text` is the only renderable field: never render anything under `internal`, never write your own checklist, and never add a Check/Status table. Never summarize it or write "render the plan" instead.
+**STOP — render before acting.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant message — before any other tool call — must contain `renderBlock.text` verbatim (the setup checklist; it already ends with the current step line). `renderBlock.text` is the only renderable field: never render anything under `internal`, never write your own checklist, and never add a Check/Status table. Never summarize it or write "render the plan" instead.
 
 When the controller returns `renderBlock`, emit `renderBlock.text` verbatim as that assistant message; printing it from a terminal or tool call does not count. Run every command with the launcher resolved by `/setup` (`py -3`, `python3`, then `python`), never assuming bare `python`. When the contract sets `checkpointRecording: "provider-command-v1"`, never edit `lifecycle.json` by hand; use the controller commands.
 
 For DA ServiceNow, render the controller's
-`renderBlock.text` as an ordinary agent response. It is the grouped phases view:
-the automatic preflight plus the complete HR or IT collaboration groups, one
-responsible role per group, and nested internal-step statuses (it already
-ends with the current step line). `renderBlock.text` is the only renderable
-field; the flat items and everything under `internal` are data. Re-emit the
+`renderBlock.text` as an ordinary agent response. It is the flat setup checklist:
+a title, "Complete these tasks to finish setup.", and one checkbox line per
+setup task (checked when done, unchecked otherwise, a short note only when a
+task needs attention; no phases, roles, or legend). It already ends with the
+current step line where one applies. `renderBlock.text` is the only renderable
+field; the flat `progress.items` and everything under `internal` are data. Re-emit the
 freshly returned block on every phase completion/next-phase transition,
 waiting pause, blocked/error transition, and completion. A cached `done` phase
 displays **Rechecking** until this invocation adds its verified marker. An

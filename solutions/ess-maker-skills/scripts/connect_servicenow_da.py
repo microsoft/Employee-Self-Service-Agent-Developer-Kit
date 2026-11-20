@@ -9889,12 +9889,14 @@ def _phase_customer_label(
 ) -> str:
     labels = {
         "preflight": "Review the current setup",
-        "plugin-prerequisites": "Confirm HR ServiceNow prerequisite",
-        "entra-registration": "Confirm the Microsoft Entra identity details",
-        "servicenow-oidc": "Confirm ServiceNow user mapping",
+        "plugin-prerequisites": "Confirm HR ServiceNow prerequisites",
+        "entra-registration": "Confirm Microsoft Entra identity details",
+        "servicenow-oidc": (
+            "Confirm ServiceNow single sign-on and user mapping"
+        ),
         "credential": _CONNECTION_STEP_LABEL,
-        "topics": "Turn on the ServiceNow topics",
-        "portal-url": "Set employee portal URL",
+        "topics": "Turn on ServiceNow topics",
+        "portal-url": "Set the employee portal URL",
         "test": "Test a ServiceNow request",
         "publish": "Publish agent",
     }
@@ -10081,12 +10083,7 @@ def _build_phase_progress(
     has_prior_progress = any(
         item["status"] not in {"pending", "current"} for item in items
     )
-    display_name = str(contract.get("displayName") or "ServiceNow")
-    headline = (
-        f"Resuming {display_name} connection."
-        if has_prior_progress
-        else f"Starting the {display_name} connection."
-    )
+    headline = _setup_title()
 
     def render_grouped(
         *,
@@ -10705,6 +10702,14 @@ def _current_task_guidance(
     )
 
 
+def _setup_title() -> str:
+    return (
+        "Setup ServiceNow IT"
+        if ACTIVE_PROFILE.key == "itsm"
+        else "Setup ServiceNow"
+    )
+
+
 def _render_grouped_phases(
     contract: dict[str, Any],
     items: list[dict[str, Any]],
@@ -10712,50 +10717,37 @@ def _render_grouped_phases(
     title: str,
     current_override: tuple[str, str, str] | None = None,
 ) -> str:
-    """Render the grouped phase view used by every Connect transition.
+    """Render the flat setup checklist used by every Connect transition.
 
+    One checkbox line per phase, in group order. Done phases are checked and
+    the rest are unchecked; only a phase that needs attention gets a note.
     ``current_override`` is ``(phase_id, icon, text)`` for the current step.
     """
-    visible_by_id = {
-        str(item["id"]): item for item in items
-    }
-    hidden_ids = {
-        str(item["id"]) for item in items if str(item["id"]) not in visible_by_id
-    }
     items_by_id = {str(item["id"]): item for item in items}
 
-    def status_line(item: dict[str, Any]) -> str:
-        icon = _phase_status_icon(item["status"])
-        text = item["text"]
+    def task_line(item: dict[str, Any]) -> str:
+        status = str(item["status"])
+        needs_attention = status == "needs-attention"
         if current_override is not None and item["id"] == current_override[0]:
-            icon, text = current_override[1], current_override[2]
-        return f"{icon} {item['customerLabel']} — {text}"
+            status = "current"
+            needs_attention = current_override[1] == "❌"
+        label = item["customerLabel"]
+        if needs_attention:
+            return f"- ❌ {label} — needs attention"
+        icon = "✅" if status.startswith("complete-") else "⬜"
+        return f"- {icon} {label}"
 
-    automatic = items_by_id.get("preflight")
-    lines = [title]
-    if isinstance(automatic, dict):
-        lines.extend(
-            ["", "**Automatic setup**", "", f"- {status_line(automatic)}"]
-        )
-    lines.extend(["", "**Phases**", ""])
-    for index, group in enumerate(_business_groups(contract), start=1):
-        lines.append(
-            f"{index}. **{group['label']}** — Responsible role: "
-            f"{group['role']}"
-        )
+    lines = [
+        f"**{title}**",
+        "",
+        "Complete these tasks to finish setup.",
+        "",
+    ]
+    for group in _business_groups(contract):
         for phase_id in group["phaseIds"]:
-            if phase_id in hidden_ids:
-                continue
-            lines.append(f"   - {status_line(visible_by_id[phase_id])}")
-    lines.extend(
-        [
-            "",
-            (
-                "✅ Complete — admin confirmed or reused means current "
-                "compatible evidence was accepted."
-            ),
-        ]
-    )
+            item = items_by_id.get(phase_id)
+            if item is not None:
+                lines.append(task_line(item))
     return "\n".join(lines)
 
 
