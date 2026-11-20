@@ -108,7 +108,7 @@ Ready-to-send fenced block, so do not rewrap or edit either part. The returned
 `questions` list is empty and nothing else is asked with `ask_user` or any input
 card. The returned question list intentionally excludes
 availability because `resume-handoff` owns and deduplicates that gate. Do not
-ask the maker for the claim up front: the maker answers one prompt by pasting
+ask the maker for the claim up front: the maker replies in ordinary chat by pasting
 the Entra administrator's non-sensitive reply or the Client ID. Read the claim
 name only from that reply: a custom claim name the administrator states, or
 `email` or `upn` when the administrator states that the standard email or UPN

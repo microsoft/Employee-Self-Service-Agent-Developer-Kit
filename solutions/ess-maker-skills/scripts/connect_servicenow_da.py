@@ -1203,6 +1203,11 @@ SERVICENOW_USER_FIELD_TEXT_QUESTION = (
 )
 
 
+ENTRA_REPLY_CLOSING_TEXT = (
+    "Paste their reply here in chat when you have it. Don't include secrets."
+)
+
+
 def _ready_to_send_block(body: str) -> str:
     longest_run = max(
         (len(run) for run in re.findall(r"`+", body)),
@@ -1465,7 +1470,7 @@ def identity_direct_handoff(
                     + (
                         f"\n\n{SERVICENOW_USER_FIELD_TEXT_QUESTION}"
                         if stage == "servicenow"
-                        else ""
+                        else f"\n\n{ENTRA_REPLY_CLOSING_TEXT}"
                     )
                 ),
             }
@@ -13994,7 +13999,16 @@ def _with_agent_rules(
     for key, value in result.items():
         if key not in ordered:
             ordered[key] = value
+    if chat_message:
+        # Last key on purpose: it is the final text the agent reads.
+        ordered["cardBan"] = CARD_BAN_REMINDER
     return ordered
+
+
+CARD_BAN_REMINDER = (
+    "No cards: send chatMessage as plain chat text. Never call ask_user or "
+    "vscode_askQuestions; when the maker has to answer, end your turn."
+)
 
 
 PORTAL_URL_QUESTION_TEXT = (

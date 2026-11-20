@@ -424,22 +424,80 @@ def test_binary_option_labels_are_only_yes_or_no() -> None:
     assert not re.search(r'"(?:Yes|No),\s', source)
 
 
+def _load_hook(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_hook_lives_in_the_opened_workspace_folder() -> None:
+    # The host loads repo hooks only from the opened folder's .github/hooks.
+    # Makers open solutions/ess-maker-skills, so a hook that exists only at
+    # the git root is listed but never runs (live run: no deny, no trace).
+    workspace_hook = REPO / ".github" / "hooks" / "servicenow-connect-no-cards.json"
+    assert workspace_hook.is_file()
+    root_hook = REPO.parents[1] / ".github" / "hooks" / workspace_hook.name
+    if root_hook.is_file():
+        assert _load_hook(root_hook) == _load_hook(workspace_hook)
+
+
 def test_hook_covers_every_card_tool_and_runs_the_guard() -> None:
-    hook = json.loads(
-        (REPO.parents[1] / ".github" / "hooks" / "servicenow-connect-no-cards.json")
-        .read_text(encoding="utf-8")
+    hook = _load_hook(
+        REPO / ".github" / "hooks" / "servicenow-connect-no-cards.json"
     )
     entry = hook["hooks"]["preToolUse"][0]
     for tool in ("ask_user", "vscode_askQuestions", "AskUserQuestion"):
         assert re.search(entry["matcher"], tool)
     assert "servicenow_connect_card_guard.py" in entry["powershell"]
     assert "servicenow_connect_card_guard.py" in entry["bash"]
-    # The hook must find the guard from the git root and from the solution
-    # folder, so it cannot depend on a relative working directory.
+    # The hook must find the guard from the workspace folder and from the git
+    # root, so it cannot depend on a relative working directory.
     assert "cwd" not in entry
+    assert entry["powershell"].startswith("$p='scripts/servicenow_connect_card_guard.py'")
     for command in (entry["powershell"], entry["bash"]):
         assert "git rev-parse --show-toplevel" in command
         assert "solutions/ess-maker-skills/scripts/" in command
+
+
+def test_entra_packet_message_ends_with_a_plain_reply_line() -> None:
+    # Live run: the message ended in a code fence, so the agent added its own
+    # "Entra administrator reply" card. The last thing the maker reads must be
+    # a plain statement telling them to reply in chat.
+    entra = snow.ENTRA_REPLY_CLOSING_TEXT
+    assert entra.startswith("Paste their reply here in chat")
+    assert "?" not in entra
+    assert snow.has_wait_cue(entra)
+    result = {
+        "ordinaryReply": {
+            "kind": "ordinary-agent-response",
+            "text": (
+                "Send this message.\n\n**Ready-to-send message**\n```text\n"
+                f"body\n```\n\n{entra}"
+            ),
+        },
+        "decision": "instructions-required",
+    }
+    out = _finish(result, "identity-direct-handoff")
+    assert out["endTurn"] is True
+    assert out["chatMessage"].rstrip().endswith(entra)
+
+
+def test_every_chat_output_ends_with_the_card_ban_key() -> None:
+    out = _finish(
+        {"ordinaryReply": {"kind": "ordinary-agent-response", "text": "Hi."}},
+        "identity-direct-handoff",
+    )
+    assert list(out)[-1] == "cardBan"
+    assert "ask_user" in out["cardBan"]
+    assert out["cardBan"] == snow.CARD_BAN_REMINDER
+
+
+def test_entra_docs_do_not_describe_the_reply_as_a_prompt() -> None:
+    skills = REPO / "src" / "skills" / "connect"
+    for profile in ("servicenow-da-hrsd", "servicenow-da-itsm"):
+        text = (
+            skills / profile / "actions" / "guide-entra-registration.md"
+        ).read_text(encoding="utf-8")
+        assert "answers one prompt" not in text
+        assert "replies in ordinary chat" in text
 
 
 def test_card_guard_records_a_trace_line_per_call(tmp_path: Path) -> None:
