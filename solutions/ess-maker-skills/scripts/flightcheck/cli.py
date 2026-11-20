@@ -1421,6 +1421,7 @@ def _run_single_checkpoint(args, *, compact_stream=None):
     if needed & {
         registry.GRAPH,
         registry.PP_ADMIN,
+        registry.BAP,
         registry.PVA,
         registry.DATAVERSE,
         registry.POWERPLATFORM,
@@ -1508,29 +1509,37 @@ def _run_single_checkpoint(args, *, compact_stream=None):
             _record_graph_permission_failure(client_availability, plan.graph_permission_optional, e)
             graph = None
 
-    if registry.PP_ADMIN in needed:
+    pp_admin_clients = needed & {registry.PP_ADMIN, registry.BAP}
+    if pp_admin_clients:
         if not quiet_auth:
             print("Authenticating to Power Platform Admin API...")
         pp_admin = PPAdminClient(tenant_id)
         try:
             auth_kwargs = {"preferred_username": canonical_username}
-            if getattr(plan, "pp_admin_flow_required", True) is False:
+            if registry.PP_ADMIN not in needed:
+                auth_kwargs["include_powerapps"] = False
+            if (
+                registry.PP_ADMIN not in needed
+                or not getattr(plan, "pp_admin_flow_required", True)
+            ):
                 auth_kwargs["include_flow"] = False
             pp_admin.authenticate(**auth_kwargs)
             verify_authenticated_account(
                 "Power Platform Admin API",
                 getattr(pp_admin, "signed_in_username", None),
             )
-            mark_available(registry.PP_ADMIN)
+            for client_name in pp_admin_clients:
+                mark_available(client_name)
             if not quiet_auth:
                 print("  Power Platform: OK")
         except Exception as e:
             print(f"  Power Platform: WARNING — {e}")
-            mark_unavailable(registry.PP_ADMIN, e)
+            for client_name in pp_admin_clients:
+                mark_unavailable(client_name, e)
             pp_admin = None
 
     env_id = args.environment_id or config.get("environmentId") or None
-    if not env_id and registry.PP_ADMIN in needed and env_url:
+    if not env_id and pp_admin_clients and env_url:
         if pp_admin is None:
             print(
                 "ERROR: Power Platform Admin access is required to resolve "
@@ -2392,6 +2401,7 @@ def _run_profile(args):
     if needed & {
         registry.GRAPH,
         registry.PP_ADMIN,
+        registry.BAP,
         registry.PVA,
         registry.DATAVERSE,
         registry.POWERPLATFORM,
@@ -2482,27 +2492,33 @@ def _run_profile(args):
             _record_graph_permission_failure(client_availability, plan.graph_permission_optional, e)
             graph = None
 
-    if registry.PP_ADMIN in needed:
+    pp_admin_clients = needed & {registry.PP_ADMIN, registry.BAP}
+    if pp_admin_clients:
         if not quiet_auth:
             print("Authenticating to Power Platform Admin API...")
         pp_admin = PPAdminClient(tenant_id)
         try:
             auth_kwargs = {"preferred_username": canonical_username}
-            if getattr(plan, "pp_admin_flow_required", True) is False:
+            if registry.PP_ADMIN not in needed:
+                auth_kwargs["include_powerapps"] = False
+            if (
+                registry.PP_ADMIN not in needed
+                or not getattr(plan, "pp_admin_flow_required", True)
+            ):
                 auth_kwargs["include_flow"] = False
             pp_admin.authenticate(**auth_kwargs)
-            mark_available(
-                registry.PP_ADMIN,
-                verified_account(
-                    "Power Platform Admin API",
-                    getattr(pp_admin, "signed_in_username", None),
-                ),
+            account = verified_account(
+                "Power Platform Admin API",
+                getattr(pp_admin, "signed_in_username", None),
             )
+            for client_name in pp_admin_clients:
+                mark_available(client_name, account)
             if not quiet_auth:
                 print("  Power Platform: OK")
         except Exception as e:
             print(f"  Power Platform: WARNING — {e}")
-            mark_unavailable(registry.PP_ADMIN, e)
+            for client_name in pp_admin_clients:
+                mark_unavailable(client_name, e)
             pp_admin = None
 
     env_id = args.environment_id or config.get("environmentId") or None
@@ -2512,20 +2528,22 @@ def _run_profile(args):
         and bool(getattr(args, "environment_id", None))
         and bool(getattr(args, "environment_url", None))
     )
-    if not env_id and registry.PP_ADMIN in needed and env_url:
+    if not env_id and pp_admin_clients and env_url:
         if pp_admin is not None:
             try:
                 env_id = pp_admin.find_environment_id_by_dataverse_url(
                     env_url
                 )
             except Exception as e:
-                mark_unavailable(registry.PP_ADMIN, e)
+                for client_name in pp_admin_clients:
+                    mark_unavailable(client_name, e)
                 pp_admin = None
             if pp_admin is not None and not env_id:
-                mark_unavailable(
-                    registry.PP_ADMIN,
-                    "Dataverse environment binding could not be resolved",
-                )
+                for client_name in pp_admin_clients:
+                    mark_unavailable(
+                        client_name,
+                        "Dataverse environment binding could not be resolved",
+                    )
                 pp_admin = None
     elif env_id and pp_admin is not None and env_url:
         try:
@@ -2533,17 +2551,19 @@ def _run_profile(args):
                 env_url
             )
         except Exception as e:
-            mark_unavailable(registry.PP_ADMIN, e)
+            for client_name in pp_admin_clients:
+                mark_unavailable(client_name, e)
             pp_admin = None
             resolved_env_id = None
         if pp_admin is None:
             resolved_env_id = None
         if not resolved_env_id:
             if pp_admin is not None and not controller_binding:
-                mark_unavailable(
-                    registry.PP_ADMIN,
-                    "Dataverse environment binding could not be resolved",
-                )
+                for client_name in pp_admin_clients:
+                    mark_unavailable(
+                        client_name,
+                        "Dataverse environment binding could not be resolved",
+                    )
                 pp_admin = None
         elif normalize_environment_id(
             str(resolved_env_id)
@@ -3419,7 +3439,10 @@ def main():
         print("Authenticating to Power Platform Admin API...")
         pp_admin = PPAdminClient(tenant_id)
         try:
-            pp_admin.authenticate()
+            if args.scope == "environment":
+                pp_admin.authenticate(include_powerapps=False, include_flow=False)
+            else:
+                pp_admin.authenticate()
             print("  Power Platform: OK")
         except Exception as e:
             print(f"  Power Platform: WARNING — {e}")

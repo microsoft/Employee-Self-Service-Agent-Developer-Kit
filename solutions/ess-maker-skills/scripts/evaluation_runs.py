@@ -365,6 +365,7 @@ def _discover_mcs_connections(
     env_url = str(config["dataverseEndpoint"]).rstrip("/")
     client = PPAdminClient(discover_tenant(env_url))
     client.authenticate(
+        include_bap=False,
         include_flow=False,
         preferred_username=signed_in_username,
     )
@@ -503,6 +504,7 @@ def resolve_tool_connections(
     env_url = str(config["dataverseEndpoint"]).rstrip("/")
     client = PPAdminClient(discover_tenant(env_url))
     client.authenticate(
+        include_bap=False,
         include_flow=False,
         preferred_username=signed_in_username,
     )

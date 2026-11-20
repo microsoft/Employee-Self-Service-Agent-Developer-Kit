@@ -115,7 +115,9 @@ available:
 |-----------|--------|----------------------|------------------|
 | Dataverse | `../auth.py` | `{env_url}/user_impersonation` | Bot components (topics, variables, knowledge source *config*), template configs, solution metadata, statecode (enabled/disabled) |
 | Microsoft Graph | `graph_client.py` | `https://graph.microsoft.com/.default` | Licenses, user roles, Entra app registrations, CA policies |
-| Power Platform Admin (BAP) | `pp_admin_client.py` | `https://service.powerapps.com//.default` | Environments, cloud flows, connections, DLP policies |
+| Power Platform Admin (BAP) | `pp_admin_client.py` | `https://api.bap.microsoft.com/.default` | Environments, DLP policies |
+| PowerApps | `pp_admin_client.py` | `https://service.powerapps.com//.default` | Connections |
+| Power Automate (Flow) | `pp_admin_client.py` | `https://service.flow.microsoft.com//.default` | Cloud flows, run history |
 | Power Platform API (Licensing/Billing) | `powerplatform_client.py` | Ring-specific Power Platform API `/.default` (`api.powerplatform.com`, `api.preprod.powerplatform.com`, or `api.test.powerplatform.com`) | Environment entitlements, billing policies, PayG environment linkage |
 | Azure Resource Manager | `azure_arm_client.py` | `https://management.azure.com/.default` | Azure subscription health/`state` for the PayG-linked subscription, and Consumption budgets (spending guardrails) for PRE-005 |
 | Island Gateway (Copilot Studio) | `pva_client.py` | `96ff4394-9197-43aa-b393-6a41652e21f8/.default` | Live bot component status, model config, knowledge source *runtime state* |
@@ -123,6 +125,25 @@ available:
 > **Note:** `../auth.py` lives at `scripts/auth.py`, outside the flightcheck
 > folder. It's importable as `from auth import authenticate, query_all` because
 > `cli.py` adds `scripts/` to `sys.path` at startup.
+
+`PPAdminClient.authenticate()` requests all three audiences by default for
+legacy mixed checks. BAP uses the ESS-owned public client
+`417219b4-3a7d-42a2-bdb1-972bd8281a02`; PowerApps and Flow retain the established
+client `51f81489-12ee-4a9e-aaae-a2591f45987d`.
+For BAP-only environment/DLP work, pass `include_powerapps=False` and
+`include_flow=False`; for PowerApps-only connections, pass `include_bap=False`
+and `include_flow=False`. The return value is the PowerApps token if requested,
+otherwise BAP, otherwise Flow. Environment discovery reads the tenant from
+the returned BAP token. `authenticate_silent()` is BAP-only and never prompts;
+it is reserved for optional SKU telemetry, not mandatory readiness checks.
+The registry's `BAP` dependency initializes only BAP on `runner.pp_admin`;
+`PP_ADMIN` retains mixed-client support, with Flow requested only when the
+checkpoint/profile plan requires it. The legacy
+`--scope environment` path also requests only BAP from this client.
+
+Offline tests verify scope selection and bearer routing, not production
+delegated grants or token issuance. Release remains dependent on BAP owner
+approval and live validation; never fall back to a PowerApps bearer for BAP.
 
 **Critical distinction — three data layers:**
 

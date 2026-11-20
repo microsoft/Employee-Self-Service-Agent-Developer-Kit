@@ -244,7 +244,7 @@ def _billing(runner, spec):
 def _dlp(runner, spec):
     policies = _cached(
         runner, "dlp_policies",
-        lambda: _collection(_Access(runner).admin().get_dlp_policies(strict_collection=True)),
+        lambda: _collection(_Access(runner).admin(bap=True).get_dlp_policies(strict_collection=True)),
     )
     if any(not isinstance(policy.get("properties"), dict) for policy in policies):
         raise ValueError("DLP policy inventory returned malformed policy properties.")
