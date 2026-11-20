@@ -325,7 +325,7 @@ def test_instance_question_is_maker_friendly(
     assert "service-now.com" not in text
     assert not GUID.search(text)
     assert "Reply **Yes** or **No**" in text
-    assert choices["Yes, use dev123"] == "https://dev123.service-now.com"
+    assert choices["Yes"] == "https://dev123.service-now.com"
 
 
 @pytest.mark.parametrize("profile", ["hrsd", "itsm"])
@@ -373,3 +373,175 @@ def test_card_output_would_have_failed_this_guard() -> None:
     assert json.dumps(snow.plain_text_output(leaked)).count(
         "askUserArguments"
     ) == 0
+
+
+CARD_PAYLOAD_MARKERS = (
+    "visible-handoff-question",
+    "allowFreeformInput",
+    '"options"',
+    '"header"',
+)
+SHORT_LABELS = {"yes", "no"}
+
+
+def test_servicenow_docs_contain_no_card_payloads() -> None:
+    offenders = [
+        f"{path.name}: {marker}"
+        for path in _servicenow_docs()
+        for marker in CARD_PAYLOAD_MARKERS
+        if marker in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
+
+
+def test_invented_card_text_does_not_exist_in_the_repo() -> None:
+    invented = (
+        "administrator-confirmed internal column name on sys_user",
+        "The full administrator-confirmed employee portal URL",
+        "It returned the tickets I expected",
+        "Yes, the Maker is available now",
+        "No, I need to bring the Maker in",
+        "Use another agent (paste link)",
+    )
+    roots = [REPO / "scripts", REPO / "src" / "skills" / "connect"]
+    for root in roots:
+        for path in root.rglob("*"):
+            if path.suffix not in {".py", ".md", ".json"}:
+                continue
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            for phrase in invented:
+                assert phrase not in text, f"{path.name}: {phrase}"
+
+
+def test_binary_option_labels_are_only_yes_or_no() -> None:
+    source = (REPO / "scripts" / "connect_servicenow_da.py").read_text(
+        encoding="utf-8"
+    )
+    for match in re.finditer(r"option_labels=\[([^\]]*)\]", source):
+        labels = re.findall(r'"([^"]+)"', match.group(1))
+        for label in labels:
+            assert label.lower() in SHORT_LABELS, label
+    assert not re.search(r'"(?:Yes|No),\s', source)
+
+
+def test_hook_covers_every_card_tool_and_runs_the_guard() -> None:
+    hook = json.loads(
+        (REPO.parents[1] / ".github" / "hooks" / "servicenow-connect-no-cards.json")
+        .read_text(encoding="utf-8")
+    )
+    entry = hook["hooks"]["preToolUse"][0]
+    for tool in ("ask_user", "vscode_askQuestions", "AskUserQuestion"):
+        assert re.search(entry["matcher"], tool)
+    assert "servicenow_connect_card_guard.py" in entry["powershell"]
+    assert "servicenow_connect_card_guard.py" in entry["bash"]
+    assert entry["cwd"] == "solutions/ess-maker-skills"
+
+
+def test_card_guard_denies_only_while_a_lifecycle_is_active(
+    tmp_path: Path,
+) -> None:
+    import servicenow_connect_card_guard as guard
+
+    marker = tmp_path / guard.MARKER_RELATIVE
+    marker.parent.mkdir(parents=True)
+    payload = {"toolName": "ask_user", "cwd": str(tmp_path)}
+
+    marker.write_text(json.dumps({"updatedAt": 1000.0}), encoding="utf-8")
+    denied = guard.decide(payload, now=1100.0)
+    assert denied["permissionDecision"] == "deny"
+    assert "plain text" in denied["permissionDecisionReason"]
+    assert guard.decide({**payload, "toolName": "vscode_askQuestions"}, 1100.0)
+
+    stale = 1000.0 + guard.MARKER_MAX_AGE_SECONDS + 1
+    assert guard.decide(payload, now=stale) == {}
+    assert guard.decide({**payload, "toolName": "run_in_terminal"}, 1100.0) == {}
+    marker.write_text("not json", encoding="utf-8")
+    assert guard.decide(payload, now=1100.0) == {}
+
+
+def test_lifecycle_marker_is_written_per_command_and_removed_on_final(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / ".local" / "connect").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    marker = tmp_path / ".local" / "connect" / "servicenow-active.json"
+
+    snow._record_lifecycle_marker({"renderBlock": {"kind": "plan"}}, "resume-handoff")
+    assert marker.is_file()
+    snow._record_lifecycle_marker({}, "match-reply")
+    assert marker.is_file()
+    snow._record_lifecycle_marker(
+        {"renderBlock": {"kind": "final", "text": "Done."}}, "resume-handoff"
+    )
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Return here and tell us which connection you used.",
+        "Come back and tell us what happened.",
+        "Reply **Yes** or **No**.",
+        "Paste the value here.",
+        "Let us know once you have it.",
+        "Is the administrator available?",
+    ],
+)
+def test_wait_cue_always_ends_the_turn(text: str) -> None:
+    assert snow.has_wait_cue(text)
+    wrapped = snow._with_agent_rules(
+        {
+            "provider": "servicenow-da-itsm",
+            "agentSlug": "agent",
+            "ordinaryReply": {"text": text},
+            "action": {"decision": "read-action-doc", "actionDoc": "a.md"},
+        },
+        "resume-handoff",
+    )
+    assert wrapped["endTurn"] is True
+    assert "nextCommand" not in wrapped
+    assert "a.md" in wrapped["afterReply"]
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_auto_continue_lead_ins_have_no_wait_cue(
+    profile: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(snow, "ACTIVE_AGENT_NAME", "ESS Agent")
+    context = {
+        "agent": {"id": "x", "workspace_slug": "agent"},
+        "environment": {"id": "env", "display_name": "Contoso Dev"},
+    }
+    with snow.product_profile_context(profile):
+        opening = snow._dev_opening_text(context, None)
+    assert not snow.has_wait_cue(opening)
+    wrapped = snow._with_agent_rules(
+        {
+            "provider": f"servicenow-da-{profile}",
+            "agentSlug": "agent",
+            "renderBlock": {"kind": "plan", "text": opening},
+            "checkpoints": {
+                "decision": "run-exact-commands",
+                "commands": [{"command": "python scripts/flightcheck/cli.py"}],
+            },
+        },
+        "resume-handoff",
+    )
+    assert wrapped["endTurn"] is False
+    assert wrapped["nextCommand"]
+
+
+PLAIN_BLOCK = re.compile(
+    r"<!-- plain-chat-question:v1[^>]*-->\s*\*\*Message:\*\*(.*?)\*\*End message\.\*\*",
+    re.S,
+)
+
+
+@pytest.mark.parametrize("provider", ["servicenow-da-hrsd", "servicenow-da-itsm"])
+def test_every_plain_question_block_in_docs_has_a_wait_cue(provider: str) -> None:
+    blocks = 0
+    for path in (CONNECT_DOCS / provider).rglob("*.md"):
+        for match in PLAIN_BLOCK.finditer(path.read_text(encoding="utf-8")):
+            blocks += 1
+            assert snow.has_wait_cue(match.group(1)), f"{path.name}: {match.group(1)[:60]}"
+    assert blocks >= 5

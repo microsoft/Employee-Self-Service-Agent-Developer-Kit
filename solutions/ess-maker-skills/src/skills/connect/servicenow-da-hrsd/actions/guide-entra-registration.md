@@ -56,15 +56,15 @@ portal URL, agent binding, Test, Publish, lifecycle plan, or consent.
   typed reply with `match-reply`. Its body contains the exact target, source
   agent, and eligible identity items. Translate the matched label through
   `reuseDecisionChoices`.
-  - **Reuse shared identity**: run
+  - **Yes**: run
     `record-shared-reuse --source-key <internal-source-key> --decision accept`.
     This rechecks only local source hash/scope/bindings and imports only the
     listed identity evidence. It does not call Connectivity or mark the owning
     checkpoints Passed.
-  - **Configure separately**: run
+  - **No**: run
     `record-shared-reuse --source-key <internal-source-key> --decision decline`
     and continue normally.
-  - **Not now**: record nothing and return `ACTION_RESULT = "waiting"`.
+  - No answer yet: record nothing and return `ACTION_RESULT = "waiting"`.
 
 After an accepted reuse, rerun `identity-direct-handoff --stage entra`.
 If it returns `decision: no-action`, immediately return

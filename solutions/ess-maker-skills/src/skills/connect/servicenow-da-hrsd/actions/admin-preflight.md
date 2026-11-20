@@ -106,20 +106,23 @@ own version of this question or add the connection details to it.
   does not prove connection health, select/reuse a credential, create an
   instance, or bind the agent.
 
-The no-candidate/manual-URL form uses this supported shape. The runtime
-question may add the bounded discovery error; it is source data for the
-controller and is never shown as-is:
+The no-candidate/manual-URL form uses the text below. The controller adds any
+bounded discovery error and returns the final text as `plainText`; send that
+`plainText` verbatim as ordinary chat text and end your turn. Never call
+`ask_user` or any card tool.
 
-<!-- visible-handoff-question:v1 -->
-```json
-[
-  {
-    "header": "ServiceNow instance",
-    "question": "Which ServiceNow instance should {AGENT_DISPLAY_NAME} use? Send its public HTTPS URL, not credentials.\n\nExample: `https://<your-instance>.service-now.com`\n\nUse only the instance address, without a portal path such as `/sp` or `/esc`. If you don't know it, ask your ServiceNow administrator.\n\n{DISCOVERY_ERROR_IF_ANY}",
-    "allowFreeformInput": true
-  }
-]
-```
+<!-- plain-chat-question:v1 -->
+**Message:**
+
+Which ServiceNow instance should {AGENT_DISPLAY_NAME} use? Reply here in chat with its public HTTPS URL, not credentials.
+
+Example: `https://<your-instance>.service-now.com`
+
+Use only the instance address, without a portal path such as `/sp` or `/esc`. If you don't know it, ask your ServiceNow administrator.
+
+{DISCOVERY_ERROR_IF_ANY}
+
+**End message.**
 
 While that question is pending, do not return an action result. If the Maker
 is not ready to provide the URL, return `ACTION_RESULT = "waiting"`. After the

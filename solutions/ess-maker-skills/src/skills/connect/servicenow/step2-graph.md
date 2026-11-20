@@ -1,5 +1,7 @@
 # ServiceNow Step 2: Graph Connector Setup (Federated Auth)
 
+> **Retired legacy flow — not part of `/connect servicenow`.** Follow `src/skills/connect/servicenow/entry.md`; ServiceNow Connect never uses cards.
+
 **This file sets up the Microsoft 365 Graph Connector for ServiceNow
 Knowledge search using Federated Auth.** It creates the OIDC provider,
 integration user, role assignments, and table ACLs in ServiceNow.

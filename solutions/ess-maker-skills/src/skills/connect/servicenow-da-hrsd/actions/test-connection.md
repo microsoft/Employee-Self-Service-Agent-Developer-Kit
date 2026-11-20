@@ -20,24 +20,18 @@ The maker's answer to the result question decides pass, fail, or untested.
 Do not infer the outcome from a sample, an empty result, or a conversational
 reply; record only what the maker chose.
 
-Render the target link, saved-draft instruction, and privacy boundary above in the ordinary current-task reply after its controller-built lead-in, which is shown verbatim and already carries the ready message, the example request, and the finish-without-testing option. Do not restate or reword it, and do not add a "Required prompt" line. Then ask this compact result question as ordinary chat text (pass it to `adapt-question`, send the returned `plainText`, and never use `ask_user`):
+Render the target link, saved-draft instruction, and privacy boundary above in the ordinary current-task reply after its controller-built lead-in, which is shown verbatim and already carries the ready message, the example request, and the finish-without-testing option, and asks the maker to come back and say what happened. Do not restate or reword it, do not add a "Required prompt" line, and send no separate result question or card: end your turn after that reply and wait for the maker's typed answer. Only when you must ask again (after an empty result or an unclear reply), send this as ordinary chat text and end your turn. Never call `ask_user` or any card tool:
 
-<!-- visible-handoff-question:v1 -->
-```json
-[
-  {
-    "header": "Test ServiceNow HRSD",
-    "question": "What did the request return—your expected cases, an empty result, or an error? No need to share case contents.",
-    "options": [
-      { "label": "It returned the cases I expected" },
-      { "label": "It returned an empty result" },
-      { "label": "It returned an error" },
-      { "label": "Finish without testing" }
-    ],
-    "allowFreeformInput": false
-  }
-]
-```
+<!-- plain-chat-question:v1 -->
+**Message:**
+
+What did the request return—your expected cases, an empty result, or an error? No need to share case contents.
+
+You can also reply "Finish without testing".
+
+**End message.**
+
+Map the typed reply: expected cases means pass, an empty result means empty, an error means fail, and finishing without testing means untested.
 
 Record only an allowlisted prompt category and the maker's outcome.
 Never store response text, case/ticket data, URLs, identifiers, or free-form
@@ -47,10 +41,12 @@ details:
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-test --prompt-category list-my-open-hr-cases --result <pass-fail-untested-or-empty>
 ```
 
-- **It returned the cases I expected:** record `--result pass`.
-- **It returned an empty result:** run the same command with `--result empty`. Nothing is recorded and the test stays open; show the `message` field of the command output verbatim as an ordinary reply. Never record pass or fail for an empty result. The maker's next answer to the same question can still be pass, fail, or untested, so ask the result question again and return `ACTION_RESULT = "waiting"`.
-- **It returned an error:** record `--result fail` without inventing a failure category.
-- **Finish without testing:** record `--result untested`, then show the `message` field of the command output verbatim as an ordinary reply. Do not claim the integration is connected or working, do not run final validation, and do not show the final success message. The test stays open, so the next Connect run resumes at the Test-pane request. The Test step is only reached after the earlier setup steps are complete, so no setup blocker is outstanding at this point.
+The maker answers in free text. Map the typed reply (never present these as options or a card):
+
+- **Reply says the expected cases came back:** record `--result pass`.
+- **Reply says the result was empty:** run the same command with `--result empty`. Nothing is recorded and the test stays open; show the `message` field of the command output verbatim as an ordinary reply. Never record pass or fail for an empty result. The maker's next answer can still be pass, fail, or untested, so ask the result question again as plain chat text, end your turn, and return `ACTION_RESULT = "waiting"`.
+- **Reply says there was an error:** record `--result fail` without inventing a failure category.
+- **Reply says finish without testing:** record `--result untested`, then show the `message` field of the command output verbatim as an ordinary reply. Do not claim the integration is connected or working, do not run final validation, and do not show the final success message. The test stays open, so the next Connect run resumes at the Test-pane request. The Test step is only reached after the earlier setup steps are complete, so no setup blocker is outstanding at this point.
 - If the maker replies in chat with only "Done" or an unclear answer, ask the same question again and do not record evidence.
 - While the question is unanswered, the test is not performed or the maker is
   not ready, return `ACTION_RESULT = "waiting"` and do not record evidence.

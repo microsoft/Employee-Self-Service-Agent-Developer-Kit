@@ -78,7 +78,7 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
 
     assert "after rendering its declared placeholders" in normalized
     assert "Contract phase `label` values are customer-facing text" in normalized
-    assert "ordinary visible agent response before calling" in plan_normalized
+    assert "ordinary visible agent response before asking" in plan_normalized
     assert "It is a **Message**, not tool commentary or a question body" in (
         plan_normalized
     )

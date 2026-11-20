@@ -11,7 +11,11 @@ verbatim as plain chat text (never inside a code fence you add). When
 maker's typed reply arrives as the next message. When `endTurn` is false,
 the step is only a status or lead-in: right after sending `chatMessage`, run
 `nextCommand` in the same turn without waiting for the maker, and keep going
-until an output has `endTurn: true`. Never print
+until an output has `endTurn: true`. Any message that asks the maker to reply,
+paste, send, tell us, come back, or return here always has `endTurn: true`: stop
+there and, when the output has `afterReply`, follow it once the maker replies.
+A workspace hook also denies card tools while a ServiceNow flow is active, so
+a card call only wastes a turn; reply in chat instead. Never print
 controller JSON, administrator-packet labels such as "Values to use", internal
 values, or file paths to the maker.
 
@@ -690,6 +694,8 @@ We have the saved-configuration confirmation and User Claim `{CLAIM_NAME}`.
 Ask your administrator which **User Field** they selected.
 
 Send that value on its own.
+
+Reply here in chat when you have it.
 
 **End message.**
 

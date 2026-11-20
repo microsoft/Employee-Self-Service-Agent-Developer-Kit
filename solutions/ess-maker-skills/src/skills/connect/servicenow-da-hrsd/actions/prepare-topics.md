@@ -32,23 +32,19 @@ Inactive {PRODUCT_NAME} topics:
 {INACTIVE_TOPIC_NAMES}
 ```
 
-The command-generated question conforms to this visible contract:
+The command-generated question is plain chat text with exactly this wording:
 
-<!-- visible-handoff-question:v1 -->
-```json
-[
-  {
-    "header": "ServiceNow topic states",
-    "question": "Do you want to enable all listed inactive ServiceNow topics, or keep their current states? Only topics in the inventory listed above are in scope; unrelated topics remain unchanged.",
-    "options": [
-      { "label": "Enable all listed inactive ServiceNow topics" },
-      { "label": "Keep the current topic states for this configuration" },
-      { "label": "Not now, leave the phase incomplete" }
-    ],
-    "allowFreeformInput": false
-  }
-]
-```
+<!-- plain-chat-question:v1 -->
+**Message:**
+
+Do you want to turn on all listed inactive ServiceNow topics? Reply No to keep their current states. Only topics in the inventory listed above are in scope; unrelated topics remain unchanged.
+
+Reply **Yes** or **No**.
+
+**End message.**
+
+Send it as ordinary chat text (never a card or input component) and end your
+turn.
 
 [Open Employee Self-Service (HR) in Copilot Studio]({COPILOT_STUDIO_AGENT_URL})
 
@@ -60,12 +56,10 @@ the lifecycle runner.
 Absence of an answer is not cancellation.
 While the question is pending, preserve the historical action and transaction
 state.
-- If the maker replies that they want to keep the current topic states
-  (**Keep the current topic states for this
-  configuration**), run
+- If the maker replies No, to keep the current topic states, run
   `python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-topic-choice --choice keep-current`
   and set `ACTION_RESULT = "applied"`.
-- If the maker replies to enable them (**Enable all listed inactive ServiceNow topics**), run
+- If the maker replies Yes, to enable them, run
   `python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} enable-all-topics --yes`. Set
   `ACTION_RESULT = "applied"` only when the command reports
   `transactionStatus: "committed"` or `status: "already-active"`.
@@ -84,6 +78,6 @@ state.
   `actionApplied = false`, and stop so a later invocation uses a fresh gate and
   transaction. A later invocation that freshly observes all topics Active
   follows the no-mutation path above and must not repeat the confirmed update.
-- Set `ACTION_RESULT = "cancelled"` only if the maker explicitly replies
-  **Not now, leave the phase incomplete**. Do not interpret a pending or
+- Set `ACTION_RESULT = "cancelled"` only if the maker explicitly asks to stop
+  or leave the phase incomplete. Do not interpret a pending or
   unanswered question as cancellation.

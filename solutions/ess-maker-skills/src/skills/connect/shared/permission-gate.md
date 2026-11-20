@@ -96,6 +96,10 @@ recording `note` = the query error.
 Use when `GATE_MODE` is `"attested"` (Workday Administrator, InfoSec/IT), or as
 the fallback when a programmatic query errored.
 
+**ServiceNow override:** ServiceNow Connect (HR and IT) never reaches this
+section and never uses a card tool. Its role confirmations are plain chat
+questions returned by the controller as `chatMessage` (reply Yes or No).
+
 Use the `vscode_askQuestions` tool. Do not rely on a preceding Message block;
 the question body itself contains the role requirement and why confirmation
 is needed:

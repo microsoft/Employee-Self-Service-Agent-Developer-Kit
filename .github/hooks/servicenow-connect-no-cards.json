@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "matcher": "ask_user|vscode_askQuestions|AskUserQuestion|askQuestions",
+        "powershell": "try { if (Get-Command py -ErrorAction SilentlyContinue) { py -3 scripts/servicenow_connect_card_guard.py } else { python scripts/servicenow_connect_card_guard.py } } catch { '{}' }; exit 0",
+        "bash": "(python3 scripts/servicenow_connect_card_guard.py || python scripts/servicenow_connect_card_guard.py || echo '{}'); exit 0",
+        "cwd": "solutions/ess-maker-skills",
+        "timeoutSec": 15
+      }
+    ]
+  }
+}

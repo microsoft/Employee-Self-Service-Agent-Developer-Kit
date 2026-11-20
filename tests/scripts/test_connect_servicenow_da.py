@@ -2623,11 +2623,12 @@ def test_generated_question_families_have_distinct_headers_and_bodies() -> None:
         ), family
         options = question.get("options")
         if options:
-            assert all(
-                option["label"].strip()
-                and option["label"].casefold() not in {"yes", "no"}
-                for option in options
-            ), family
+            assert all(option["label"].strip() for option in options), family
+            if len(options) == 2:
+                assert [option["label"] for option in options] == [
+                    "Yes",
+                    "No",
+                ], family
         else:
             assert question["allowFreeformInput"] is True, family
         adapted = snow.adapt_question_to_plain_text(question)
@@ -4532,8 +4533,8 @@ def test_preflight_requires_maker_confirmation_for_single_candidate(
         "https://dev123.service-now.com"
     ]
     assert discovery["instanceQuestion"]["options"] == [
-        {"label": "Yes, use dev123"},
-        {"label": "No, use a different instance"},
+        {"label": "Yes"},
+        {"label": "No"},
     ]
     candidate_body = discovery["instanceQuestion"]["question"]
     assert candidate_body == (
@@ -4554,15 +4555,15 @@ def test_preflight_requires_maker_confirmation_for_single_candidate(
     assert "/sp" in manual["question"]
     assert "not credentials" in manual["question"]
     assert discovery["instanceChoices"][
-        "Yes, use dev123"
+        "Yes"
     ] == "https://dev123.service-now.com"
     assert discovery["instanceChoices"][
-        "No, use a different instance"
+        "No"
     ] == "manual"
     recorded = snow.record_preflight_instance(
         _context(),
         instance_url=discovery["instanceChoices"][
-            "Yes, use dev123"
+            "Yes"
         ],
     )
     refreshed = snow.inspect_admin_setup(_context())
@@ -4667,21 +4668,21 @@ def test_preflight_multiple_candidates_are_independent_normal_choices(
         )
 
     assert [option["label"] for option in question["options"]] == [
-        "Use dev111",
-        "Use dev222",
-        "Provide another ServiceNow instance URL",
+        "dev111",
+        "dev222",
+        "Another",
     ]
     assert not any(
         option.get("recommended") for option in question["options"]
     )
     assert choices == {
-        "Use dev111": (
+        "dev111": (
             "https://dev111.service-now.com"
         ),
-        "Use dev222": (
+        "dev222": (
             "https://dev222.service-now.com"
         ),
-        "Provide another ServiceNow instance URL": "manual",
+        "Another": "manual",
     }
     assert display_name.replace("(", "").replace(")", "") in (
         question["question"]
@@ -5125,18 +5126,13 @@ def test_shared_reuse_partial_hr_to_it_requires_one_maker_acceptance(
             "servicenow-oidc",
         ]
         assert handoff["question"]["options"] == [
-            {"label": "Reuse shared identity"},
-            {"label": "Configure separately"},
-            {"label": "Not now"},
+            {"label": "Yes"},
+            {"label": "No"},
         ]
         assert handoff["question"]["header"] == "Reuse shared identity"
         assert handoff["reuseDecisionChoices"] == [
-            {
-                "label": "Reuse shared identity",
-                "decision": "accept",
-            },
-            {"label": "Configure separately", "decision": "decline"},
-            {"label": "Not now", "decision": "not-now"},
+            {"label": "Yes", "decision": "accept"},
+            {"label": "No", "decision": "decline"},
         ]
         body = handoff["question"]["question"]
         assert "ServiceNow instance dev123" in body
@@ -6241,9 +6237,8 @@ def test_saved_portal_value_persists_and_reloads_for_future_agent(
         "https://dev123.service-now.com/employee"
     )
     assert offer["question"]["options"] == [
-        {"label": "Reuse saved portal URL"},
-        {"label": "Enter separately"},
-        {"label": "Not now"},
+        {"label": "Yes"},
+        {"label": "No"},
     ]
     assert accepted["decision"] == "accepted"
     assert resumed["decision"] == "already-recorded"
@@ -6611,7 +6606,7 @@ def test_local_confirmed_instance_is_preflight_candidate_only(
         "https://dev123.service-now.com"
     ]
     assert discovery["instanceChoices"][
-        "Yes, use dev123"
+        "Yes"
     ] == "https://dev123.service-now.com"
     saved = json.loads(target_path.read_text(encoding="utf-8"))
     assert saved["adminSetup"]["preflight"].get("instanceName") is None
@@ -7534,11 +7529,11 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     assert gated["ordinaryReply"] is None
     assert gated["questions"] == []
     assert gated["availability"]["question"]["question"] == (
-        "Is your Microsoft Entra administrator available to complete this step?"
+        "Is your Microsoft Entra administrator available now to complete this step?"
     )
     gated_plain = gated["availability"]["plainText"]
     assert gated_plain == (
-        "Is your Microsoft Entra administrator available to complete this step?"
+        "Is your Microsoft Entra administrator available now to complete this step?"
         "\n\nReply **Yes** or **No**."
     )
     assert "askUserArguments" not in gated["availability"]
@@ -10350,8 +10345,8 @@ def test_test_connection_docs_hr_and_it_are_identical_except_domain_nouns() -> N
 
 
 PORTAL_CONFIRMATION_OPTIONS = [
-    {"label": "Yes, that's the portal URL"},
-    {"label": "No, use a different URL"},
+    {"label": "Yes"},
+    {"label": "No"},
 ]
 
 
@@ -10503,8 +10498,9 @@ def test_portal_url_docs_require_confirmation_before_save_hr_and_it() -> None:
     for text in docs.values():
         assert "portal-url-confirmation --portal-url" in text
         assert "Is **{NORMALIZED_PORTAL_URL}** the employee portal URL?" in text
-        assert "Yes, that's the portal URL" in text
-        assert "No, use a different URL" in text
+        assert 'the choices are "Yes" and "No"' in " ".join(text.split())
+        assert "Yes, that's the portal URL" not in text
+        assert "No, use a different URL" not in text
         assert "Nothing is saved before the Maker replies **Yes**." in text
         assert text.index("portal-url-confirmation --portal-url") < text.index(
             "set-portal-url --portal-url"
@@ -12561,13 +12557,8 @@ def test_topic_action_handoff_returns_complete_it_question(
         "allowFreeformInput",
     }
     assert result["question"]["options"] == [
-        {"label": "Enable all listed inactive ServiceNow topics"},
-        {
-            "label": (
-                "Keep the current topic states for this configuration"
-            )
-        },
-        {"label": "Not now, leave the phase incomplete"},
+        {"label": "Yes"},
+        {"label": "No"},
     ]
     assert "choices" not in result["question"]
     question = result["question"]["question"]
@@ -12578,7 +12569,7 @@ def test_topic_action_handoff_returns_complete_it_question(
     for technical in ("Selected agent:", "Environment:", "Component hash"):
         assert technical not in reply
     assert result["componentHash"]
-    assert "Do you want to enable all listed inactive" in question
+    assert "Do you want to turn on all listed inactive" in question
     assert "ServiceNowITSMSystemReadExecution" not in question
     for instruction in (
         "Purpose:",
@@ -12661,22 +12652,18 @@ def test_topic_action_handoff_has_hr_parity(
         assert technical not in reply
     assert result["componentHash"]
     assert question == (
-        "Do you want to enable all listed inactive ServiceNow topics, or "
-        "keep their current states? Only topics in the inventory listed "
-        "above are in scope; unrelated topics remain unchanged."
+        "Do you want to turn on all listed inactive ServiceNow topics? "
+        "Reply No to keep their current states. Only topics in the "
+        "inventory listed above are in scope; unrelated topics remain "
+        "unchanged."
     )
     assert "Selected agent:" not in question
     assert "Current topic inventory:" not in question
     assert "Inactive ServiceNow HRSD topics" not in question
     assert result["question"]["header"] == "ServiceNow topic states"
     assert result["question"]["options"] == [
-        {"label": "Enable all listed inactive ServiceNow topics"},
-        {
-            "label": (
-                "Keep the current topic states for this configuration"
-            )
-        },
-        {"label": "Not now, leave the phase incomplete"},
+        {"label": "Yes"},
+        {"label": "No"},
     ]
     assert "Purpose:" not in question
     assert "Owner:" not in question
@@ -14033,10 +14020,7 @@ def test_resume_handoff_cli_jit_group_no_is_byte_stable(
     assert "options" not in question
     assert [
         choice["label"] for choice in question["choices"]
-    ] == [
-        "Yes, the ServiceNow admin is available now",
-        "No, I need to bring the ServiceNow admin in",
-    ]
+    ] == ["Yes", "No"]
     assert question["plainText"].endswith("Reply **Yes** or **No**.")
 
     command = [
@@ -14242,19 +14226,19 @@ def test_business_group_question_is_just_in_time_after_preflight(
     expected_questions = {
         "hr-prerequisite": {
             "header": "HR prerequisite",
-            "question": "Is your ServiceNow administrator available to complete this step?",
+            "question": "Is your ServiceNow administrator available now to complete this step?",
             "options": [
-                {"label": "Yes, the ServiceNow admin is available now"},
-                {"label": "No, I need to bring the ServiceNow admin in"},
+                {"label": "Yes"},
+                {"label": "No"},
             ],
             "allowFreeformInput": False,
         },
         "entra-identity": {
             "header": "Entra identity",
-            "question": "Is your Microsoft Entra administrator available to complete this step?",
+            "question": "Is your Microsoft Entra administrator available now to complete this step?",
             "options": [
-                {"label": "Yes, the Entra admin is available now"},
-                {"label": "No, I need to bring the Entra admin in"},
+                {"label": "Yes"},
+                {"label": "No"},
             ],
             "allowFreeformInput": False,
         },
@@ -14515,22 +14499,10 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
         assert sso["question"] == {
             "header": "ServiceNow SSO and user mapping",
             "question": (
-                "Is the ServiceNow admin with security_admin available now?"
+                "Is the ServiceNow administrator who can manage security "
+                "settings available now to complete this step?"
             ),
-            "options": [
-                {
-                    "label": (
-                        "Yes, the ServiceNow admin with security_admin is "
-                        "available now"
-                    )
-                },
-                {
-                    "label": (
-                        "No, I need to bring the ServiceNow admin with "
-                        "security_admin in"
-                    )
-                },
-            ],
+            "options": [{"label": "Yes"}, {"label": "No"}],
             "allowFreeformInput": False,
         }
         sso_yes = snow.resume_handoff(
@@ -14574,12 +14546,9 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             "header": "Maker configuration and validation",
             "question": (
                 "Are you available, with the ESS Maker / Agent Developer "
-                "role, to complete this step?"
+                "role, to complete this step now?"
             ),
-            "options": [
-                {"label": "Yes, the Maker is available now"},
-                {"label": "No, I need to bring the Maker in"},
-            ],
+            "options": [{"label": "Yes"}, {"label": "No"}],
             "allowFreeformInput": False,
         }
         maker_yes = snow.resume_handoff(
@@ -14638,7 +14607,7 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
 
 MAKER_ROLE_QUESTION = (
     "Are you available, with the ESS Maker / Agent Developer role, to "
-    "complete this step?"
+    "complete this step now?"
 )
 
 
@@ -15236,7 +15205,7 @@ def test_agent_chooser_lists_prepared_agents_without_remote_discovery(
         "selectionKey": f"prepared:{AGENT_ID}",
     }
     assert result["question"]["options"][-1] == {
-        "label": "Use another agent (paste link)",
+        "label": "Another agent",
         "selectionKey": "another-agent",
     }
     selected = snow.agent_chooser_handoff(
@@ -15304,7 +15273,7 @@ def test_agent_chooser_offers_link_when_no_agent_is_prepared(
     assert result["agents"] == []
     assert result["question"]["options"] == [
         {
-            "label": "Use another agent (paste link)",
+            "label": "Another agent",
             "selectionKey": "another-agent",
         }
     ]

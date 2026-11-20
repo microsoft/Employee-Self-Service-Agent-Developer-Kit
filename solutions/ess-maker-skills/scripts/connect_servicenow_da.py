@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -1197,7 +1198,8 @@ def _identity_runtime_instruction_source(
 
 SERVICENOW_USER_FIELD_TEXT_QUESTION = (
     "Ask your administrator which **User Field** they selected.\n\n"
-    "Send that value on its own."
+    "Send that value on its own.\n\n"
+    "Reply here in chat when you have it."
 )
 
 
@@ -3603,7 +3605,7 @@ def agent_chooser_handoff(
     ]
     options.append(
         {
-            "label": "Use another agent (paste link)",
+            "label": "Another agent",
             "selectionKey": "another-agent",
         }
     )
@@ -6081,8 +6083,8 @@ def _preflight_instance_question(
         if single:
             origin = f"https://{candidates[0]}.service-now.com"
             choices = {
-                f"Yes, use {candidates[0]}": origin,
-                "No, use a different instance": "manual",
+                "Yes": origin,
+                "No": "manual",
             }
             intro = (
                 f"Which ServiceNow instance should {agent_label} use? We "
@@ -6091,10 +6093,10 @@ def _preflight_instance_question(
             )
         else:
             choices = {
-                f"Use {candidate}": f"https://{candidate}.service-now.com"
+                candidate: f"https://{candidate}.service-now.com"
                 for candidate in candidates
             }
-            choices["Provide another ServiceNow instance URL"] = "manual"
+            choices["Another"] = "manual"
             intro = (
                 f"Which ServiceNow instance should {agent_label} use? We "
                 "found these instances in your existing connections."
@@ -6533,11 +6535,7 @@ def portal_value_reuse_handoff(
     if source_key is None and len(candidates) > 1:
         choices = [
             {
-                "label": (
-                    f"Use {candidate['portalUrl']} "
-                    f"({len(candidate['sources'])} saved source"
-                    f"{'s' if len(candidate['sources']) != 1 else ''})"
-                ),
+                "label": candidate["portalUrl"],
                 "sourceKey": candidate["sourceKey"],
             }
             for candidate in candidates
@@ -6577,9 +6575,8 @@ def portal_value_reuse_handoff(
             "The selected saved portal URL source is stale or unavailable."
         )
     decision_choices = [
-        {"label": "Reuse saved portal URL", "decision": "accept"},
-        {"label": "Enter separately", "decision": "decline"},
-        {"label": "Not now", "decision": "not-now"},
+        {"label": "Yes", "decision": "accept"},
+        {"label": "No", "decision": "decline"},
     ]
     return {
         "schemaVersion": "servicenow.portal-value-reuse.v1",
@@ -6594,7 +6591,8 @@ def portal_value_reuse_handoff(
                 f"{selected['portalUrl']} "
                 f"(from {', '.join(selected['sourceLabels'])}).\n\n"
                 "Do you want to reuse it for this agent? We'll still check "
-                "and update this agent's own portal setting if needed."
+                "and update this agent's own portal setting if needed. "
+                "Reply No to enter a different URL."
             ),
             "options": [
                 {"label": choice["label"]} for choice in decision_choices
@@ -7093,8 +7091,7 @@ def shared_reuse_handoff(
                     "sourceKey": candidate["sourceKey"],
                     "label": (
                         f"{candidate['sourceProfile'].upper()} "
-                        f"{candidate['sourceAgentSlug']} "
-                        f"({len(candidate['items'])} reusable items)"
+                        f"{candidate['sourceAgentSlug']}"
                     ),
                     "items": copy.deepcopy(candidate["items"]),
                 }
@@ -7125,16 +7122,12 @@ def shared_reuse_handoff(
     )
     decision_choices = [
         {
-            "label": "Reuse shared identity",
+            "label": "Yes",
             "decision": "accept",
         },
         {
-            "label": "Configure separately",
+            "label": "No",
             "decision": "decline",
-        },
-        {
-            "label": "Not now",
-            "decision": "not-now",
         },
     ]
     return {
@@ -7152,7 +7145,8 @@ def shared_reuse_handoff(
                 f"reuse these items:\n\n{item_lines}\n\n"
                 "Reuse avoids repeating compatible administrator setup, but "
                 "we'll still check this agent's own setup.\n\n"
-                "What would you like to do?"
+                "Do you want to reuse it? Reply No to configure this agent "
+                "separately."
             ),
             "options": [
                 {"label": choice["label"]}
@@ -9329,8 +9323,8 @@ def portal_url_confirmation(
         "header": "Confirm employee portal URL",
         "question": f"Is **{normalized_url}** the employee portal URL?",
         "options": [
-            {"label": "Yes, that's the portal URL"},
-            {"label": "No, use a different URL"},
+            {"label": "Yes"},
+            {"label": "No"},
         ],
         "allowFreeformInput": False,
         "savedMessage": (
@@ -9941,9 +9935,10 @@ def topic_action_handoff(
         + "\n".join(f"- {name}" for name in inactive_names)
     )
     question = (
-        "Do you want to enable all listed inactive ServiceNow topics, or "
-        "keep their current states? Only topics in the inventory listed "
-        "above are in scope; unrelated topics remain unchanged."
+        "Do you want to turn on all listed inactive ServiceNow topics? "
+        "Reply No to keep their current states. Only topics in the "
+        "inventory listed above are in scope; unrelated topics remain "
+        "unchanged."
     )
     return {
         **base,
@@ -9953,11 +9948,7 @@ def topic_action_handoff(
         "question": _native_question(
             header="ServiceNow topic states",
             question=question,
-            option_labels=[
-                "Enable all listed inactive ServiceNow topics",
-                "Keep the current topic states for this configuration",
-                "Not now, leave the phase incomplete",
-            ],
+            option_labels=["Yes", "No"],
         ),
     }
 
@@ -10473,35 +10464,22 @@ def _business_group_availability_question(
 ) -> dict[str, Any]:
     copy_by_group = {
         "hr-prerequisite": {
-            "question": "Is your ServiceNow administrator available to complete this step?",
-            "yes": "Yes, the ServiceNow admin is available now",
-            "no": "No, I need to bring the ServiceNow admin in",
+            "question": "Is your ServiceNow administrator available now to complete this step?",
         },
         "entra-identity": {
-            "question": "Is your Microsoft Entra administrator available to complete this step?",
-            "yes": "Yes, the Entra admin is available now",
-            "no": "No, I need to bring the Entra admin in",
+            "question": "Is your Microsoft Entra administrator available now to complete this step?",
         },
         "servicenow-sso": {
             "question": (
-                "Is the ServiceNow admin with security_admin available now?"
-            ),
-            "yes": (
-                "Yes, the ServiceNow admin with security_admin is available "
-                "now"
-            ),
-            "no": (
-                "No, I need to bring the ServiceNow admin with "
-                "security_admin in"
+                "Is the ServiceNow administrator who can manage security "
+                "settings available now to complete this step?"
             ),
         },
         "maker-configuration": {
             "question": (
                 "Are you available, with the ESS Maker / Agent Developer "
-                "role, to complete this step?"
+                "role, to complete this step now?"
             ),
-            "yes": "Yes, the Maker is available now",
-            "no": "No, I need to bring the Maker in",
         },
     }
     configured = copy_by_group.get(str(group.get("id") or ""))
@@ -10512,7 +10490,7 @@ def _business_group_availability_question(
     return _native_question(
         header=str(group.get("label") or ""),
         question=configured["question"],
-        option_labels=[configured["yes"], configured["no"]],
+        option_labels=["Yes", "No"],
     )
 
 
@@ -13821,8 +13799,11 @@ AGENT_RULES = (
     "When chatMessage is present, send it verbatim as plain Markdown (no "
     "code fence around it unless it already has one). Do not add, reword, "
     "or turn any part of it into a card. If endTurn is true, END YOUR TURN "
-    "after sending it: a question or wait is pending and the maker's typed "
-    "reply arrives as the next message. If endTurn is false, do NOT stop and "
+    "after sending it: a question or wait is pending (the message asks the "
+    "maker to reply, return, paste, send or do something) and the maker's "
+    "typed reply arrives as the next message; never read the next document "
+    "or run another command before that reply. If afterReply is present, "
+    "follow it once the maker replies. If endTurn is false, do NOT stop and "
     "do NOT wait for the maker: right after sending chatMessage, run "
     "nextCommand in the same turn and continue the flow.",
     "Run every command with the launcher resolved by /setup (py -3, "
@@ -13895,11 +13876,25 @@ def _chat_message(result: dict[str, Any]) -> str:
 
 _WAIT_RENDER_KINDS = frozenset({"waiting", "error", "final", "realm-step"})
 _WAIT_STATUS_MARKERS = ("-required", "maker-action", "input-required")
+# Wording that asks the maker to act or answer: the turn must end there.
+WAIT_CUE_PATTERN = re.compile(
+    r"return here|come back|tell us|let us know|\breplies\b|\breply\b|"
+    r"\bpaste\b|please send|\bsend (?:back|them|us|it|that|this|the)\b|"
+    r"once you have|when you have|when they|\?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def has_wait_cue(text: str) -> bool:
+    """True when maker-facing text asks the maker to reply or act."""
+    return bool(WAIT_CUE_PATTERN.search(text or ""))
 
 
 def _output_waits_for_maker(result: dict[str, Any], command: str | None) -> bool:
     """True when the maker must reply or act outside chat before the flow moves."""
     if result.get("status") == "error" or command in REALM_COMMANDS:
+        return True
+    if has_wait_cue(_chat_message(result)):
         return True
     if _first_pending_plain_text(result) or result.get("pendingInput"):
         return True
@@ -13979,6 +13974,17 @@ def _with_agent_rules(
         ordered["chatMessage"] = chat_message
         if _output_waits_for_maker(result, command):
             ordered["endTurn"] = True
+            action = result.get("action")
+            if (
+                isinstance(action, dict)
+                and action.get("actionDoc")
+                and not _first_pending_plain_text(result)
+            ):
+                ordered["afterReply"] = (
+                    f"When the maker replies, read {action['actionDoc']} and "
+                    "continue from its step that follows the maker's reply. "
+                    "Do not repeat or reword the message above."
+                )
         else:
             ordered["endTurn"] = False
             ordered["nextCommand"] = _next_command(result, command, args)
@@ -13989,6 +13995,39 @@ def _with_agent_rules(
         if key not in ordered:
             ordered[key] = value
     return ordered
+
+
+ACTIVE_LIFECYCLE_MARKER = Path(".local/connect/servicenow-active.json")
+
+
+def _record_lifecycle_marker(result: Any, command: str | None) -> None:
+    """Tell the workspace card guard that a ServiceNow Connect flow is live.
+
+    The marker is best effort and never affects the controller output. It is
+    removed when the flow reports its final completion.
+    """
+    if command in {"adapt-question", "match-reply"}:
+        return
+    try:
+        if not ACTIVE_LIFECYCLE_MARKER.parent.parent.is_dir():
+            return
+        render_block = result.get("renderBlock") if isinstance(result, dict) else None
+        if isinstance(render_block, dict) and render_block.get("kind") == "final":
+            ACTIVE_LIFECYCLE_MARKER.unlink(missing_ok=True)
+            return
+        ACTIVE_LIFECYCLE_MARKER.parent.mkdir(parents=True, exist_ok=True)
+        ACTIVE_LIFECYCLE_MARKER.write_text(
+            json.dumps(
+                {
+                    "schema": "servicenow.connect-active.v1",
+                    "provider": ACTIVE_PROFILE.key,
+                    "updatedAt": time.time(),
+                }
+            ),
+            encoding="utf-8",
+        )
+    except OSError:
+        return
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -14293,6 +14332,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         if details:
             error["details"] = details
+        _record_lifecycle_marker(error, args.command)
         print(
             json.dumps(
                 _with_agent_rules(plain_text_output(error), None, args),
@@ -14300,6 +14340,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 1
+    _record_lifecycle_marker(result, args.command)
     print(
         json.dumps(
             _with_agent_rules(plain_text_output(result), args.command, args),

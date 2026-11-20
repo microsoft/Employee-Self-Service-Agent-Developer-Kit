@@ -4,7 +4,10 @@
 any input, selection, or confirmation card here. Send each command's
 `chatMessage` verbatim as plain chat text. When `endTurn` is true, end your turn;
 the maker's typed reply is the next message. When it is false, run `nextCommand`
-right away in the same turn.
+right away in the same turn. A message that asks the maker to reply, paste,
+send, tell us, come back, or return here always has `endTurn: true`; follow
+`afterReply` when the maker answers. A workspace hook denies card tools while a
+ServiceNow flow is active.
 
 Read this when the maker says the ESS agent was promoted to Test or
 Production, chooses to configure Test or Production, or pastes a Test or

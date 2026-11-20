@@ -32,14 +32,14 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-sl
 - `question-required`: send the returned question's `plainText` verbatim as
   ordinary chat text and map the typed reply with `match-reply`. Translate the
   answer through `portalDecisionChoices`.
-  - **Reuse saved portal URL**: run
+  - **Yes**: run
     `record-portal-reuse --source-key <internal-source-key> --decision accept`,
     then pass the returned `portalUrl` directly to the guarded
     `set-portal-url` command. Never ask the Maker to type it.
-  - **Enter separately**: run
+  - **No**: run
     `record-portal-reuse --source-key <internal-source-key> --decision decline`
     and continue to the manual question.
-  - **Not now**: record nothing and return `ACTION_RESULT = "waiting"`.
+  - No answer yet: record nothing and return `ACTION_RESULT = "waiting"`.
 
 Candidate discovery and decision recording do not complete the phase or copy
 the source topic ID, binding, phase result, or readback. The current agent must
@@ -64,19 +64,18 @@ Next, we'll make sure the agent's HR case links open in the right employee porta
 
 **End message.**
 
-Send the question below as an ordinary chat message (never `ask_user`) and
-wait for the typed URL:
+Send the question below as ordinary chat text and end your turn. Never call
+`ask_user` or any card tool: the maker answers by typing in chat, and a hook
+blocks card tools during this flow.
 
-<!-- visible-handoff-question:v1 -->
-```json
-[
-  {
-    "header": "ServiceNow employee portal",
-    "question": "What is the full HTTPS base URL of your ServiceNow employee portal? It may differ from the instance URL, so we won't assume `/sp` or `/esc`.",
-    "allowFreeformInput": true
-  }
-]
-```
+<!-- plain-chat-question:v1 -->
+**Message:**
+
+What is the full HTTPS base URL of your ServiceNow employee portal? It may differ from the instance URL, so we won't assume `/sp` or `/esc`.
+
+Reply here in chat with the URL.
+
+**End message.**
 
 Validate that the answer:
 
@@ -95,11 +94,11 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-sl
 Send the returned question's `plainText` verbatim as chat text and map the
 typed reply with `match-reply`; it is a Yes or No question.
 The question is "Is **{NORMALIZED_PORTAL_URL}** the employee portal URL?" and
-the choices are "Yes, that's the portal URL" and "No, use a different URL".
-A pasted new URL in the reply also means "use a different URL".
-- **No, use a different URL**: save nothing and ask the URL question above
+the choices are "Yes" and "No". The question text carries the context.
+A pasted new URL in the reply also means "No".
+- **No**: save nothing and ask the URL question above
   again.
-- **Yes, that's the portal URL**: show the returned `savedMessage` verbatim
+- **Yes**: show the returned `savedMessage` verbatim
   ("We'll save that portal URL."). Do not announce topic changes in this step;
   topics were handled in the earlier Topics step. Then run:
 
@@ -129,26 +128,22 @@ fallback in the ordinary current-task reply:
 4. Set `To` to the exact administrator-confirmed URL `{PORTAL_URL}`.
 5. Save the topic without publishing.
 
-Then use the compact completion confirmation below. Pass it to
-`adapt-question` on stdin and send the returned `plainText` as ordinary chat
-text (never `ask_user`); map the typed reply with `match-reply`:
+Then use the compact completion confirmation below. Send it as ordinary chat
+text (never `ask_user` or any card tool), end your turn, and map the typed
+reply: Yes means saved, No means not yet.
 
-<!-- visible-handoff-question:v1-manual-fallback -->
-```json
-[
-  {
-    "header": "Save portal Base URI manually",
-    "question": "We couldn't update the portal URL automatically, so it needs to be set in Copilot Studio. Is `{PORTAL_URL}` now saved in the target topic?\n\nYou don't need to publish. A reply that it is saved triggers one fresh read-only verification.",
-    "options": [
-      { "label": "Completed, the exact portal URL is saved" },
-      { "label": "Not yet, the portal URL is not saved" }
-    ],
-    "allowFreeformInput": false
-  }
-]
-```
+<!-- plain-chat-question:v1-manual-fallback -->
+**Message:**
 
-After **Completed, the exact portal URL is saved**, run:
+We couldn't update the portal URL automatically, so it needs to be set in Copilot Studio. Is `{PORTAL_URL}` now saved in the target topic?
+
+You don't need to publish. A reply that it is saved triggers one fresh read-only verification.
+
+Reply **Yes** or **No**.
+
+**End message.**
+
+After the maker replies **Yes**, run:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} inspect-portal-url --expected-portal-url <full-url>

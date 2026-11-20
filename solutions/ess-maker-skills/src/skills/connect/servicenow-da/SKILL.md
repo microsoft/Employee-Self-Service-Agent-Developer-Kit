@@ -15,7 +15,7 @@ Pass the exact returned `question` through the plain-text adapter
 message; never call `ask_user` or show a selection card. Wait for the maker's
 typed reply and map it with `match-reply` (a number or the agent's name selects
 that option). If the maker replies with a Copilot Studio link instead, treat it
-as **Use another agent (paste link)** with that link. Its prepared-agent choices come only from
+as **Another agent** with that link. Its prepared-agent choices come only from
 canonical HR/IT setup entries for the current bound workspace environment.
 Each option is labeled with the agent's recorded Copilot Studio display name
 only (no product suffix, ID, link, or slug); a product name or ordinal is added
@@ -45,7 +45,7 @@ invocation and continue to its normal provider lifecycle. Fresh supported
 identity and lifecycle checks still apply; local preparation is not remote
 success evidence.
 
-For **Use another agent (paste link)**, the selection-key command returns one
+For **Another agent**, the selection-key command returns one
 focused freeform question. Send it as plain chat text exactly. After the maker pastes the full
 Copilot Studio link, run:
 

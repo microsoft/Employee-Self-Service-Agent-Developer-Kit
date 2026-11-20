@@ -108,23 +108,13 @@ with a controller-built lead-in (it names the saved User Claim and User Field
 only when both are recorded) and ends with a controller-built closing line;
 show both verbatim. The closing line already asks the Maker to reply with the
 connection they used, so send no separate question and no input or selection
-component. The block below is the canonical decision source for the
-controller only; it is never shown to the Maker:
-
-<!-- visible-handoff-question:v1 -->
-```json
-[
-  {
-    "header": "ServiceNow connection",
-    "question": "Did you create the connection, and does Copilot Studio show it as Connected for this agent? If you reply in chat instead, name the connection you used, for example: \"I created {CONNECTION_DISPLAY_NAME}. Copilot Studio shows Connected.\"\n\nA reply that it is created and Connected triggers one fresh connection check and one check of the agent's saved settings. The name is optional guidance and is not a readiness gate.",
-    "options": [
-      { "label": "Completed, the connection is created and shows Connected" },
-      { "label": "Not yet, the connection is not ready" }
-    ],
-    "allowFreeformInput": false
-  }
-]
-```
+component. The connection check below is plain chat text only; never a card or input
+component. Its text is the controller's closing line (shown verbatim), which
+already asks the Maker to reply with the connection they used. Send no separate
+question and end your turn after it. For your own mapping, a reply that the
+connection is created and shows Connected means completed; a reply that it is
+not ready means not yet. The name is optional guidance and is not a readiness
+gate.
 
 After a reply that says the connection is created and shows Connected, run:
 
@@ -173,22 +163,22 @@ question below to `adapt-question` on stdin, send the returned `plainText` as
 ordinary chat text (never `ask_user`), and map the typed reply with
 `match-reply`.
 
-<!-- visible-handoff-question:v1-select-credential -->
-```json
-[
-  {
-    "header": "Choose ServiceNow connection",
-    "question": "Fresh read-only inventory found multiple healthy exact ServiceNow connections in this environment. Each already uses Microsoft Entra ID User Login with the required Resource URI and Instance Name.\n\nChoose the connection to use for this agent. No new connection will be created. Make sure this agent's Connection Settings use the same connection.",
-    "options": [
-      { "label": "{CANDIDATE_LABEL_1}" },
-      { "label": "{CANDIDATE_LABEL_2}" }
-    ],
-    "allowFreeformInput": false
-  }
-]
-```
+<!-- plain-chat-question:v1-select-credential -->
+**Message:**
 
-Replace the example choices with exactly one per returned candidate.
+Fresh read-only inventory found multiple healthy exact ServiceNow connections in this environment. Each already uses Microsoft Entra ID User Login with the required Resource URI and Instance Name.
+
+Choose the connection to use for this agent. No new connection will be created. Make sure this agent's Connection Settings use the same connection.
+
+1. {CANDIDATE_LABEL_1}
+2. {CANDIDATE_LABEL_2}
+
+Reply with the number or the name of the connection.
+
+**End message.**
+
+Replace the example choices with exactly one numbered line per returned
+candidate, then end your turn.
 Map the selected label to its returned `selectionKey`, then run:
 
 ```text

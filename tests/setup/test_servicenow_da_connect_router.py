@@ -783,13 +783,10 @@ def test_servicenow_dev_phase_order_and_binding_intros_are_explicit() -> None:
         assert "does not enable ServiceNow topics before this check passes" in skill
         assert "After the connection check passes, Connect reads the topic" in skill
         assert "After topic and portal configuration is complete" in skill
-        visible_question = credential.split(
-            "<!-- visible-handoff-question:v1 -->",
-            1,
-        )[1]
-        assert visible_question.index("Did you create the connection") > 0
-        assert "Required connection match" not in visible_question
-        assert "is not a readiness gate" in visible_question
+        credential_normalized = " ".join(credential.split())
+        assert "is not a readiness gate" in credential_normalized
+        assert "send no separate question" in credential_normalized.lower()
+        assert "visible-handoff-question" not in credential
         assert "conditional\nremediation, not an observed current error" in (
             credential
         )
@@ -880,12 +877,12 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "--details" not in test
     assert "save the current authored draft" in test
     assert "selected ServiceNow connection" in test
-    assert '"label": "It returned the cases I expected"' in test
-    assert '"label": "It returned an empty result"' in test
-    assert '"label": "It returned an error"' in test
+    assert "expected {records}" in test or "expected cases" in test
+    assert "an empty result, or an error" in test
+    assert '"label"' not in test
     assert "empty result or an error" not in test
     assert "`--result empty`" in test
-    assert '"label": "Finish without testing"' in test
+    assert "Finish without testing" in test
     assert 'ACTION_RESULT = "waiting"' in test
     assert "Do not ask a second failure-classification question" in (
         " ".join(test.split())
@@ -1039,7 +1036,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     )
     assert "physical connections" in entra_normalized
     assert "It makes no API call" in entra_normalized
-    assert "**Reuse shared identity**" in entra
+    assert "Reuse shared identity" not in entra
     assert "If it returns `decision: no-action`, immediately return" in entra
     assert "Do not render instructions, send any question" in (
         entra_normalized
@@ -1060,13 +1057,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
         credential
     )
     assert "Only when no exact candidate exists" in credential
-    assert (
-        '"label": "Completed, the connection is created and shows Connected"'
-        in credential
-    )
-    assert (
-        '"label": "Not yet, the connection is not ready"' in credential
-    )
+    assert '"label"' not in credential
     assert "do not ask\nfor a connection ID or GUID" in credential
     assert "This is the only question for that path" in credential_normalized
     assert "must never run for the multiple-healthy-candidate path" in (
@@ -1079,7 +1070,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "record-portal-reuse" in portal
     assert "`portalSourceChoices`" in portal
     assert "`portalDecisionChoices`" in portal
-    assert "**Reuse saved portal URL**" in portal
+    assert "**Reuse saved portal URL**" not in portal
     assert "Never ask the Maker to type it" in portal
     assert "make no update call" in portal
     assert "do not complete the phase or copy" in portal_normalized
@@ -1180,7 +1171,8 @@ def test_da_servicenow_itsm_skill_uses_isolated_shared_lifecycle() -> None:
 
     assert "agent-chooser" in chooser
     assert "must not run a remote collection listing" in chooser
-    assert "Use another agent (paste link)" in chooser
+    assert "Use another agent (paste link)" not in chooser
+    assert "**Another agent**" in chooser
     assert "focused freeform question" in chooser
     assert "pastes the full\nCopilot Studio link" in chooser
     assert "Never persist the choice to `.local/config.json`" in chooser
@@ -1216,12 +1208,11 @@ def test_da_servicenow_itsm_skill_uses_isolated_shared_lifecycle() -> None:
     assert "Global.ServiceNowITSMPortalBaseURI" in portal
     assert "Show my open IT tickets" in test
     assert "record `--result untested`" in test
-    assert '"label": "It returned the tickets I expected"' in test
-    assert '"label": "It returned an empty result"' in test
-    assert '"label": "It returned an error"' in test
+    assert "an empty result, or an error" in test
+    assert '"label"' not in test
     assert "empty result or an error" not in test
     assert "`--result empty`" in test
-    assert '"label": "Finish without testing"' in test
+    assert "Finish without testing" in test
     assert "--failure-category" not in test
     assert "decides pass, fail, or untested" in " ".join(test.split())
     assert "Do not require a non-empty" not in test

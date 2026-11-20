@@ -123,9 +123,9 @@ Before Entra availability, honor a returned
 local zero-write pre-action for the current selected target provider and
 agent. For `source-selection-required`, ask one numbered candidate question as chat text (its `plainText`)
 and rerun `shared-reuse-handoff --source-key <internal-source-key>`. For
-`question-required`, pass its canonical question through the plain-text question adapter. Translate **Reuse shared identity** to the existing target-scoped
-`record-shared-reuse ... --decision accept`, **Configure separately** to
-`--decision decline`, and **Not now** to no command plus waiting. Do not render
+`question-required`, pass its canonical question through the plain-text question adapter. Translate **Yes** to the existing target-scoped
+`record-shared-reuse ... --decision accept`, **No** to
+`--decision decline`, and no answer yet to no command plus waiting. Do not render
 or ask Entra availability in the same turn. After accept, rerun
 `resume-handoff`; current reused Entra/OIDC handoffs skip their corresponding
 availability gates and proceed to owning checks. After decline, the next
@@ -150,8 +150,8 @@ returns `instanceInputRequired: true`, show its exact `instanceQuestion` and
 stop with `ACTION_RESULT = "waiting"` before running the preflight checkpoint.
 This is normal Maker target confirmation, not a blocking checkpoint result.
 Do not render the checkpoint's `NotConfigured` recovery handoff around or
-before this question. If the Maker chooses **Provide another ServiceNow
-instance URL**, show the exact returned `manualInstanceQuestion` once. A real
+before this question. If the Maker replies **Another** (or pastes an instance
+URL), show the exact returned `manualInstanceQuestion` once. A real
 discovery error remains embedded in those questions; it does not convert an
 empty or failed discovery into success.
 
@@ -159,8 +159,8 @@ The ServiceNow provider `resume-handoff` also enforces this boundary. If it
 returns top-level `pendingInput`, show `pendingInput.question` exactly and stop
 without running or reconstructing a checkpoint command. Use
 `pendingInput.choiceValues` to translate a selected option. Only
-`pendingInput.manualQuestion` may be shown after **Provide another ServiceNow
-instance URL**. This barrier covers first-run and historical `NotConfigured`
+`pendingInput.manualQuestion` may be shown after the Maker replies **Another**
+or **No** (or pastes an instance URL). This barrier covers first-run and historical `NotConfigured`
 state so normal unanswered Maker input is never rendered as an eight-section
 configuration failure.
 
@@ -321,8 +321,9 @@ Build the plan from the contract, in phase order:
   These roles explain external admin ownership; they do not create a role gate
   and must never be treated as authorization for an action.
 
-Render this complete plan as an ordinary visible agent response before calling
-`vscode_askQuestions`. It is a **Message**, not tool commentary or a question
+Render this complete plan as an ordinary visible agent response before asking
+for approval. (ServiceNow Connect skips this approval prompt entirely and never
+uses a card tool; the card payload below applies to other providers only.) It is a **Message**, not tool commentary or a question
 body. Showing the plan is not execution approval.
 
 **Message:**
@@ -640,15 +641,14 @@ question. Once a valid scoped requirement receipt exists, do not ask the
 routing question again.
 
 For every interactive provider action, the question body is the durable
-visible handoff. For ServiceNow, read the action document's
-`<!-- visible-handoff-question:v1 -->` JSON payload (the canonical question
-used for state semantics), render its placeholders, pass the resulting single
-canonical object through `adapt-question`, and send the returned `plainText`
-verbatim as an ordinary chat message. Never call `ask_user`. Wait for the
-maker's typed reply and map it with `match-reply` as described above. The
-object's `header`, `question` and option labels are source data only;
-`header` is never
-shown to the maker. For DA ServiceNow,
+visible handoff. For ServiceNow, the question is plain chat text: use the
+controller-returned `plainText` (or the action document's
+`<!-- plain-chat-question:v1 -->` Message block), render its placeholders, and
+send it verbatim as an ordinary chat message, then end your turn. Never call
+`ask_user` or any card tool. Wait for the maker's typed reply and map it with
+`match-reply` as described above. The Message block is source data for the
+controller's canonical question (used for state semantics); never show a
+header or option list as a card. For DA ServiceNow,
 current status has already been shown in conversation text. ServiceNow action
 questions are question-only: never add the group plan, internal-step
 checklist, progress, future roles, checkpoint table, or a `Progress` field.
