@@ -58,7 +58,7 @@ def test_lead_in_without_wait_cue_auto_continues(profile: str) -> None:
 @pytest.mark.parametrize(
     "text",
     [
-        "Return here and tell us which connection you used.",
+        "Return here and tell us you connected your ESS IT to the ServiceNow connection.",
         "Paste their reply here when you have it.",
         "Let us know what happened.",
         "Reply here once you are ready.",

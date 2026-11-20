@@ -12655,6 +12655,7 @@ def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
             guidance("agent-connection", state(None))
         portal = guidance("portal-url", state(None))
         test = guidance("test", state(None))
+        agent_name = snow._spec_agent_name()
 
     audience = "HR" if profile == "hrsd" else "IT"
     saved = (
@@ -12683,8 +12684,9 @@ def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
         assert (
             "   - **Instance name:** `dev123`—not the full URL\n"
             "4. Complete the connection creation.\n\n"
-            "Return here and tell us which connection you used. You won't "
-            "need to resend the administrator replies.\n\n"
+            "Return here and tell us you connected your "
+            f"{agent_name} to the ServiceNow connection. You "
+            "won't need to resend the administrator replies.\n\n"
             f"After that, we'll test an {audience} request with your "
             "account to check sign-in and employee matching."
         ) in text
