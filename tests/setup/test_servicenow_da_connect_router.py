@@ -834,9 +834,9 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "--details" not in test
     assert "save the current authored draft" in test
     assert "selected ServiceNow connection" in test
-    assert '"label": "It returned the cases I expected"' in test
-    assert '"label": "It returned an empty result"' in test
-    assert '"label": "It returned an error"' in test
+    assert '"label": "Expected results"' in test
+    assert '"label": "Empty result"' in test
+    assert '"label": "Error"' in test
     assert "empty result or an error" not in test
     assert "`--result empty`" in test
     assert '"label": "Finish without testing"' in test
@@ -895,14 +895,14 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     )
     assert "com.sn_hr_core" in plugins
     assert (
-        '"label": "Yes, all listed installed-and-ready evidence is present"'
+        '"label": "Yes"'
         in plugins
     )
     assert (
-        '"label": "No, one or more required items are missing"' in plugins
+        '"label": "No"' in plugins
     )
     assert (
-        '"label": "Not sure, the administrator still needs to check"'
+        '"label": "Not sure"'
         in plugins
     )
     assert "[Open HR Service Delivery Core]({HR_CORE_PLUGIN_URL})" in plugins
@@ -1015,11 +1015,11 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     )
     assert "Only when no exact candidate exists" in credential
     assert (
-        '"label": "Completed, the connection is created and shows Connected"'
+        '"label": "Yes"'
         in credential
     )
     assert (
-        '"label": "Not yet, the connection is not ready"' in credential
+        '"label": "No"' in credential
     )
     assert "do not ask\nfor a connection ID or GUID" in credential
     assert "This is the only question for that path" in credential_normalized
@@ -1033,7 +1033,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "record-portal-reuse" in portal
     assert "`portalSourceChoices`" in portal
     assert "`portalDecisionChoices`" in portal
-    assert "**Reuse saved portal URL**" in portal
+    assert "Reuse the saved employee portal URL" in portal
     assert "Never ask the Maker to type it" in portal
     assert "make no update call" in portal
     assert "do not complete the phase or copy" in portal_normalized
@@ -1170,9 +1170,9 @@ def test_da_servicenow_itsm_skill_uses_isolated_shared_lifecycle() -> None:
     assert "Global.ServiceNowITSMPortalBaseURI" in portal
     assert "Show my open IT tickets" in test
     assert "record `--result untested`" in test
-    assert '"label": "It returned the tickets I expected"' in test
-    assert '"label": "It returned an empty result"' in test
-    assert '"label": "It returned an error"' in test
+    assert '"label": "Expected results"' in test
+    assert '"label": "Empty result"' in test
+    assert '"label": "Error"' in test
     assert "empty result or an error" not in test
     assert "`--result empty`" in test
     assert '"label": "Finish without testing"' in test

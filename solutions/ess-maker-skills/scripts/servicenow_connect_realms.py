@@ -888,10 +888,11 @@ ADMIN_CASE_REUSE = "dev-reuse"
 ADMIN_CASE_INDEPENDENT = "independent"
 ADMIN_EXPLANATIONS = {
     ADMIN_CASE_REUSE: (
-        "We'll reuse the administrator-confirmed sign-in setup and employee "
-        "mapping from Dev for this ServiceNow instance. You don't need to ask "
-        "your administrators again. We'll only check the {label} connection, "
-        "topics, portal URL, and a real-data test."
+        "We'll retain the administrator-confirmed sign-in setup and employee "
+        "mapping that still applies to this ServiceNow instance. We won't "
+        "repeat completed administrator work. You don't need to resend "
+        "earlier replies unless a specific confirmation is missing or no "
+        "longer applies."
     ),
     ADMIN_CASE_INDEPENDENT: (
         "We couldn't find a completed Dev setup for this agent, so we'll run "

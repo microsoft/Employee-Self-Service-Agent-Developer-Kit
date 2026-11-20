@@ -121,14 +121,14 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
     assert "`preActionHandoff`" in runner
     assert "Do not render\nor ask Entra availability in the same turn" in runner
     assert "After decline, the next\nresume may ask Entra availability" in runner
-    assert "only after the user explicitly selects **Yes, let's go**" in (
+    assert "only after the user explicitly selects **Yes**" in (
         plan_normalized
     )
     assert "The `question` field itself must contain the complete" not in plan
     assert "rendered question" not in plan
 
     refusal = plan.split('**If "Not now":**', 1)[1].split(
-        '**If "Yes, let\'s go" on a first run', 1
+        '**If "Yes" on a first run', 1
     )[0]
     assert "Stop here. On a first run, do not write the state file" in refusal
     assert "preserve the existing state unchanged" in refusal
@@ -136,14 +136,14 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
     assert "next invocation should show this same plan again" in (
         " ".join(refusal.split())
     )
-    acceptance = plan.split('**If "Yes, let\'s go" on a first run', 1)[1].split(
-        '**If "Yes, let\'s go" after a contract revision changed', 1
+    acceptance = plan.split('**If "Yes" on a first run', 1)[1].split(
+        '**If "Yes" after a contract revision changed', 1
     )[0]
     assert "stateInitializationCommand" in acceptance
     assert 'structured `status: "initialized"` success result' in acceptance
     assert 'every phase at `status: "pending"`' in acceptance
     reapproval = plan.split(
-        '**If "Yes, let\'s go" after a contract revision changed', 1
+        '**If "Yes" after a contract revision changed', 1
     )[1]
     assert "update only" in reapproval
     assert "Do not reset or delete existing phase status, action" in reapproval

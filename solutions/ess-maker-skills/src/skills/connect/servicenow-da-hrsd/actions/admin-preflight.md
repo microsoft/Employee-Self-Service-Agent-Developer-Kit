@@ -86,32 +86,35 @@ If `instanceInputRequired` is `false`, reuse the valid prior confirmation,
 briefly summarize discovery, and do not ask again. A newly visible connection
 never changes the confirmed instance automatically.
 
-When `instanceInputRequired` is `true`, send the exact returned
-`instanceQuestion` through the shared lifecycle runner's `adapt-question`
-path:
+When `instanceInputRequired` is `true`, send the returned `chatMessage` as
+plain chat text, then ask the returned `pendingCard` with one `ask_user` call
+using `pendingCard.askUserArguments` exactly as given (the shared lifecycle
+runner's `adapt-question` shape):
 
-- With candidates, every normalized URL is a separate **Use <URL>** choice,
-  even when there is only one, plus **Provide another ServiceNow instance
-  URL**. Translate the selected label through `instanceChoices`; never ask the
-  Maker to copy an internal key.
-- **Provide another ServiceNow instance URL** opens the exact returned
-  `manualInstanceQuestion`. Do not construct or shorten another free-form
-  question.
-- With no candidates, the returned question is already that free-form URL
-  question.
-- Discovery errors remain visible in the question. Manual target confirmation
+- With exactly one candidate, the card is a Yes/No question ("Should
+  <agent> use the ServiceNow instance <name>?"). **No** opens the exact
+  returned `manualInstanceQuestion`.
+- With several candidates, each candidate name is a short choice, plus
+  **Another instance**, which opens the exact returned
+  `manualInstanceQuestion`. Translate the selected label through
+  `instanceChoices`; never ask the Maker to copy an internal key.
+- With no candidates, the returned question is already the free-form URL
+  question. Its title is the question itself; do not add a body, example, or
+  note to the card because the explanation is already in `chatMessage`.
+- Discovery errors stay visible in `chatMessage`. Manual target confirmation
   does not prove connection health, select/reuse a credential, create an
   instance, or bind the agent.
 
-The no-candidate/manual-URL form uses this supported visible shape. The
-runtime-rendered question may add the bounded discovery error:
+The no-candidate/manual-URL card uses this supported visible shape. The
+explanation in `question` is sent as the chat message; the card shows only
+`header`:
 
 <!-- visible-handoff-question:v1 -->
 ```json
 [
   {
-    "header": "ServiceNow instance",
-    "question": "For {AGENT_DISPLAY_NAME} (`{SELECTED_AGENT_SLUG}`) in environment `{ENVIRONMENT_ID}` and {REALM} realm, which ServiceNow instance should Employee Self-Service use? Send its public HTTPS root URL, not credentials.\n\nExample: `https://<your-instance>.service-now.com`\n\nUse only the instance root (`https://<instance>.service-now.com`). Do not enter a portal or module path such as `/sp`, `/esc`, or `/now/...`. Do not enter a username, password, credential, token, secret, or certificate. If you do not know the URL, ask your ServiceNow administrator for the public instance root.\n\n{DISCOVERY_ERROR_IF_ANY}",
+    "header": "Which ServiceNow instance should {AGENT_DISPLAY_NAME} use?",
+    "question": "Send its public HTTPS URL, not credentials.\n\nExample: `https://<your-instance>.service-now.com`\n\nUse only the instance address, without a portal path such as `/sp` or `/esc`. If you don't know it, ask your ServiceNow administrator.\n\n{DISCOVERY_ERROR_IF_ANY}",
     "allowFreeformInput": true
   }
 ]

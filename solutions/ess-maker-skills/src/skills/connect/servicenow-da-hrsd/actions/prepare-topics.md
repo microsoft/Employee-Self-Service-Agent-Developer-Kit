@@ -37,12 +37,12 @@ The command-generated question conforms to this visible contract:
 ```json
 [
   {
-    "header": "ServiceNow topic states",
-    "question": "Do you want to enable all listed inactive ServiceNow topics, or keep their current states? Only topics in the inventory listed above are in scope; unrelated topics remain unchanged.",
+    "header": "Should we enable the inactive ServiceNow topics?",
+    "question": "Only topics in the inventory listed above are in scope; unrelated topics remain unchanged.",
     "options": [
-      { "label": "Enable all listed inactive ServiceNow topics" },
-      { "label": "Keep the current topic states for this configuration" },
-      { "label": "Not now, leave the phase incomplete" }
+      { "label": "Enable all" },
+      { "label": "Keep current" },
+      { "label": "Not now" }
     ],
     "allowFreeformInput": false
   }
@@ -61,11 +61,10 @@ The tool call is the wait boundary: while the
   question is pending, preserve the historical action and transaction state.
 Absence of
   an answer is not cancellation.
-- If the maker selects **Keep the current topic states for this
-  configuration**, run
+- If the maker selects **Keep current**, run
   `python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-topic-choice --choice keep-current`
   and set `ACTION_RESULT = "applied"`.
-- If the maker selects **Enable all listed inactive ServiceNow topics**, run
+- If the maker selects **Enable all**, run
   `python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} enable-all-topics --yes`. Set
   `ACTION_RESULT = "applied"` only when the command reports
   `transactionStatus: "committed"` or `status: "already-active"`.
@@ -85,7 +84,7 @@ Absence of
   transaction. A later invocation that freshly observes all topics Active
   follows the no-mutation path above and must not repeat the confirmed update.
 - Set `ACTION_RESULT = "cancelled"` only if the maker explicitly selects
-  **Not now, leave the phase incomplete** or the host explicitly reports that
+  **Not now** or the host explicitly reports that
   the question tool is
   unavailable. Do not interpret a pending or unanswered question as
   unavailable.

@@ -22,6 +22,8 @@ cannot import the kit's dependencies, stop and tell the maker to rerun
 
 **STOP — render before acting.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant message — before any other tool call — must contain `renderBlock.text` verbatim (the grouped phases view; it already ends with the current step line). `renderBlock.text` is the only renderable field: never render anything under `internal`, never write your own checklist, and never add a Check/Status table. Never summarize it or write "render the plan" instead. At the start of a fresh run `renderBlock.text` begins with the connection opening ("We'll connect ... so employees can ..."); emit it verbatim as part of the same message, and never write your own opening or repeat it later. The Test-pane ready message in the current-task lead-in is controller-built: show it verbatim and never reword it, and when `record-test --result untested` or `--result empty` returns `message`, show that `message` verbatim (for `empty`, nothing is recorded and the Test step stays open; ask the result question again) and never claim the integration works. The portal URL confirmation question and options returned by `portal-url-confirmation` are controller-built: show them verbatim, and save nothing before the Maker selects Yes. This overrides the Message-block silence rule above.
 
+**Controller output rules.** Every `connect_servicenow_da.py` output starts with `chatMessage`: send it verbatim as plain chat text before any other tool call. If `endTurn` is `true`, end your turn right after sending it (the message asks the Maker to reply, return, paste, send or act outside chat); do not read the next document or run another command until the Maker replies, then follow `afterReply` when present. If `endTurn` is `false`, do not stop or wait: run `nextCommand` in the same turn. Wording such as "Return here", "tell us", "reply", "paste", "send" or "let us know" always means wait for the Maker. When `pendingCard` is present, ask it with one `ask_user` call using `pendingCard.askUserArguments` exactly as given: the card title is the question and the card has no body, so add no examples, warnings or notes to it; all explanation belongs in `chatMessage`. Option labels are Yes/No or very short; never rebuild them.
+
 **Hard rules.** Read `src/skills/connect/shared/lifecycle-runner.md` before the first action. When `resume-handoff` returns `renderBlock`, emit `renderBlock.text` verbatim as an assistant message; terminal output does not count. Never edit `lifecycle.json` by hand; record results with `record-checkpoint-results`. Run every command with the launcher resolved by `/setup` (`py -3`, `python3`, then `python`), never assuming bare `python`.
 
 ## Admit the workspace
@@ -306,8 +308,8 @@ Parse the returned `servicenow.resume-handoff.v1` object:
   `record-checkpoint-results --outcome in-progress` return it), then pass the
   exact compact returned canonical object through the same
   `adapt-question` stdin command and call `ask_user` with the returned
-  `askUserArguments` verbatim. Preserve the complete body and option labels.
-  Do not add a
+  `askUserArguments` verbatim. The card shows only the question title and its
+  short option labels; its body was already sent as chat text. Do not add a
   `Progress` field, checklist, phase table, description, default, required
   input, hidden input, or second question;
 - for blocked/error results, emit the error `renderBlock.text` and the

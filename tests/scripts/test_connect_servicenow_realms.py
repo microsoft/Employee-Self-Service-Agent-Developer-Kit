@@ -1054,10 +1054,11 @@ def test_case_one_reuses_the_dev_setup_without_any_administrator_handoff(
     text = _block(result)
     assert result["renderBlock"]["case"] == "dev-reuse"
     assert (
-        "We'll reuse the administrator-confirmed sign-in setup and employee "
-        "mapping from Dev for this ServiceNow instance. You don't need to ask "
-        "your administrators again. We'll only check the Test connection, "
-        "topics, portal URL, and a real-data test."
+        "We'll retain the administrator-confirmed sign-in setup and employee "
+        "mapping that still applies to this ServiceNow instance. We won't "
+        "repeat completed administrator work. You don't need to resend "
+        "earlier replies unless a specific confirmation is missing or no "
+        "longer applies."
     ) in text
     assert _icons(text) == ["✅", "✅", "✅", "✅", "⏳"]
     assert "Microsoft Entra administrator" not in text
@@ -1653,9 +1654,9 @@ def test_controller_returns_the_checklist_first_for_hr_and_it(
     )
     text = waiting["renderBlock"]["text"]
     assert next(iter(snow._with_agent_rules(waiting, "discover-realm-target"))) == (
-        "renderBlock"
+        "chatMessage"
     )
-    assert snow.ACTIVE_PROFILE.agent_display_name in text
+    assert snow._spec_agent_name() in text
     assert "Waiting for you" in text
     assert f"run an {kind} request" in text or f"run a {kind} request" in text
     assert f"open {'HR cases' if kind == 'HR' else 'IT tickets'}" in text

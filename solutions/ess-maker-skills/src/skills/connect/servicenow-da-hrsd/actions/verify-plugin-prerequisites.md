@@ -51,12 +51,12 @@ evidence summary and completion decision:
 ```json
 [
   {
-    "header": "HR Service Delivery Core",
-    "question": "Your ServiceNow administrator should see **Human Resources Scoped App: Core** (`com.sn_hr_core`) listed as Installed, with the message `Your application is installed and ready for you to use on your instance`.\n\nHas the ServiceNow administrator confirmed that all of this HR Service Delivery Core evidence is present?",
+    "header": "Has your ServiceNow administrator confirmed all of this is present?",
+    "question": "Your ServiceNow administrator should see **Human Resources Scoped App: Core** (`com.sn_hr_core`) listed as Installed, with the message `Your application is installed and ready for you to use on your instance`.",
     "options": [
-      { "label": "Yes, all listed installed-and-ready evidence is present" },
-      { "label": "No, one or more required items are missing" },
-      { "label": "Not sure, the administrator still needs to check" }
+      { "label": "Yes" },
+      { "label": "No" },
+      { "label": "Not sure" }
     ],
     "allowFreeformInput": false
   }
@@ -65,11 +65,10 @@ evidence summary and completion decision:
 
 Leave the selection unset.
 
-- **Yes, all listed installed-and-ready evidence is present:** record the phase
+- **Yes:** record the phase
   handoff with `reused` when it was already valid, or `completed` when the
   administrator completed the installation.
-- **No, one or more required items are missing** / **Not sure, the
-  administrator still needs to check:** show the direct link and identifiers
+- **No** / **Not sure:** show the direct link and identifiers
   above, then show this fixed waiting text verbatim (do not paraphrase it),
   return `ACTION_RESULT = "waiting"`, and do not record completion:
 

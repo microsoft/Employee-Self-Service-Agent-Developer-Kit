@@ -102,7 +102,8 @@ publish, or give deployment instructions.
 
 If the maker asks to check ServiceNow after promotion but does not say Test or
 Production, and the controller's `activeTargetRealm` does not settle it, ask
-with `ask_user`. Never infer the destination from conversation text. If the
+with `ask_user` (card title = the question, short labels only; put any
+explanation in the chat message). Never infer the destination from conversation text. If the
 agent is also unknown, ask for that next, and do not ask again for context that
 is already established.
 

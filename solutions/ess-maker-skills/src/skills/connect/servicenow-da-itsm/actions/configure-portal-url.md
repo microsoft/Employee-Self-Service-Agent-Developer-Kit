@@ -29,13 +29,14 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-sl
 - `source-selection-required`: ask the returned label-only question, translate
   the selected label through `portalSourceChoices`, and rerun
   `portal-reuse-handoff --source-key <internal-source-key>`.
-- `question-required`: show the exact returned question. Translate the answer
-  through `portalDecisionChoices`.
-  - **Reuse saved portal URL**: run
+- `question-required`: send the returned `chatMessage`, then ask the returned
+  `pendingCard` (title: "Reuse the saved employee portal URL <URL>?"). Translate
+  the answer through `portalDecisionChoices`.
+  - **Yes**: run
     `record-portal-reuse --source-key <internal-source-key> --decision accept`,
     then pass the returned `portalUrl` directly to the guarded
     `set-portal-url` command. Never ask the Maker to type it.
-  - **Enter separately**: run
+  - **No**: run
     `record-portal-reuse --source-key <internal-source-key> --decision decline`
     and continue to the manual question.
   - **Not now**: record nothing and return `ACTION_RESULT = "waiting"`.
@@ -67,12 +68,15 @@ Next, we'll make sure the agent's IT ticket links open in the right employee por
 ```json
 [
   {
-    "header": "ServiceNow employee portal",
-    "question": "What is the full HTTPS base URL of your ServiceNow employee portal? It may differ from the instance URL, so we won't assume `/sp` or `/esc`.",
+    "header": "What is the full HTTPS base URL of your ServiceNow employee portal?",
+    "question": "It may differ from the instance URL, so we won't assume `/sp` or `/esc`.",
     "allowFreeformInput": true
   }
 ]
 ```
+
+The explanation in `question` goes in the chat message; the card shows only
+the question and one input box.
 
 Validate that the answer:
 
@@ -88,12 +92,11 @@ normalization as `set-portal-url` (HTTPS, no trailing slash) and saves nothing:
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} portal-url-confirmation --portal-url <typed-url>
 ```
 
-Show the returned `question` and `options` verbatim, with no free-form input.
-The question is "Is **{NORMALIZED_PORTAL_URL}** the employee portal URL?" and
-the options are "Yes, that's the portal URL" and "No, use a different URL".
-- **No, use a different URL**: save nothing and ask the URL question above
-  again.
-- **Yes, that's the portal URL**: show the returned `savedMessage` verbatim
+Send the returned `chatMessage` as plain chat text, then ask the returned
+`pendingCard` (title: "Is **{NORMALIZED_PORTAL_URL}** the employee portal
+URL?", options "Yes" and "No") with no free-form input and no extra body.
+- **No**: save nothing and ask the URL question above again.
+- **Yes**: show the returned `savedMessage` verbatim
   ("We'll save that portal URL."). Do not announce topic changes in this step;
   topics were handled in the earlier Topics step. Then run:
 
@@ -129,18 +132,18 @@ Then use the compact completion confirmation below:
 ```json
 [
   {
-    "header": "Save portal Base URI manually",
-    "question": "We couldn't update the portal URL automatically, so it needs to be set in Copilot Studio. Is `{PORTAL_URL}` now saved in the target topic?\n\nYou don't need to publish. Selecting the completed option triggers one fresh read-only verification.",
+    "header": "Is `{PORTAL_URL}` now saved in the target topic?",
+    "question": "We couldn't update the portal URL automatically, so it needs to be set in Copilot Studio.\n\nYou don't need to publish. Answering Yes triggers one fresh read-only verification.",
     "options": [
-      { "label": "Completed, the exact portal URL is saved" },
-      { "label": "Not yet, the portal URL is not saved" }
+      { "label": "Yes" },
+      { "label": "No" }
     ],
     "allowFreeformInput": false
   }
 ]
 ```
 
-After **Completed, the exact portal URL is saved**, run:
+After **Yes**, run:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} inspect-portal-url --expected-portal-url <full-url>

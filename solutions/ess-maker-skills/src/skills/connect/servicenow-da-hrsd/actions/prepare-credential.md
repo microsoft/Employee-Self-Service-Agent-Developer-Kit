@@ -112,18 +112,18 @@ show both verbatim. The native question carries only the completion decision:
 ```json
 [
   {
-    "header": "ServiceNow connection",
-    "question": "Did you create the connection, and does Copilot Studio show it as Connected for this agent? If you reply in chat instead, name the connection you used, for example: \"I created {CONNECTION_DISPLAY_NAME}. Copilot Studio shows Connected.\"\n\nSelecting the completed option triggers one fresh connection check and one check of the agent's saved settings. The name is optional guidance and is not a readiness gate.",
+    "header": "Did you create the connection, and does Copilot Studio show it as Connected for this agent?",
+    "question": "If you reply in chat instead, name the connection you used, for example: \"I created {CONNECTION_DISPLAY_NAME}. Copilot Studio shows Connected.\"\n\nAnswering Yes triggers one fresh connection check and one check of the agent's saved settings. The name is optional guidance and is not a readiness gate.",
     "options": [
-      { "label": "Completed, the connection is created and shows Connected" },
-      { "label": "Not yet, the connection is not ready" }
+      { "label": "Yes" },
+      { "label": "No" }
     ],
     "allowFreeformInput": false
   }
 ]
 ```
 
-After **Completed, the connection is created and shows Connected** (or a chat
+After **Yes** (or a chat
 reply that says so), run:
 
 ```text
@@ -156,7 +156,7 @@ draft connection reference:
 - A command/read error is authoritative. Report it and stop; on HTTP 429,
   honor the cooldown/Retry-After and do not immediately retry the workflow.
 
-If the Maker selects **Not yet, the connection is not ready**, return
+If the Maker selects **No**, return
 `ACTION_RESULT = "waiting"` without running completion or recording evidence.
 
 For multiple healthy exact candidates discovered by the initial
@@ -172,7 +172,7 @@ never ask them to copy the key or connection ID.
 ```json
 [
   {
-    "header": "Choose ServiceNow connection",
+    "header": "Which ServiceNow connection should this agent use?",
     "question": "Fresh read-only inventory found multiple healthy exact ServiceNow connections in this environment. Each already uses Microsoft Entra ID User Login with the required Resource URI and Instance Name.\n\nChoose the connection to use for this agent. No new connection will be created. Make sure this agent's Connection Settings use the same connection.",
     "options": [
       { "label": "{CANDIDATE_LABEL_1}" },

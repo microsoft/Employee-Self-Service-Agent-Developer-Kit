@@ -333,10 +333,10 @@ confirmation question through the active ServiceNow question adapter:
 ```json
 [
   {
-    "header": "Start connection",
-    "question": "Ready to start?",
+    "header": "Ready to start?",
+    "question": "Nothing starts until you answer Yes.",
     "options": [
-      { "label": "Yes, let's go" },
+      { "label": "Yes" },
       { "label": "Not now" }
     ],
     "allowFreeformInput": false
@@ -347,13 +347,13 @@ confirmation question through the active ServiceNow question adapter:
 Keep its options label-only, with no recommended, preselected, default, or
 automatic answer. The plan, roles, and progress belong only in the ordinary
 reply. This is the only plan confirmation question; initialize or continue
-only after the user explicitly selects **Yes, let's go**.
+only after the user explicitly selects **Yes**.
 
 **If "Not now":** Stop here. On a first run, do not write the state file. On a
 contract-revision re-attestation, preserve the existing state unchanged,
 byte-for-byte. The next invocation should show this same plan again.
 
-**If "Yes, let's go" on a first run (`stateExists: false`):** If the contract has
+**If "Yes" on a first run (`stateExists: false`):** If the contract has
 `stateInitializationCommand`, replace `{contractRevision}` and `{agentSlug}`
 in that exact checked-in command and run it now. Require exit code `0` and a
 structured `status: "initialized"` success result. Then read the canonical
@@ -371,7 +371,7 @@ state now with `provider: PROVIDER`, `agentSlug: AGENT_SLUG`,
 `acceptedContractRevision: contractRevision`, `roleAttestations: {}`, and
 every phase at `status: "pending"` with empty checkpoint results.
 
-**If "Yes, let's go" after a contract revision changed:** update only
+**If "Yes" after a contract revision changed:** update only
 `attested`, `attestedAt`, and `acceptedContractRevision`, plus missing phases
 initialized in L.0. Do not reset or delete existing phase status, action
 receipts, evidence, transactions, role attestations, or provider-owned admin

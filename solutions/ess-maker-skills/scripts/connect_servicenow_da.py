@@ -463,7 +463,7 @@ def maker_portal_links(
         },
         "copilotStudioAgent": {
             "label": (
-                f"Open {ACTIVE_PROFILE.agent_display_name} in Copilot Studio"
+                f"Open {_spec_agent_name()} in Copilot Studio"
             ),
             "url": (
                 f"{origins['copilotStudio']}/environments/{environment_id}/"
@@ -945,10 +945,11 @@ def adapt_question_to_ask_user(
             "A canonical question without options must allow freeform input."
         )
 
+    # The card title is the question itself. The explanation (`question`) is
+    # sent as the agent's chat response, never repeated inside the card.
     field: dict[str, Any] = {
         "type": "string",
         "title": "Selection" if normalized_options else "Input",
-        "description": body,
     }
     if normalized_options:
         field["oneOf"] = normalized_options
@@ -987,32 +988,30 @@ def _identity_direct_questions(
     if stage == "entra":
         canonical = [
             _native_question(
-                header="Application client ID",
+                header="What did your Entra administrator reply?",
                 question=(
-                    "Paste your Entra administrator's non-sensitive reply, or "
-                    "enter the Application (client) ID GUID they confirmed "
-                    "from the app registration Overview page for this exact "
-                    "target. If their reply names the claim ServiceNow should "
-                    "use, or says the standard email claim applies, we'll "
-                    "use that; otherwise we'll ask for the claim name next."
+                    "Paste your Entra administrator's non-sensitive reply, "
+                    "including the Application (client) ID. If it names the "
+                    "claim ServiceNow should use, or says the standard email "
+                    "claim applies, we'll use that; otherwise we'll ask for "
+                    "the claim name next."
                 ),
                 allow_freeform_input=True,
             ),
         ]
         if captured_client_id is not None:
-            recorded_client_id = normalize_client_id(captured_client_id)
+            normalize_client_id(captured_client_id)
             canonical = [
                 _native_question(
-                    header="Entra claim name",
+                    header="Which claim name did your Entra administrator confirm?",
                     question=(
-                        f"We have the Client ID `{recorded_client_id}`. "
-                        "Next, we need the **exact claim name** your Entra "
-                        "administrator configured for ServiceNow to use "
-                        "(`email`, `upn`, or a custom claim name).\n\n"
+                        "We have the Client ID. Next, we need the exact "
+                        "claim name your Entra administrator configured for "
+                        "ServiceNow to use (`email`, `upn`, or a custom "
+                        "claim name).\n\n"
                         "Ask your Entra administrator for that name, or paste "
                         "the rest of their non-sensitive reply. You don't "
-                        "need to resend the Client ID. Enter a claim name "
-                        "only; do not enter `aud` or a personal claim value."
+                        "need to resend the Client ID."
                     ),
                     allow_freeform_input=True,
                 )
@@ -1026,12 +1025,10 @@ def _identity_direct_questions(
         if captured_user_field is None:
             canonical = [
                 _native_question(
-                    header="ServiceNow internal user field",
+                    header="Which User Field did your administrator select?",
                     question=(
-                        "Enter the exact internal `sys_user` field that stores "
-                        "the same identity key as the locked Entra-confirmed "
-                        f"User Claim `{confirmed_claim_name}`. Do not enter a "
-                        "display label or employee value."
+                        "Ask your administrator which **User Field** they "
+                        "selected. Send that value on its own."
                     ),
                     allow_freeform_input=True,
                 )
@@ -1135,23 +1132,14 @@ def _identity_handoff_lead_in(stage: str) -> str:
             "administrator to prepare ServiceNow sign-in.\n\n"
             "When they reply, paste their response here without secrets. "
             "We'll use it to prepare the ServiceNow handoff; you don't need "
-            "to interpret the settings.\n\n"
-            "If your ServiceNow administrator identifies employees by "
-            "something other than email or UPN, such as a payroll ID, the "
-            "custom-claim part of the message applies. Ask your Entra "
-            "administrator to coordinate with them first, to confirm the "
-            "exact claim name, its format, and that its source attribute is "
-            "populated for every intended employee, and to say whether an "
-            "existing setup was reused and whether the setup is complete. "
-            "You don't need to choose the identifier or send anyone's "
-            "payroll ID."
+            "to interpret the settings."
         )
     return (
         "We have the Entra values. Send this message to your ServiceNow "
         "administrator to set up employee matching.\n\n"
         "It includes the values already supplied. When they reply, paste "
-        "their saved-configuration confirmation, **User Field**, and "
-        "same-value confirmation here without secrets."
+        "their saved-configuration confirmation, **User Claim**, and "
+        "**User Field** here without secrets."
     )
 
 
@@ -1366,12 +1354,11 @@ def identity_direct_handoff(
             else {
                 "kind": "ordinary-agent-response",
                 "text": (
-                    f"I recorded the User Field "
-                    f"`{str(captured_user_field).strip()}`. I still need your "
-                    "ServiceNow administrator's confirmation that the "
-                    "configuration is saved and that this field holds exactly "
-                    f"the same value as the User Claim `{claim_name}`. You "
-                    "don't need to send the field again."
+                    "Thanks—please ask your ServiceNow administrator to "
+                    "confirm that the configuration is saved and name both "
+                    "the **User Claim** and **User Field**.\n\n"
+                    "That will clarify which settings use "
+                    f"`{claim_name}` to identify the signed-in employee."
                 ),
             }
             if captured_user_field is not None
@@ -3250,7 +3237,7 @@ def _prepared_agent_result(choice: dict[str, Any]) -> dict[str, Any]:
 
 def _agent_link_question() -> dict[str, Any]:
     return {
-        "header": "Use another agent",
+        "header": "What is the Copilot Studio link for the agent?",
         "question": (
             "Paste the full Copilot Studio link for the existing agent you "
             "want to use."
@@ -3518,20 +3505,17 @@ def agent_chooser_handoff(
     ]
     options.append(
         {
-            "label": "Use another agent (paste link)",
+            "label": "Another agent",
             "selectionKey": "another-agent",
         }
     )
     question_text = (
-        "Which Employee Self-Service HR or IT agent should we connect to "
-        "ServiceNow?\n\nThe listed agents are prepared in this workspace. "
-        "This is not a list of every agent in the environment."
+        "The listed agents are prepared in this workspace. This is not a "
+        "list of every agent in the environment."
         if prepared_choices
         else (
-            "Which Employee Self-Service HR or IT agent should we connect to "
-            "ServiceNow?\n\nNo Employee Self-Service agents are prepared in "
-            "this workspace. Use another agent by pasting its Copilot Studio "
-            "link."
+            "No Employee Self-Service agents are prepared in this workspace. "
+            "Choose Another agent and paste its Copilot Studio link."
         )
     )
     return {
@@ -3541,7 +3525,7 @@ def agent_chooser_handoff(
         "environmentId": environment.get("id"),
         "agents": prepared_choices,
         "question": {
-            "header": "Choose agent",
+            "header": "Which agent should we connect to ServiceNow?",
             "question": question_text,
             "options": options,
             "allowFreeformInput": False,
@@ -3691,6 +3675,7 @@ def load_context(
     pinned_account = _recorded_maker_account(context)
     context["accountPin"] = pinned_account
     context["account"] = explicit_account or pinned_account or preferred_account
+    _remember_agent_name(context)
     return context
 
 
@@ -3833,7 +3818,7 @@ def summarize_components(components: dict[str, Any]) -> dict[str, Any]:
             "key": ACTIVE_PROFILE.key,
             "provider": ACTIVE_PROFILE.provider_key,
             "productName": ACTIVE_PROFILE.product_name,
-            "agentDisplayName": ACTIVE_PROFILE.agent_display_name,
+            "agentDisplayName": _spec_agent_name(),
             "testPrompt": ACTIVE_PROFILE.test_prompt,
         },
         "botComponentCount": len(components.get("botComponentChanges") or []),
@@ -5970,54 +5955,54 @@ def _preflight_instance_question(
     dict[str, str],
     dict[str, Any],
 ]:
-    agent_label = (
-        f"{ACTIVE_PROFILE.agent_display_name} (`{_agent_slug(context)}`)"
-    )
-    environment_id = context["environment"]["id"]
-    realm = str(context["agent"].get("realm") or "dev").title()
+    agent_label = _spec_agent_name()
     error_text = ""
     if discovery_error is not None:
         error_text = (
-            "\n\nAutomatic connection discovery failed: "
-            f"{discovery_error['message']}. This is not an empty inventory. "
-            "You can still provide the intended public ServiceNow URL; later "
-            "credential verification must succeed."
+            "\n\nWe couldn't check your existing connections automatically. "
+            "You can still send the public ServiceNow address; we'll verify "
+            "it when the connection is created."
         )
     manual_question = {
-        "header": "ServiceNow instance URL",
+        "header": f"Which ServiceNow instance should {agent_label} use?",
         "question": (
-            f"For {agent_label} in environment `{environment_id}` and "
-            f"{realm} realm, which ServiceNow instance should Employee "
-            "Self-Service use? Send its public HTTPS root URL, not "
-            "credentials.\n\nExample: `https://<your-instance>.service-now.com`\n\n"
-            "Use only the instance root (`https://<instance>.service-now.com`). "
-            "Do not enter a portal or module path such as `/sp`, `/esc`, or "
-            "`/now/...`. Do not enter a username, password, credential, token, "
-            "secret, or certificate. If you do not know the URL, ask your "
-            f"ServiceNow administrator for the public instance root.{error_text}"
+            "Send its public HTTPS URL, not credentials.\n\n"
+            "Example: `https://<your-instance>.service-now.com`\n\n"
+            "Use only the instance address, without a portal path such as "
+            "`/sp` or `/esc`. If you don't know it, ask your ServiceNow "
+            f"administrator.{error_text}"
         ),
         "allowFreeformInput": True,
     }
     if candidates:
-        choices = {
-            f"Use https://{candidate}.service-now.com": (
-                f"https://{candidate}.service-now.com"
+        single = len(candidates) == 1
+        if single:
+            choices = {
+                "Yes": f"https://{candidates[0]}.service-now.com",
+                "No": "manual",
+            }
+            header = (
+                f"Should {agent_label} use the ServiceNow instance "
+                f"{candidates[0]}?"
             )
-            for candidate in candidates
-        }
-        choices["Provide another ServiceNow instance URL"] = "manual"
+            explanation = (
+                f"We found **{candidates[0]}** in your existing "
+                f"connections.{error_text}"
+            )
+        else:
+            choices = {
+                candidate: f"https://{candidate}.service-now.com"
+                for candidate in candidates
+            }
+            choices["Another instance"] = "manual"
+            header = f"Which ServiceNow instance should {agent_label} use?"
+            explanation = (
+                "We found these instances in your existing "
+                f"connections.{error_text}"
+            )
         question = {
-            "header": "Confirm ServiceNow instance",
-            "question": (
-                f"We found ServiceNow instance candidate"
-                f"{'s' if len(candidates) != 1 else ''} in existing connection "
-                f"metadata for {agent_label} in environment "
-                f"`{environment_id}` and {realm} realm. Which instance should "
-                "this agent use for the current connection setup?\n\n"
-                "Choose one discovered public root URL below, or choose "
-                "**Provide another ServiceNow instance URL** to enter a "
-                f"different public HTTPS root URL.{error_text}"
-            ),
+            "header": header,
+            "question": explanation,
             "options": [
                 {"label": label}
                 for label in choices
@@ -6449,11 +6434,7 @@ def portal_value_reuse_handoff(
     if source_key is None and len(candidates) > 1:
         choices = [
             {
-                "label": (
-                    f"Use {candidate['portalUrl']} "
-                    f"({len(candidate['sources'])} saved source"
-                    f"{'s' if len(candidate['sources']) != 1 else ''})"
-                ),
+                "label": candidate["portalUrl"],
                 "sourceKey": candidate["sourceKey"],
             }
             for candidate in candidates
@@ -6464,11 +6445,11 @@ def portal_value_reuse_handoff(
             "candidates": copy.deepcopy(candidates),
             "portalSourceChoices": choices,
             "question": {
-                "header": "Choose a saved portal URL",
+                "header": "Which saved employee portal URL should we use?",
                 "question": (
-                    "Compatible administrator-confirmed ServiceNow employee "
-                    "portal URLs were saved for other agents in this workspace. "
-                    "Which value should this agent use?"
+                    "Compatible employee portal URLs confirmed by an "
+                    "administrator were saved for other agents in this "
+                    "workspace."
                 ),
                 "options": [
                     {"label": choice["label"]} for choice in choices
@@ -6493,8 +6474,8 @@ def portal_value_reuse_handoff(
             "The selected saved portal URL source is stale or unavailable."
         )
     decision_choices = [
-        {"label": "Reuse saved portal URL", "decision": "accept"},
-        {"label": "Enter separately", "decision": "decline"},
+        {"label": "Yes", "decision": "accept"},
+        {"label": "No", "decision": "decline"},
         {"label": "Not now", "decision": "not-now"},
     ]
     return {
@@ -6503,14 +6484,15 @@ def portal_value_reuse_handoff(
         "candidate": copy.deepcopy(selected),
         "portalDecisionChoices": decision_choices,
         "question": {
-            "header": "Reuse saved portal URL",
+            "header": (
+                f"Reuse the saved employee portal URL "
+                f"{selected['portalUrl']}?"
+            ),
             "question": (
-                "An administrator-confirmed employee portal URL is already "
-                f"saved for another agent in this workspace: "
-                f"`{selected['portalUrl']}` "
-                f"(from {', '.join(selected['sourceLabels'])}).\n\n"
-                "Do you want to reuse it for this agent? We'll still check "
-                "and update this agent's own portal setting if needed."
+                "An employee portal URL confirmed by an administrator is "
+                "already saved for another agent in this workspace "
+                f"(from {', '.join(selected['sourceLabels'])}). We'll still "
+                "check and update this agent's own portal setting if needed."
             ),
             "options": [
                 {"label": choice["label"]} for choice in decision_choices
@@ -7041,11 +7023,11 @@ def shared_reuse_handoff(
     )
     decision_choices = [
         {
-            "label": "Reuse shared identity",
+            "label": "Yes",
             "decision": "accept",
         },
         {
-            "label": "Configure separately",
+            "label": "No",
             "decision": "decline",
         },
         {
@@ -7053,22 +7035,27 @@ def shared_reuse_handoff(
             "decision": "not-now",
         },
     ]
+    source_label = {"hrsd": "HR", "itsm": "IT"}.get(
+        str(candidate["sourceProfile"]),
+        str(candidate["sourceProfile"]).upper(),
+    )
     return {
         "schemaVersion": "servicenow.shared-reuse-handoff.v1",
         "decision": "question-required",
         "candidate": copy.deepcopy(candidate),
         "reuseDecisionChoices": decision_choices,
         "question": {
-            "header": "Reuse shared identity",
+            "header": (
+                f"Reuse the shared setup from your existing "
+                f"{source_label} agent?"
+            ),
             "question": (
-                f"The {candidate['sourceProfile'].upper()} agent "
-                f"`{candidate['sourceAgentSlug']}` in this workspace already "
-                "has compatible administrator setup for ServiceNow instance "
-                f"`{candidate['instanceName']}`. You can reuse these "
+                f"Your {source_label} agent in this "
+                "workspace already has compatible administrator setup for "
+                f"this ServiceNow instance. You can reuse these "
                 f"items:\n\n{item_lines}\n\n"
                 "Reuse avoids repeating compatible administrator setup, but "
-                "each owning readiness check still runs for this agent.\n\n"
-                "What would you like to do?"
+                "each readiness check still runs for this agent."
             ),
             "options": [
                 {"label": choice["label"]}
@@ -9242,11 +9229,13 @@ def portal_url_confirmation(
     return {
         "schemaVersion": "servicenow.portal-url-confirmation.v1",
         "portalUrl": normalized_url,
-        "header": "Confirm employee portal URL",
-        "question": f"Is **{normalized_url}** the employee portal URL?",
+        "header": f"Is {normalized_url} the employee portal URL?",
+        "question": (
+            f"You entered **{normalized_url}** as the employee portal URL."
+        ),
         "options": [
-            {"label": "Yes, that's the portal URL"},
-            {"label": "No, use a different URL"},
+            {"label": "Yes"},
+            {"label": "No"},
         ],
         "allowFreeformInput": False,
         "savedMessage": "We'll save that portal URL.",
@@ -9853,9 +9842,8 @@ def topic_action_handoff(
         + "\n".join(f"- {name}" for name in inactive_names)
     )
     question = (
-        "Do you want to enable all listed inactive ServiceNow topics, or "
-        "keep their current states? Only topics in the inventory listed "
-        "above are in scope; unrelated topics remain unchanged."
+        "Only topics in the inventory listed above are in scope; unrelated "
+        "topics remain unchanged."
     )
     return {
         **base,
@@ -9863,12 +9851,12 @@ def topic_action_handoff(
         "actionResult": None,
         "replyBeforeQuestion": reply_before_question,
         "question": _native_question(
-            header="ServiceNow topic states",
+            header="Should we enable the inactive ServiceNow topics?",
             question=question,
             option_labels=[
-                "Enable all listed inactive ServiceNow topics",
-                "Keep the current topic states for this configuration",
-                "Not now, leave the phase incomplete",
+                "Enable all",
+                "Keep current",
+                "Not now",
             ],
         ),
     }
@@ -10372,25 +10360,14 @@ def _business_group_availability_question(
     copy_by_group = {
         "hr-prerequisite": {
             "question": "Is your ServiceNow administrator available to complete this step?",
-            "yes": "Yes, the ServiceNow admin is available now",
-            "no": "No, I need to bring the ServiceNow admin in",
         },
         "entra-identity": {
             "question": "Is your Microsoft Entra administrator available to complete this step?",
-            "yes": "Yes, the Entra admin is available now",
-            "no": "No, I need to bring the Entra admin in",
         },
         "servicenow-sso": {
             "question": (
-                "Is the ServiceNow admin with security_admin available now?"
-            ),
-            "yes": (
-                "Yes, the ServiceNow admin with security_admin is available "
-                "now"
-            ),
-            "no": (
-                "No, I need to bring the ServiceNow admin with "
-                "security_admin in"
+                "Is your ServiceNow administrator available to complete "
+                "this step?"
             ),
         },
         "maker-configuration": {
@@ -10398,8 +10375,6 @@ def _business_group_availability_question(
                 "Are you available, with the ESS Maker / Agent Developer "
                 "role, to complete this step?"
             ),
-            "yes": "Yes, the Maker is available now",
-            "no": "No, I need to bring the Maker in",
         },
     }
     configured = copy_by_group.get(str(group.get("id") or ""))
@@ -10408,9 +10383,9 @@ def _business_group_availability_question(
             "ServiceNow business-group availability copy is missing."
         )
     return _native_question(
-        header=str(group.get("label") or ""),
-        question=configured["question"],
-        option_labels=[configured["yes"], configured["no"]],
+        header=configured["question"],
+        question=str(group.get("label") or configured["question"]),
+        option_labels=["Yes", "No"],
     )
 
 
@@ -10445,12 +10420,6 @@ def _first_text(container: Any, keys: tuple[str, ...]) -> str | None:
     return None
 
 
-def _display_agent_name(context: dict[str, Any]) -> str:
-    return _first_text(
-        context.get("agent"), ("display_name", "displayName", "name")
-    ) or ACTIVE_PROFILE.agent_display_name
-
-
 def _display_environment_name(context: dict[str, Any]) -> str:
     return _first_text(
         context.get("environment"),
@@ -10465,8 +10434,29 @@ def _recorded_environment_name(context: dict[str, Any]) -> str | None:
     )
 
 
+ACTIVE_AGENT_NAME: str | None = None
+
+
+def _remember_agent_name(context: dict[str, Any] | None) -> None:
+    """Record the selected agent's own name as the one maker-facing name."""
+    global ACTIVE_AGENT_NAME
+    name = _first_text(
+        context.get("agent") if isinstance(context, dict) else None,
+        ("display_name", "displayName", "name"),
+    )
+    if name:
+        ACTIVE_AGENT_NAME = name
+
+
 def _spec_agent_name() -> str:
+    if ACTIVE_AGENT_NAME:
+        return ACTIVE_AGENT_NAME
     return ACTIVE_PROFILE.agent_display_name.replace("(", "").replace(")", "")
+
+
+def _display_agent_name(context: dict[str, Any]) -> str:
+    _remember_agent_name(context)
+    return _spec_agent_name()
 
 
 _DEV_OPENING_PURPOSE = {
@@ -10558,7 +10548,7 @@ def _dev_test_ready_message() -> str:
     return (
         f"We're ready to try {copy_['article']} {copy_['audience']} request.\n\n"
         f"In **{_spec_agent_name()}'s Test pane**, run a request that should "
-        "return your real ServiceNow data, for example "
+        "return your real ServiceNow data—for example "
         f"**\"{copy_['example']},\"** if you have open {copy_['records']}.\n\n"
         "Come back and tell us what happened and whether it matched what you "
         f"expected. You don't need to paste {copy_['record']} contents.\n\n"
@@ -10570,7 +10560,7 @@ def _dev_test_ready_message() -> str:
 def _dev_test_clarifying_question() -> str:
     copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
     return (
-        f"What did the request return: your expected {copy_['records']}, an "
+        f"What did the request return—your expected {copy_['records']}, an "
         "empty result, or an error? No need to share "
         f"{copy_['record']} contents."
     )
@@ -10659,7 +10649,7 @@ def _current_task_guidance(
             "Send them this message. When they reply, paste their "
             "confirmation here.\n\n"
         ) + _ready_to_send_block(
-            "We're connecting **Employee Self-Service HR** to ServiceNow HR "
+            f"We're connecting **{_spec_agent_name()}** to ServiceNow HR "
             f"Service Delivery on [**{instance_url}**]({instance_url}).\n\n"
             "Please confirm that the **HR Service Delivery Core** plugin "
             "(`com.sn_hr_core`) is installed and active:\n\n"
@@ -10677,8 +10667,9 @@ def _current_task_guidance(
     if phase_id == "credential":
         audience = _product_audience()
         return _credential_lead_in(state) + (
-            "Next, create the sign-in connection that Employee Self-Service "
-            f"{audience} will use to access ServiceNow. This part happens in "
+            "Next, create the sign-in connection that "
+            f"{_spec_agent_name()} will use to access ServiceNow. This part "
+            "happens in "
             "Copilot Studio:\n\n"
             f"1. Open **{_display_agent_name(context)}** in "
             f"**{_display_environment_name(context)}**.\n"
@@ -10687,7 +10678,7 @@ def _current_task_guidance(
             "3. Use:\n"
             "   - **Authentication type:** Microsoft Entra ID User Login\n"
             f"   - **Resource URI:** `{client_id or 'not yet confirmed'}`\n"
-            f"   - **Instance name:** `{instance_name}`, not the full URL\n"
+            f"   - **Instance name:** `{instance_name}`—not the full URL\n"
             "4. Complete the connection creation.\n\n"
             "Return here and tell us which connection you used. You won't "
             "need to resend the administrator replies.\n\n"
@@ -12417,7 +12408,7 @@ def _realm_completion_message(realm: str) -> str:
     label = realm.title()
     return (
         f"**Your {lookup} worked in {label}.** "
-        f"{ACTIVE_PROFILE.agent_display_name} "
+        f"{_spec_agent_name()} "
         "returned the result you expected for your account. This confirms the "
         f"lookup for your tested account and this agent in {label}, not "
         f"{not_covered}, other employees' sign-in mapping, or "
@@ -12452,7 +12443,7 @@ def _realm_render_context(
     elif status == "untested":
         footer = _realm_untested_message(realm)
     return {
-        "agent": ACTIVE_PROFILE.agent_display_name,
+        "agent": _spec_agent_name(),
         "kind": "HR" if hr else "IT",
         "record": "case" if hr else "ticket",
         "example": "Show my open HR cases" if hr else "Show my open IT tickets",
@@ -13565,12 +13556,26 @@ def _command_error_recovery(
 
 
 AGENT_RULES = (
+    "When chatMessage is present, send it verbatim as plain Markdown before "
+    "any other tool call (no code fence around it unless it already has "
+    "one); never reword it, write your own checklist or a Check/Status "
+    "table, or print internal fields, JSON, or file paths. Terminal output "
+    "is not shown to the maker. Without chatMessage, send renderBlock.text "
+    "or the ordinaryReply/recovery text verbatim instead.",
+    "If endTurn is true, END YOUR TURN right after sending chatMessage: the "
+    "message asks the maker to reply, return, paste, send, or act outside "
+    "chat, and the maker's reply arrives as the next message. Do not read "
+    "the next document or run another command before that reply. When "
+    "afterReply is present, follow it once the maker replies.",
+    "If endTurn is false, do NOT stop and do NOT wait: right after sending "
+    "chatMessage, do exactly what nextCommand says in the same turn.",
+    "When pendingCard is present, ask it with one ask_user call using "
+    "pendingCard.askUserArguments exactly as given: the card title is the "
+    "question, so add no body text, examples, or notes to the card; all "
+    "explanation was already sent in chatMessage. Option labels stay as "
+    "given (Yes/No or very short).",
     "Run every command with the launcher resolved by /setup (py -3, "
     "python3, then python), never assuming bare `python`.",
-    "Emit renderBlock.text verbatim (the grouped phases view), or the "
-    "ordinaryReply/recovery text a guide output returns, as an assistant "
-    "message before any other tool call; never write your own checklist or "
-    "a Check/Status table, and terminal output is not shown to the maker.",
     "Never edit lifecycle.json by hand; record results with "
     "record-checkpoint-results or the matching record-* command.",
     "Never hide command output (no `*> $null`, no `| Out-Null`); read the "
@@ -13579,15 +13584,204 @@ AGENT_RULES = (
     "this chat, read it now.",
 )
 
+# Wording that asks the maker to reply or act: the turn must end there.
+WAIT_CUE_PATTERN = re.compile(
+    r"return here|come back|tell us|let us know|\breplies\b|\breply\b|"
+    r"\bpaste\b|please send|\bsend (?:back|them|us|it|that|this|the)\b|"
+    r"once you have|when you have|when they|\?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_WAIT_RENDER_KINDS = frozenset({"waiting", "error", "final"})
+_WAIT_STATUS_MARKERS = ("-required", "maker-action", "input-required")
+
+
+def has_wait_cue(text: str) -> bool:
+    """True when maker-facing text asks the maker to reply or act."""
+    return bool(WAIT_CUE_PATTERN.search(text or ""))
+
+
+def _is_raw_card(value: dict[str, Any]) -> bool:
+    return (
+        isinstance(value.get("header"), str)
+        and isinstance(value.get("question"), str)
+        and isinstance(value.get("allowFreeformInput"), bool)
+    )
+
+
+def _pending_cards(value: Any) -> list[dict[str, Any]]:
+    """Canonical card questions this output asks, in order, without duplicates."""
+    found: list[dict[str, Any]] = []
+
+    def visit(node: Any) -> None:
+        if isinstance(node, dict):
+            if _is_raw_card(node):
+                found.append(node)
+                return
+            for key, item in node.items():
+                if key == "canonicalQuestion" or str(key).startswith("manual"):
+                    continue
+                visit(item)
+        elif isinstance(node, list):
+            for item in node:
+                visit(item)
+
+    visit(value)
+    unique: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for card in found:
+        key = json.dumps([card["header"], card["question"]])
+        if key not in seen:
+            seen.add(key)
+            unique.append(card)
+    return unique
+
+
+def _chat_message(result: dict[str, Any]) -> str:
+    """Build the one chat message the agent relays for this output.
+
+    Card titles are the questions themselves, so the explanation that used to
+    sit in the card body is sent here, before the card.
+    """
+    parts: list[str] = []
+
+    def add(text: Any) -> None:
+        if isinstance(text, str) and text.strip():
+            cleaned = text.strip()
+            if not any(cleaned in part for part in parts):
+                parts.append(cleaned)
+
+    render_block = result.get("renderBlock")
+    if isinstance(render_block, dict):
+        add(render_block.get("text"))
+    ordinary = result.get("ordinaryReply")
+    if isinstance(ordinary, dict):
+        add(ordinary.get("text"))
+    add(result.get("replyBeforeQuestion"))
+    for card in _pending_cards(
+        {
+            key: item
+            for key, item in result.items()
+            if key not in {"renderBlock", "ordinaryReply"}
+        }
+    ):
+        if card["question"].strip() != card["header"].strip():
+            add(card["question"])
+    return "\n\n".join(parts)
+
+
+def _output_waits_for_maker(
+    result: dict[str, Any],
+    command: str | None,
+) -> bool:
+    """True when the maker must reply or act outside chat before the flow moves."""
+    if result.get("status") == "error" or command in REALM_COMMANDS:
+        return True
+    if has_wait_cue(_chat_message(result)):
+        return True
+    if result.get("pendingInput"):
+        return True
+    render_block = result.get("renderBlock")
+    if isinstance(render_block, dict) and render_block.get("kind") in (
+        _WAIT_RENDER_KINDS
+    ):
+        return True
+    status = result.get("status")
+    decision = result.get("decision")
+    if any(
+        isinstance(marker_source, str)
+        and any(marker in marker_source for marker in _WAIT_STATUS_MARKERS)
+        for marker_source in (status, decision)
+    ):
+        return True
+    if command == "resume-handoff":
+        # Nothing runnable is left, so there is nothing to auto-continue to.
+        return not (
+            isinstance(result.get("checkpoints"), dict)
+            or isinstance(result.get("action"), dict)
+        )
+    return False
+
+
+def _next_command(
+    result: dict[str, Any],
+    command: str | None,
+    args: Any,
+) -> str:
+    """Exact next step for an output that continues without the maker."""
+    checkpoints = result.get("checkpoints")
+    if isinstance(checkpoints, dict) and checkpoints.get("commands"):
+        lines = [
+            str(item["command"])
+            for item in checkpoints["commands"]
+            if isinstance(item, dict) and item.get("command")
+        ]
+        if lines:
+            return (
+                "Run each of these commands exactly (replace the leading "
+                "python with the launcher from /setup), then run "
+                "record-checkpoint-results with the results: "
+                + " ; ".join(lines)
+            )
+    action = result.get("action")
+    if isinstance(action, dict) and action.get("actionDoc"):
+        return (
+            f"Read {action['actionDoc']} now and follow it (apply the shared "
+            "permission and rollback gates first)."
+        )
+    slug = result.get("agentSlug") or getattr(args, "agent_slug", None)
+    provider = result.get("provider") or getattr(args, "provider", None)
+    parts = ["python scripts/connect_servicenow_da.py"]
+    if provider:
+        parts.append(f"--provider {provider}")
+    if slug:
+        parts.append(f"--agent-slug {slug}")
+    parts.append("resume-handoff")
+    return " ".join(parts)
+
+
+_ASK_CARD_NEXT = (
+    "Ask the question in pendingCard now with one ask_user call using "
+    "pendingCard.askUserArguments exactly as given, then continue from the "
+    "maker's answer."
+)
+
 
 def _with_agent_rules(
     result: Any,
     command: str | None = None,
+    args: Any = None,
 ) -> Any:
     """Prepend rules to every command output; `adapt-question` output stays unchanged."""
     if not isinstance(result, dict) or command == "adapt-question":
         return result
     ordered: dict[str, Any] = {}
+    chat_message = _chat_message(result)
+    cards = _pending_cards(
+        {
+            key: item
+            for key, item in result.items()
+            if key not in {"renderBlock", "ordinaryReply"}
+        }
+    )
+    if chat_message or cards:
+        if chat_message:
+            ordered["chatMessage"] = chat_message
+        if cards:
+            ordered["endTurn"] = False
+            ordered["nextCommand"] = _ASK_CARD_NEXT
+            ordered["pendingCard"] = adapt_question_to_ask_user(cards[0])
+        elif _output_waits_for_maker(result, command):
+            ordered["endTurn"] = True
+            action = result.get("action")
+            if isinstance(action, dict) and action.get("actionDoc"):
+                ordered["afterReply"] = (
+                    f"When the maker replies, read {action['actionDoc']} and "
+                    "continue from its step that follows the maker's reply. "
+                    "Do not repeat or reword the message above."
+                )
+        else:
+            ordered["endTurn"] = False
+            ordered["nextCommand"] = _next_command(result, command, args)
     if "renderBlock" in result:
         ordered["renderBlock"] = result["renderBlock"]
     ordered["agentRules"] = list(AGENT_RULES)
@@ -13894,9 +14088,14 @@ def main(argv: list[str] | None = None) -> int:
             )
         if details:
             error["details"] = details
-        print(json.dumps(_with_agent_rules(error), indent=2))
+        print(json.dumps(_with_agent_rules(error, None, args), indent=2))
         return 1
-    print(json.dumps(_with_agent_rules(result, args.command), indent=2))
+    print(
+        json.dumps(
+            _with_agent_rules(result, args.command, args),
+            indent=2,
+        )
+    )
     return 0
 
 
