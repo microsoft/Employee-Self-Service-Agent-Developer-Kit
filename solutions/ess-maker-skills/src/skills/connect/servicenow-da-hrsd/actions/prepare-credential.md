@@ -59,7 +59,7 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-sl
 ```
 
 Show the exact field values from the output in the ordinary current-task
-reply (the controller builds the card; show it verbatim):
+reply (the controller builds the text; show it verbatim):
 
 - **Authentication type:** Microsoft Entra ID User Login.
 - **Resource URI:** the verified App A Application client ID; never

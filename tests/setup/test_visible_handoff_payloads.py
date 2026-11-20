@@ -362,26 +362,19 @@ def test_servicenow_questions_use_buttons_and_bounded_freeform() -> None:
                 )
             if question.get("allowFreeformInput") is True:
                 assert path.name in allowed_freeform
-            adapted = snow.adapt_question_to_ask_user(question)
+            adapted = snow.adapt_question_to_plain_text(question)
+            assert adapted["schemaVersion"] == "servicenow.plain-question.v1"
             assert adapted["canonicalQuestion"] == question
-            assert adapted["askUserArguments"]["message"] == (
-                question["header"]
-            )
-            field = adapted["askUserArguments"]["requestedSchema"][
-                "properties"
-            ]["response"]
-            assert field["description"] == question["question"]
-            assert adapted["askUserArguments"]["requestedSchema"][
-                "required"
-            ] == ["response"]
+            text = adapted["plainText"]
+            assert question["question"].strip() in text
+            assert "ask_user" not in text
             if question.get("options"):
-                assert field["title"] == "Selection"
-                assert [item["title"] for item in field["oneOf"]] == [
-                    option["label"] for option in question["options"]
-                ]
+                assert len(adapted["choices"]) == len(question["options"])
+                assert all(
+                    option["label"] in text for option in question["options"]
+                )
             else:
-                assert field["title"] == "Input"
-                assert "oneOf" not in field
+                assert adapted["choices"] == []
 
 
 def test_hr_plugin_completion_header_and_question_are_distinct() -> None:
@@ -421,9 +414,10 @@ def test_identity_admin_guides_use_only_required_value_questions(
     assert "Render `ordinaryReply.text`" in " ".join(entra.split())
     assert "there is no\nseparate Entra completion question" in entra
     assert "identity-direct-handoff --stage entra" in entra
-    assert "pass every returned `askUserArguments` object verbatim" in (
+    assert "nothing else is asked with `ask_user`" in (
         " ".join(entra.split())
     )
+    assert "askUserArguments" not in entra
     assert "completes the Manual Entra identity phase" in entra
     assert "does not prove app configuration" in entra
     assert "identity-direct-handoff --stage servicenow" in oidc

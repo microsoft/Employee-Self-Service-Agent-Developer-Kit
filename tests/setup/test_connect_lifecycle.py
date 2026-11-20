@@ -155,11 +155,10 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
     assert "without re-showing the\n   up-front plan" in resume
     assert "Do **not**\n   re-render the U.0 table" in resume
     assert "DA ServiceNow business-group availability" in runner
-    assert "exactly four HR or three IT" in runner
-    assert "Preflight, chooser, and instance confirmation" in runner
+    assert "`renderBlock.text`" in runner
+    assert "hidden by\n   `SHOW_PHASE_CHECKLIST`" in runner
     assert "`renderBlock.text`" in runner
     assert "`transport.businessGroupAvailability.question`" in runner
-    assert "exactly four HR or three IT" in runner
     assert "Preflight, chooser, and instance confirmation" in runner
     assert "One acknowledgement unlocks every internal phase" in runner
     assert "question-only" in normalized
@@ -215,19 +214,22 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert "stateInitializationCommand" in runner
     assert "**Visible ServiceNow handoff style:**" in runner
     assert "separate sections with two newlines" in runner
-    assert "Use numbered or bulleted lines under Action" in runner
-    assert "Prefer buttons with no recommended" in runner
+    assert "ordinary\nchat text" in runner
+    assert "Never call `ask_user`" in runner
+    assert "use\nnumbered or bulleted lines for steps" in runner
+    assert "Never recommend," in runner
     assert (
-        "Freeform is allowed only for one genuinely unknown non-secret value "
-        "per card"
+        "Ask for one genuinely unknown non-secret value per message"
         in runner_normalized
     )
     assert "**ServiceNow phase-progress extension:**" in runner
     assert "Other providers retain this runner's existing output" in runner
     assert "`renderBlock.text`" in runner
-    assert "Re-emit the freshly returned block" in runner_normalized
+    assert "Re-emit\nthe freshly returned non-empty text" in runner
     assert "phase checklist once" not in runner
-    assert "cached `done` phase displays **Rechecking**" in runner_normalized
+    assert "treated as rechecking until this invocation adds" in (
+        runner_normalized
+    )
     assert "**Complete — admin confirmed**" in runner
     assert "**Reused — checked**" in runner
     assert (

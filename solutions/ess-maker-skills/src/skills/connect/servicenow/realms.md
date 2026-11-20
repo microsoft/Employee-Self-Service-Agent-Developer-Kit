@@ -31,7 +31,7 @@ realm never change a realm's recorded state.
     administrator-confirmed instance, Entra Client ID and User Claim, and the
     employee mapping (User Field) for this agent and tenant. Do not run any
     administrator handoff. The block explains that the setup is reused and then
-    shows the checklist.
+    continues with the checks.
   - **Independent (`independent`):** there is no Dev record, or it lacks any one
     of those confirmed values, for example a missing employee mapping or a
     different tenant. Run the full administrator flow for the destination, then
@@ -102,50 +102,25 @@ publish, or give deployment instructions.
 
 If the maker asks to check ServiceNow after promotion but does not say Test or
 Production, and the controller's `activeTargetRealm` does not settle it, ask
-with `ask_user`. Never infer the destination from conversation text. If the
+Ask in plain chat text; never call `ask_user`. Never infer the destination from conversation text. If the
 agent is also unknown, ask for that next, and do not ask again for context that
 is already established.
 
-```json
-{
-  "message": "",
-  "requestedSchema": {
-    "properties": {
-      "destination": {
-        "type": "string",
-        "title": "Destination",
-        "description": "Which destination should we check, Test or Prod?",
-        "oneOf": [
-          { "const": "test", "title": "Test" },
-          { "const": "prod", "title": "Prod" }
-        ]
-      }
-    }
-  }
-}
-```
+> Which destination should we check—Test or Prod?
+>
+> Reply Test or Prod.
 
-If promotion completion is unknown, ask once with `ask_user`:
+Accept "test", "prod", "production", "1" (Test) or "2" (Prod).
 
-```json
-{
-  "message": "",
-  "requestedSchema": {
-    "properties": {
-      "promotion": {
-        "type": "string",
-        "title": "Promotion",
-        "description": "Has the agent already been promoted to the requested realm?",
-        "oneOf": [
-          { "const": "yes", "title": "Yes, promotion is complete - check again" },
-          { "const": "no", "title": "No, I need to complete promotion first" },
-          { "const": "later", "title": "Not now" }
-        ]
-      }
-    }
-  }
-}
-```
+If promotion completion is unknown, ask once in plain chat text:
+
+> Has the agent already been promoted to that destination?
+>
+> 1. Yes, promotion is complete—check again.
+> 2. No, I need to complete promotion first.
+> 3. Not now.
+>
+> Reply with a number or the answer in your own words.
 
 An explicit statement that promotion completed, or a pasted agent link,
 already answers it. On **No**, give the Dev agent link and the deployment-owner
@@ -190,21 +165,26 @@ then rerun with `--environment "{ENVIRONMENT_NAME_OR_URL}"`.
 
 If discovery fails, keep the active realm and all completed administrator work.
 Show the observed failure and the returned remediation. Offer **Check again**,
-**Choose another environment**, and **Not now** with `ask_user`. Reuse a supplied
+**Choose another environment**, and **Not now** as short numbered plain-text
+choices (no `ask_user`). Reuse a supplied
 environment selection on **Check again**. Do not send the maker back to Dev.
 
 ## Realm stages
 
 After discovery succeeds, `discover-realm-target`, `check-realm`,
 `realm-status`, `select-realm`, and `record-realm-test` each return
-`renderBlock.text`: a step checklist for the active Test or Prod run. Emit it
-verbatim as an assistant message before any other tool call. Never write your
-own checklist, status table, or item list, and do not paraphrase its rows, its
-explanation, or its instruction. Use `phases` and `nextPhaseId` only to decide
+`renderBlock.text`: the conversation text for the active Test or Prod step
+(`renderBlock.kind` is `realm-step`; `realmIntro` is the case paragraph). The
+step checklist is hidden for now (`SHOW_REALM_CHECKLIST = False` in
+`scripts/servicenow_connect_realms.py`), so emit the returned text verbatim
+when it is non-empty, before any other tool call. Never write your
+own checklist, status table, or item list, and do not paraphrase its
+explanation or its instruction. Use `phases` and `nextPhaseId` only to decide
 what to do next.
 
 The block opens with a one-paragraph explanation of the case (Dev reuse or
-independent). The checklist uses the same icons as the Dev view: ✅ done, ⏳
+independent). When the checklist is restored (`renderBlock.kind` is
+`realm-checklist`), it uses the same icons as the Dev view: ✅ done, ⏳
 waiting, ❌ needs attention, ⬜ not checked yet. Its steps are permission to
 configure the agent, then, in an independent run only, the Microsoft Entra
 administrator and the ServiceNow administrator, then the ServiceNow connection,
@@ -508,7 +488,7 @@ what to do next.
 |---|---|
 | Dev has no lifecycle record, or lacks any administrator-confirmed value, then Test is checked | The block explains that the full ServiceNow setup runs for Test, asks for the instance, then walks the Entra administrator and ServiceNow administrator steps (⏳ until each reply is recorded) before checking the connection, topics, and portal. |
 | Dev holds every administrator-confirmed value, then Test is checked | The block explains that the Dev sign-in setup and mapping are reused, shows no administrator step, and checks the Test connection, topics, portal URL, and real-data test. |
-| Connection is on in Dev but missing in Test | The checklist shows ❌ on the connection step with "Validation is paused", then Dev-style steps to create the connection in Test, ending with reply "Done". The Dev connection is never suggested. |
+| Connection is on in Dev but missing in Test | The step explains that validation is paused, then gives Dev-style steps to create the connection in Test, ending with reply "Done". The Dev connection is never suggested. |
 | Connection exists in Test but is not bound to the agent | ❌ on the connection step; steps to select the connection under Connection Settings and save, then reply "Done". |
 | Connection in Test is disconnected | ❌ on the connection step; steps to reconnect until it shows Connected, then reply "Done". |
 | Instance or client ID differs from the expected value | ❌ on the connection step with the exact difference and the steps to create a matching connection in the destination. |

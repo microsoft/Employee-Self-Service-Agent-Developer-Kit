@@ -13,16 +13,17 @@ Parse the structured result. `verified-noop` with `actionResult: applied`
 returns `ACTION_RESULT = "applied"` without asking or mutating.
 `question-required` carries two controller-built fields. Show
 `replyBeforeQuestion` verbatim as an ordinary agent reply (together with the
-current-task link below) before the card, and pass `question` to the shared
-lifecycle runner exactly as returned. Do not move the topic list into the
-card or rebuild either field.
+current-task link below) before the question, and pass `question` to the shared
+lifecycle runner exactly as returned (it is asked as plain chat text via
+`adapt-question`). Do not move the topic list into the
+question or rebuild either field.
 Any failure, unknown decision, malformed question or identity mismatch blocks
 the phase before checkpoint or mutation.
 Use the shared lifecycle runner's `adapt-question` path for that exact
 returned canonical question.
 
 The command-generated `replyBeforeQuestion` is an ordinary reply, not part of
-the card:
+the question:
 
 ```text
 Current topic inventory: {TOPIC_INVENTORY}

@@ -14,9 +14,10 @@ Parse the structured result. This read-only command is authoritative:
 - `verified-noop` with `actionResult: applied` — set
   `ACTION_RESULT = "applied"` without asking or mutating.
 - `question-required` — show the returned `replyBeforeQuestion` verbatim as
-  an ordinary agent reply (with the current-task link below) before the card,
-  then return the exact `question` object to the shared lifecycle runner; do
-  not rebuild or shorten either field or move the topic list into the card;
+  an ordinary agent reply (with the current-task link below) before the question,
+  then return the exact `question` object to the shared lifecycle runner (asked
+  as plain chat text via `adapt-question`); do
+  not rebuild or shorten either field or move the topic list into the question;
 - any failure, unknown decision, malformed question or identity mismatch —
   fail closed before checkpoint or mutation.
 
@@ -25,7 +26,7 @@ canonical question. Only ServiceNow ITSM topics in this inventory are in
 scope; unrelated topics remain unchanged.
 
 The command-generated `replyBeforeQuestion` is an ordinary reply, not part of
-the card:
+the question:
 
 ```text
 Current topic inventory: {TOPIC_INVENTORY}

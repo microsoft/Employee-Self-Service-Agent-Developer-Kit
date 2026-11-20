@@ -10,7 +10,12 @@ Run the state-free local chooser:
 python scripts/connect_servicenow_da.py agent-chooser
 ```
 
-Show the exact returned `question`. Its prepared-agent choices come only from
+Pass the exact returned `question` through the plain-text adapter
+(`adapt-question`) and send the returned `plainText` as an ordinary chat
+message; never call `ask_user` or show a selection card. Wait for the maker's
+typed reply and map it with `match-reply` (a number or the agent's name selects
+that option). If the maker replies with a Copilot Studio link instead, treat it
+as **Use another agent (paste link)** with that link. Its prepared-agent choices come only from
 canonical HR/IT setup entries for the current bound workspace environment.
 Each option is labeled with the agent's recorded Copilot Studio display name
 only (no product suffix, ID, link, or slug); a product name or ordinal is added
@@ -20,12 +25,12 @@ This command must not run a remote collection listing.
 
 **Skip the chooser when the agent is already known.** If the maker already gave
 a Copilot Studio agent link, or the agent was already selected, set up, or
-discussed earlier in the same conversation, do not show the question. Reuse
+discussed earlier in the same conversation, do not ask the question. Reuse
 that agent silently with the selection-key commands below (link form when a
 link is known, `prepared:{AGENT_ID}` otherwise) and continue only on
 `status: ready`. Follow the rules in `src/skills/connect/servicenow/entry.md`
 (**Choose the agent**); when the conversation names no agent, several agents,
-or an agent that is not in this workspace, show the chooser as usual.
+or an agent that is not in this workspace, ask the chooser question as usual.
 
 When the maker selects a prepared agent, rerun with its returned internal
 selection key:
@@ -41,7 +46,7 @@ identity and lifecycle checks still apply; local preparation is not remote
 success evidence.
 
 For **Use another agent (paste link)**, the selection-key command returns one
-focused freeform question. Show it exactly. After the maker pastes the full
+focused freeform question. Send it as plain chat text exactly. After the maker pastes the full
 Copilot Studio link, run:
 
 ```text

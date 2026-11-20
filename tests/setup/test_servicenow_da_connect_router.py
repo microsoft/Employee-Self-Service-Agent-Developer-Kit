@@ -68,7 +68,7 @@ def test_servicenow_connect_entry_files_gate_progress_rendering() -> None:
     )
     for path in gated_files:
         text = " ".join(path.read_text(encoding="utf-8").split())
-        assert "**STOP — render before acting.**" in text, path.name
+        assert "**STOP — conversation text only.**" in text, path.name
         assert (
             "your very next assistant message — before any other tool call — "
             "must contain `renderBlock.text` verbatim"
@@ -78,9 +78,12 @@ def test_servicenow_connect_entry_files_gate_progress_rendering() -> None:
         )
         assert "the only renderable field" in text, path.name
         assert "never add a Check/Status table" in text, path.name
+        assert "SHOW_PHASE_CHECKLIST = False" in text, path.name
         assert "`progress.checklistText`" not in text, path.name
         assert "`progress.currentPhase.startText`" not in text, path.name
-        assert 'write "render the plan" instead' in text, path.name
+        assert "never call `ask_user`" in text.lower() or (
+            "Never call `ask_user`" in text
+        ), path.name
 
 
 def test_servicenow_connect_docs_suppress_flightcheck_health_table() -> None:
@@ -621,11 +624,11 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
         assert removed not in prompt
     assert "transport.businessGroupAvailability.question" in prompt
     assert "adapt-question" in prompt
-    assert "servicenow.ask-user-arguments.v1" in prompt
-    assert "askUserArguments" in prompt
-    assert "{message, requestedSchema}" in prompt
-    assert "`questions: [...]` is internal host output" in prompt
-    assert "HR's four or IT's three collaboration groups" in prompt
+    assert "servicenow.plain-question.v1" in prompt
+    assert "match-reply" in prompt
+    assert "Never call `ask_user`" in prompt
+    assert "askUserArguments" not in prompt
+    assert "HR's four or IT's three collaboration groups" not in prompt
     assert "Preflight and instance input never ask availability" in prompt
     assert "with `--roles-available yes`" in prompt
     assert "`--business-group-id`" in prompt
@@ -642,13 +645,12 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     assert "ServiceNow phase-progress strings returned" in prompt
     assert "**ServiceNow phase-progress extension:**" in runner
     assert "adapt-question" in runner
-    assert "servicenow.ask-user-arguments.v1" in runner
-    assert "askUserArguments" in runner
-    assert "property `description`" in runner
-    assert "`questions: [...]` is internal Agent Host output" in runner
-    assert "known defect that exposes" in runner
+    assert "servicenow.plain-question.v1" in runner
+    assert "askUserArguments" not in runner
     assert "Other providers retain this runner's existing output" in runner
-    assert "cached `done` phase\ndisplays **Rechecking**" in runner
+    assert "treated as rechecking until this invocation adds" in " ".join(
+        runner.split()
+    )
     assert "Do not inspect `.local/connect/steps.md` before" in prompt
     assert "a DA ServiceNow route starts\nwith its provider lifecycle" in prompt
     chooser = (

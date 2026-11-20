@@ -102,8 +102,9 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-sl
 
 Require `decision: instructions-required`. Render `ordinaryReply.text`
 verbatim; it already contains the plain-text lead-in before the
-Ready-to-send fenced block, so do not rewrap or edit either part. Then pass every returned `askUserArguments` object verbatim through
-the active `ask_user` tool. The returned question list intentionally excludes
+Ready-to-send fenced block, so do not rewrap or edit either part. The returned
+`questions` list is empty and nothing else is asked with `ask_user` or any input
+card. The returned question list intentionally excludes
 availability because `resume-handoff` owns and deduplicates that gate. Do not
 ask the maker for the claim up front: the maker answers one prompt by pasting
 the Entra administrator's non-sensitive reply or the Client ID. Read the claim
