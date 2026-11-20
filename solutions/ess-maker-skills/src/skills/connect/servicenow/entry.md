@@ -427,14 +427,19 @@ Entra handoff. You won't need to restart.
 **End message.**
 
 **Maker pauses for an administrator.** When the maker says they will return
-later while an administrator reply is outstanding, show the first Message. When
-they return, show the second, rerun `resume-handoff` (which rechecks
-permission), and then continue with the next question it returns:
+later while an administrator reply is outstanding, show the first Message. Any
+later message from the maker in this setup (including "continue" or any other
+words) means they want to continue; never ask a Yes/No question to confirm it.
+Show the second Message, rerun `resume-handoff` (which rechecks permission),
+and only after it succeeds show the third Message and wait for the reply. Do
+not render the administrator's ready-to-send message again. Record the reply
+with the existing commands; when items are missing, use the matching
+clarification Message:
 
 **Message:**
 
 We're waiting for your ServiceNow administrator's saved-configuration
-confirmation and User Field.
+confirmation, User Claim, and User Field.
 
 When you return, paste their non-sensitive reply or send those items
 individually. Don't include employee identifiers or secrets. You won't need to
@@ -449,6 +454,14 @@ We're continuing the ServiceNow setup for **{AGENT_NAME} in
 
 We're rechecking your permission to configure this agent before we continue.
 Next, we'll need your ServiceNow administrator's reply.
+
+**End message.**
+
+**Message:**
+
+Paste their non-sensitive saved-configuration confirmation, User Claim, and
+User Field—or send those items individually. Don't include employee
+identifiers or secrets.
 
 **End message.**
 

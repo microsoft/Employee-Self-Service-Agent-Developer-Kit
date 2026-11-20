@@ -13313,11 +13313,10 @@ def test_phase_progress_distinguishes_reused_manual_recheck_and_blocked() -> Non
     )
     assert internal["waitingText"] == (
         "We're waiting for your ServiceNow administrator's "
-        "saved-configuration confirmation, User Field, and same-value "
-        "confirmation.\n\n"
-        "When you return, paste their non-sensitive reply. Don't include "
-        "employee identifiers or secrets. You won't need to repeat the Entra "
-        "values."
+        "saved-configuration confirmation, User Claim, and User Field.\n\n"
+        "When you return, paste their non-sensitive reply or send those "
+        "items individually. Don't include employee identifiers or secrets. "
+        "You won't need to repeat the Entra values."
     )
     entra_progress = snow._build_phase_progress(
         contract,

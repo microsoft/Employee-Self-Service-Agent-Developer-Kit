@@ -490,9 +490,16 @@ def test_servicenow_connect_entry_has_flow_clarification_messages() -> None:
         "that the HR Service Delivery Core plugin is installed and active.",
         "You won't need to restart.",
         "We're waiting for your ServiceNow administrator's "
-        "saved-configuration confirmation and User Field.",
+        "saved-configuration confirmation, User Claim, and User Field.",
         "We're continuing the ServiceNow setup for **{AGENT_NAME} in "
         "{ENVIRONMENT_NAME}**.",
+        "We're rechecking your permission to configure this agent before we "
+        "continue. Next, we'll need your ServiceNow administrator's reply.",
+        "Paste their non-sensitive saved-configuration confirmation, User "
+        "Claim, and User Field—or send those items individually. Don't "
+        "include employee identifiers or secrets.",
+        "means they want to continue; never ask a Yes/No question to "
+        "confirm it.",
         "The reply contains more than one Client ID. Ask your Entra "
         "administrator which **Client ID** ServiceNow should use.",
         "We need the Entra administrator to confirm the custom claim before "

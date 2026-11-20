@@ -48,6 +48,10 @@ with the confirmed Client ID and User Claim already locked:
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} identity-direct-handoff --stage servicenow
 ```
 
+When the maker returns from a pause with an administrator reply outstanding,
+do not render the instructions again: follow the "Maker pauses for an
+administrator" messages in `servicenow/entry.md`, then record the reply below.
+
 Require `decision: instructions-required`. Render `ordinaryReply.text`
 verbatim; it already contains the plain-text lead-in before the
 Ready-to-send fenced block, so do not rewrap or edit either part. Then pass the returned User Field `askUserArguments` object verbatim. When the
