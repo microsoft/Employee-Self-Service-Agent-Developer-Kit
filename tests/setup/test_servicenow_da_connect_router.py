@@ -1309,7 +1309,9 @@ def test_servicenow_oidc_guides_match_canonical_admin_instructions() -> None:
         assert "atomically persists the mapping receipt and owning Manual" in (
             normalized
         )
-
+        assert "User Field question as plain chat text" in normalized
+        assert "do not call `ask_user` or any input card" in normalized
+        assert "Then pass the returned User Field" not in normalized
 
 def test_connect_completion_uses_human_verified_wording_without_realm_text() -> None:
     import re

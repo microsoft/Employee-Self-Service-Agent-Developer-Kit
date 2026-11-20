@@ -30,7 +30,9 @@ internal IDs/status machinery. Prefer buttons with no recommended,
 preselected, default, or automatic answer.
 Freeform is allowed only for one genuinely unknown non-secret value per card:
 the public ServiceNow instance URL, employee portal URL, Entra Application
-client ID, selected emitted claim name, or actual internal `sys_user` field.
+client ID, or selected emitted claim name. The ServiceNow User Field is not a
+card: ask it as plain chat text from `identity-direct-handoff` and record the
+typed reply with `record-identity-direct`.
 Never combine multiple values in one blank field.
 Detailed technical navigation belongs in the linked administrator guide or
 the canonical administrator instructions, while the question names the result
@@ -95,7 +97,10 @@ availability gate is the only availability question. Do not invoke
 `identity-direct-handoff`, render its ordinary instructions, or ask its data
 questions until that acknowledgement is current. Once current, require
 `decision: instructions-required`, render its `ordinaryReply.text` verbatim,
-and ask only its returned data questions. `decision: no-action`
+and ask only its returned data questions. For the ServiceNow stage the
+returned question list is empty: the User Field question is the closing plain
+text of `ordinaryReply.text`, so call no question tool and wait for the
+maker's reply. `decision: no-action`
 means current completed/reused evidence skips both availability and
 instructions.
 Before Entra availability, honor a returned

@@ -1023,27 +1023,16 @@ def _identity_direct_questions(
                 "ServiceNow direct questions require the locked "
                 "Entra-confirmed User Claim name."
             )
-        if captured_user_field is None:
-            canonical = [
-                _native_question(
-                    header="ServiceNow internal user field",
-                    question=(
-                        "Enter the exact internal `sys_user` field that stores "
-                        "the same identity key as the locked Entra-confirmed "
-                        f"User Claim `{confirmed_claim_name}`. Do not enter a "
-                        "display label or employee value."
-                    ),
-                    allow_freeform_input=True,
-                )
-            ]
-        else:
+        # The User Field is asked as plain chat text in ordinaryReply, so no
+        # input card is returned for this stage.
+        if captured_user_field is not None:
             user_field = str(captured_user_field).strip()
             if not _SAFE_USER_FIELD.fullmatch(user_field):
                 raise ServiceNowConnectError(
                     "servicenow_user_field must be an explicit safe "
                     "ServiceNow internal field name."
                 )
-            canonical = []
+        canonical = []
     else:
         raise ServiceNowConnectError(
             "Identity direct handoff stage must be entra or servicenow."
@@ -1112,6 +1101,13 @@ def _identity_runtime_instruction_source(
         normalized,
         hashlib.sha256(normalized.encode("utf-8")).hexdigest().upper(),
     )
+
+
+SERVICENOW_USER_FIELD_TEXT_QUESTION = (
+    "Which **User Field** did your ServiceNow administrator select? Paste "
+    "their reply here, or just type the field name. Please don't include "
+    "secrets or employee values."
+)
 
 
 def _ready_to_send_block(body: str) -> str:
@@ -1380,6 +1376,11 @@ def identity_direct_handoff(
                 "text": (
                     f"{_identity_handoff_lead_in(stage)}\n\n"
                     f"{_ready_to_send_block(source_text)}"
+                    + (
+                        f"\n\n{SERVICENOW_USER_FIELD_TEXT_QUESTION}"
+                        if stage == "servicenow"
+                        else ""
+                    )
                 ),
             }
         ),

@@ -50,12 +50,18 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-sl
 
 Require `decision: instructions-required`. Render `ordinaryReply.text`
 verbatim; it already contains the plain-text lead-in before the
-Ready-to-send fenced block, so do not rewrap or edit either part. Then pass the returned User Field `askUserArguments` object verbatim. When the
+Ready-to-send fenced block, so do not rewrap or edit either part. It also ends
+with the User Field question as plain chat text. The returned `questions` list
+is empty: do not call `ask_user` or any input card for the User Field; stop
+after the reply and wait for the maker to type it. When the
 handoff is regenerated after a User Field was already captured, the returned
 `ordinaryReply.text` is only a short acknowledgement of the recorded field;
 render it verbatim and do not ask for the field again.
-The question list intentionally excludes availability because `resume-handoff`
-owns and deduplicates that gate. Record only the administrator-confirmed
+The handoff excludes availability because `resume-handoff`
+owns and deduplicates that gate. Take the field name from the maker's typed
+reply, or from the ServiceNow administrator's pasted reply. If the reply gives
+only a display label, ask once in plain words for the field's column name
+instead of guessing. Record only the administrator-confirmed
 internal `sys_user` field; the command does not accept Client ID or User Claim
 overrides:
 

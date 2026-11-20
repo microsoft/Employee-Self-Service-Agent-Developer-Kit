@@ -7552,7 +7552,7 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
         "runtime-instructions/servicenow-administrator.md"
     )
     assert service_now["runtimeInstructionSha256"] == (
-        "ED080226F6E6A956BFAB0AFD1AA2D3DD2EFD449DE16869B18CC82282E4B35632"
+        "24DF983A8BB185A2EF39032A85F8B62E990A3B3C5563F505F5F9B2D57E8C3638"
     )
     assert service_now["lockedValues"] == {
         "applicationClientId": APP_CLIENT_ID,
@@ -7594,12 +7594,10 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
             claim_name="employee_id",
         )
     assert source_text == expected_text
-    assert len(service_now["questions"]) == 1
-    input_card = service_now["questions"][0]
-    assert input_card["canonicalQuestion"]["allowFreeformInput"] is True
-    assert input_card["askUserArguments"]["requestedSchema"]["properties"][
-        "response"
-    ]["description"] == input_card["canonicalQuestion"]["question"]
+    assert service_now["questions"] == []
+    assert ordinary.endswith(snow.SERVICENOW_USER_FIELD_TEXT_QUESTION)
+    assert "sys_user" not in snow.SERVICENOW_USER_FIELD_TEXT_QUESTION
+    assert "ServiceNow internal user field" not in json.dumps(service_now)
     assert service_now_completion["ordinaryReply"] == {
         "kind": "ordinary-agent-response",
         "text": (
@@ -7638,7 +7636,7 @@ def test_canonical_runtime_instruction_sources_are_exact_and_structured():
         "0306CE216C696E56C02CBEC78DB152096867B2D26C7AC06BE8AD89D8B01B4D04"
     )
     assert service_now_sha == (
-        "ED080226F6E6A956BFAB0AFD1AA2D3DD2EFD449DE16869B18CC82282E4B35632"
+        "24DF983A8BB185A2EF39032A85F8B62E990A3B3C5563F505F5F9B2D57E8C3638"
     )
     assert "\u00a0" not in entra + service_now
     assert entra.startswith("#### Instructions for the Entra administrator")

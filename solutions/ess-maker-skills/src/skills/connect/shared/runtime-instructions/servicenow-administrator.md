@@ -30,4 +30,4 @@ ServiceNow allows only one OIDC configuration per Microsoft Entra tenant. If one
 7. Back on the application registry form, confirm that the new configuration is selected, and select **Submit**.
 8. **HR agent only:** employees who use HR scenarios need one of the roles `sn_hr_core.basic`, `sn_hr_core.manager`, or `sn_hr_core.admin`.
 
-**Send back to the maker:** confirmation that the configuration is saved, the User Field you selected, and confirmation that it holds exactly the same value as the User Claim `<claim>`.
+**Send back to the maker:** confirmation that the configuration is saved, the User Field you selected and its column name, and confirmation that it holds exactly the same value as the User Claim `<claim>`.
