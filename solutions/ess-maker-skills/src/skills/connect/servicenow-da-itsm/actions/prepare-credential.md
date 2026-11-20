@@ -59,7 +59,7 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-sl
 ```
 
 Show the exact field values from the output in the ordinary current-task
-reply (the controller builds the text; show it verbatim):
+reply (the controller builds the card; show it verbatim):
 
 - **Authentication type:** Microsoft Entra ID User Login.
 - **Resource URI:** the verified App A Application client ID; never
@@ -106,17 +106,25 @@ must never run for the multiple-healthy-candidate path. Render
 exact candidate summary in the ordinary current-task reply. The reply starts
 with a controller-built lead-in (it names the saved User Claim and User Field
 only when both are recorded) and ends with a controller-built closing line;
-show both verbatim. The closing line already asks the Maker to reply with the
-connection they used, so send no separate question and no input or selection
-component. The connection check below is plain chat text only; never a card or input
-component. Its text is the controller's closing line (shown verbatim), which
-already asks the Maker to reply with the connection they used. Send no separate
-question and end your turn after it. For your own mapping, a reply that the
-connection is created and shows Connected means completed; a reply that it is
-not ready means not yet. The name is optional guidance and is not a readiness
-gate.
+show both verbatim. The native question carries only the completion decision:
 
-After a reply that says the connection is created and shows Connected, run:
+<!-- visible-handoff-question:v1 -->
+```json
+[
+  {
+    "header": "ServiceNow connection",
+    "question": "Did you create the connection, and does Copilot Studio show it as Connected for this agent? If you reply in chat instead, name the connection you used, for example: \"I created {CONNECTION_DISPLAY_NAME}. Copilot Studio shows Connected.\"\n\nSelecting the completed option triggers one fresh connection check and one check of the agent's saved settings. The name is optional guidance and is not a readiness gate.",
+    "options": [
+      { "label": "Completed, the connection is created and shows Connected" },
+      { "label": "Not yet, the connection is not ready" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+After **Completed, the connection is created and shows Connected** (or a chat
+reply that says so), run:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} resolve-credential
@@ -148,37 +156,34 @@ draft connection reference:
 - A command/read error is authoritative. Report it and stop; on HTTP 429,
   honor the cooldown/Retry-After and do not immediately retry the workflow.
 
-If the Maker replies that the connection is not ready yet, return
+If the Maker selects **Not yet, the connection is not ready**, return
 `ACTION_RESULT = "waiting"` without running completion or recording evidence.
 
 For multiple healthy exact candidates discovered by the initial
-`inspect-admin-setup`, build the supported choices directly from
+`inspect-admin-setup`, build the supported selector options directly from
 `credentialResolution.healthyExactCandidates`. If a post-Completed
 `resolve-credential` unexpectedly returns `choice-required` because inventory
-changed, use that command's returned candidates. In either case, each choice
+changed, use that command's returned candidates. In either case, each option
 label is the returned bounded `label`, and the corresponding internal value is
-its `selectionKey`. The Maker sees and replies with only the non-secret label
-or its number; never ask them to copy the key or connection ID. Pass the
-question below to `adapt-question` on stdin, send the returned `plainText` as
-ordinary chat text (never `ask_user`), and map the typed reply with
-`match-reply`.
+its `selectionKey`. The Maker sees and selects only the non-secret label;
+never ask them to copy the key or connection ID.
 
-<!-- plain-chat-question:v1-select-credential -->
-**Message:**
+<!-- visible-handoff-question:v1-select-credential -->
+```json
+[
+  {
+    "header": "Choose ServiceNow connection",
+    "question": "Fresh read-only inventory found multiple healthy exact ServiceNow connections in this environment. Each already uses Microsoft Entra ID User Login with the required Resource URI and Instance Name.\n\nChoose the connection to use for this agent. No new connection will be created. Make sure this agent's Connection Settings use the same connection.",
+    "options": [
+      { "label": "{CANDIDATE_LABEL_1}" },
+      { "label": "{CANDIDATE_LABEL_2}" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
 
-Fresh read-only inventory found multiple healthy exact ServiceNow connections in this environment. Each already uses Microsoft Entra ID User Login with the required Resource URI and Instance Name.
-
-Choose the connection to use for this agent. No new connection will be created. Make sure this agent's Connection Settings use the same connection.
-
-1. {CANDIDATE_LABEL_1}
-2. {CANDIDATE_LABEL_2}
-
-Reply with the number or the name of the connection.
-
-**End message.**
-
-Replace the example choices with exactly one numbered line per returned
-candidate, then end your turn.
+Replace the example options with exactly one option per returned candidate.
 Map the selected label to its returned `selectionKey`, then run:
 
 ```text

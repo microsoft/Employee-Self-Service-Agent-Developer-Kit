@@ -19,20 +19,19 @@ tools you are calling or what files you are reading. Never surface a checkpoint
 ID, phase ID, file path, or the word "checkpoint"/"contract"/"state file" to the
 user. Contract phase `label` values are customer-facing text, not phase IDs.
 
-**Visible ServiceNow handoff style:** Every maker-facing question is ordinary
-chat text. Never call `ask_user`, and never present an input box, selection
-card, or confirm card for ServiceNow. Use real blank lines and
-markdown-friendly bullets, separate sections with two newlines, and use
-numbered or bulleted lines for steps so renderers cannot collapse the message
-into one paragraph. Say exactly what value or choice the user must provide and
-how to reply (for example "Reply **Yes** or **No**."). Show only current
-missing work; do not repeat passed steps or show IDs, URLs the maker did not
-type, file paths, tool names, or status machinery. Never recommend,
-preselect, or default an answer.
-Ask for one genuinely unknown non-secret value per message: the public
-ServiceNow instance URL, employee portal URL, Entra Application client ID,
-selected emitted claim name, or ServiceNow User Field. Never ask the maker to
-type a secret, and never combine multiple values in one question.
+**Visible ServiceNow handoff style:** Render one task per question with real
+blank lines and markdown-friendly bullets. Put literal bold headings on their
+own lines and separate sections with two newlines, for example
+`**Purpose**\n...\n\n**Owner**\n...\n\n**Action**\n1. ...`.
+Use numbered or bulleted lines under Action so renderers cannot collapse the
+question into one paragraph. Say exactly what value or choice the user must
+provide. Show only current missing work; do not repeat passed steps or
+internal IDs/status machinery. Prefer buttons with no recommended,
+preselected, default, or automatic answer.
+Freeform is allowed only for one genuinely unknown non-secret value per card:
+the public ServiceNow instance URL, employee portal URL, Entra Application
+client ID, selected emitted claim name, or actual internal `sys_user` field.
+Never combine multiple values in one blank field.
 Detailed technical navigation belongs in the linked administrator guide or
 the canonical administrator instructions, while the question names the result
 to return.
@@ -52,80 +51,62 @@ or progress process. Each item retains its internal contract `label` for
 validation and supplies a short `customerLabel` for every visible checklist.
 Other providers retain this runner's existing output.
 
-**Active ServiceNow question adapter (plain chat text):** Every DA ServiceNow
-interactive question is sent as chat text. The controller already returns it
-as a neutral `plain-question` (`replyOptions` and `freeformReply` carry the
-business and state semantics). Never call `ask_user`. To ask a question that
-a document gives you in object form, serialize that exact object
+**Active ServiceNow question adapter:** Every DA ServiceNow interactive
+question remains a canonical
+`header`/`question`/`options`/`allowFreeformInput` object for business and
+state semantics. Before calling the actual tool, serialize that exact object
 unchanged to stdin for:
 
 ```text
 python scripts/connect_servicenow_da.py --provider {PROVIDER} adapt-question
 ```
 
-Require `schemaVersion: servicenow.plain-question.v1`, then send the returned
-`plainText` verbatim as an ordinary assistant message and wait for the
-maker's typed reply. `plainText` already carries the reply guidance ("Reply
-**Yes** or **No**." or a numbered list with "Reply with the number or the
-wording of your choice."). Do not rebuild it. Then map the typed reply to the
-canonical answer with the same canonical object on stdin:
+Require `schemaVersion: servicenow.ask-user-arguments.v1`, then call the
+active `ask_user` tool with the returned `askUserArguments` object verbatim.
+Do not recreate the schema. The adapter maps the canonical header to top-level
+`message`, the complete canonical question to property `description`, uses a
+neutral property `title`, emits explicit `oneOf` labels for options, and marks
+the response field required. The actual callable contract is
+`{message, requestedSchema}`. `questions: [...]` is internal Agent Host output,
+not callable input. The canonical `allowFreeformInput` intent remains in the
+adapter envelope; the active host currently has a known defect that exposes
+and accepts custom enum answers because its schema has no freeform-control
+field. Do not patch the host or invent a business reject/re-ask flow here.
 
-```text
-python scripts/connect_servicenow_da.py --provider {PROVIDER} match-reply --reply "{typed reply}"
-```
+**STOP — render before acting.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant message — before any other tool call — must contain `renderBlock.text` verbatim (the grouped phases view; it already ends with the current step line). `renderBlock.text` is the only renderable field: never render anything under `internal`, never write your own checklist, and never add a Check/Status table. Never summarize it or write "render the plan" instead.
 
-Require `servicenow.question-reply-match.v1`:
+When the controller returns `renderBlock`, emit `renderBlock.text` verbatim as that assistant message; printing it from a terminal or tool call does not count. Run every command with the launcher resolved by `/setup` (`py -3`, `python3`, then `python`), never assuming bare `python`. When the contract sets `checkpointRecording: "provider-command-v1"`, never edit `lifecycle.json` by hand; use the controller commands.
 
-- `status: matched` — use `selectedOption.label` / `selectedOption.selectionKey`
-  exactly as the previous selected answer, then run the same existing command.
-  Accept "yes", "1", the option wording, or a short sentence.
-- `status: freeform` — the reply is the typed value; pass it to the existing
-  command that records that value.
-- `status: ambiguous` or `unmatched` — say in one short sentence that you
-  could not tell which answer was meant, send the same `plainText` again, and
-  wait. Record nothing.
-
-When a numbered instance-choice question receives a pasted ServiceNow URL
-instead of a number, treat it as the manually provided instance URL.
-
-**Progress snapshot, then conversation text.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant messages — before any other tool call — are: (1) when `renderBlock.progressTodos` is non-empty, that list verbatim written into the todo list tool (one item per phase with `title` and `status` of `completed`, `in-progress` or `not-started`; a blocked phase stays `in-progress` and its title says it needs attention; create the list on the first call and update the same list in place afterwards, always sending every item; the host keeps it as one updating list, so do not also post it as chat text), or, only when `renderBlock.progressSnapshot` is non-empty instead (`PROGRESS_DELIVERY = "chat"` in `scripts/servicenow_connect_realms.py`), that Markdown snapshot verbatim as its own short chat message (a title line and one status bullet per phase, ✅ done, 🔄 current, ⛔ needs attention, ⬜ not started; nothing is pinned, so re-post the fresh snapshot at each phase change); then (2) `renderBlock.text` verbatim when it is non-empty (the conversation text for the current step: the connection opening at a fresh start, then the current step line). Never edit or rebuild the snapshot, never write your own checklist or phase list, never add a Check/Status table, and never use a card or input component for it. When both are empty, send nothing and continue to the step's own question. `SHOW_PHASE_CHECKLIST = False` in `scripts/connect_servicenow_da.py` hides the snapshot; the older verbose "Automatic setup / Phases" view with role labels and a legend stays off behind `SHOW_LEGACY_PHASE_VIEW`. Never render anything under `internal`; progress items and counts stay agent-facing state used for resume and routing.
-
-When the controller returns `renderBlock`, emit `renderBlock.text` verbatim when non-empty as that assistant message; printing it from a terminal or tool call does not count. Run every command with the launcher resolved by `/setup` (`py -3`, `python3`, then `python`), never assuming bare `python`. When the contract sets `checkpointRecording: "provider-command-v1"`, never edit `lifecycle.json` by hand; use the controller commands.
-
-For DA ServiceNow, the controller's `renderBlock.text` is ordinary
-conversation text for the current step. The grouped phases view (automatic
-preflight, the HR or IT collaboration groups, responsible-role labels and
-nested statuses) is hidden by `SHOW_LEGACY_PHASE_VIEW` and is agent-facing
-state only: the flat items and everything under `internal` are data. Re-emit
-the freshly returned non-empty text on every phase completion/next-phase
-transition, waiting pause, blocked/error transition, and completion. A cached `done` phase
-is treated as rechecking until this invocation adds its verified marker. An
+For DA ServiceNow, render the controller's
+`renderBlock.text` as an ordinary agent response. It is the grouped phases view:
+the automatic preflight plus the complete HR or IT collaboration groups, one
+responsible role per group, and nested internal-step statuses (it already
+ends with the current step line). `renderBlock.text` is the only renderable
+field; the flat items and everything under `internal` are data. Re-emit the
+freshly returned block on every phase completion/next-phase transition,
+waiting pause, blocked/error transition, and completion. A cached `done` phase
+displays **Rechecking** until this invocation adds its verified marker. An
 `applied`/`recorded` receipt is never phase completion. When an action asks a
-question, emit the non-empty `renderBlock.text` as an ordinary agent response, then pass only the
+question, emit the waiting `renderBlock.text` as an ordinary agent response, then pass only the
 action's compact returned canonical question through the active ServiceNow
-question adapter and send the returned `plainText` verbatim as chat text.
+question adapter and call `ask_user` with the generated arguments verbatim.
 For Entra and ServiceNow identity actions, the `resume-handoff` business-group
 availability gate is the only availability question. Do not invoke
 `identity-direct-handoff`, render its ordinary instructions, or ask its data
 questions until that acknowledgement is current. Once current, require
 `decision: instructions-required`, render its `ordinaryReply.text` verbatim,
-and ask only its returned data questions. For the ServiceNow stage the
-returned question list is empty: the User Field question is the closing plain
-text of `ordinaryReply.text`, so send no separate question and wait for the
-maker's reply. For the Entra stage the question list is likewise empty: the
-Client ID is requested by the ordinary instructions, and after the maker
-sends it, rerun with `--client-id` and send the returned `ordinaryReply.text`
-(the claim follow-up) as chat text. `decision: no-action`
+and ask only its returned data questions. `decision: no-action`
 means current completed/reused evidence skips both availability and
 instructions.
 Before Entra availability, honor a returned
 `status: shared-identity-reuse-required` and its `preActionHandoff`. This is a
 local zero-write pre-action for the current selected target provider and
-agent. For `source-selection-required`, ask one numbered candidate question as chat text (its `plainText`)
+agent. For `source-selection-required`, ask one label-only candidate question
 and rerun `shared-reuse-handoff --source-key <internal-source-key>`. For
-`question-required`, pass its canonical question through the plain-text question adapter. Translate **Yes** to the existing target-scoped
-`record-shared-reuse ... --decision accept`, **No** to
-`--decision decline`, and no answer yet to no command plus waiting. Do not render
+`question-required`, pass its canonical question through the active question
+adapter. Translate **Reuse shared identity** to the existing target-scoped
+`record-shared-reuse ... --decision accept`, **Configure separately** to
+`--decision decline`, and **Not now** to no command plus waiting. Do not render
 or ask Entra availability in the same turn. After accept, rerun
 `resume-handoff`; current reused Entra/OIDC handoffs skip their corresponding
 availability gates and proceed to owning checks. After decline, the next
@@ -150,8 +131,8 @@ returns `instanceInputRequired: true`, show its exact `instanceQuestion` and
 stop with `ACTION_RESULT = "waiting"` before running the preflight checkpoint.
 This is normal Maker target confirmation, not a blocking checkpoint result.
 Do not render the checkpoint's `NotConfigured` recovery handoff around or
-before this question. If the Maker replies **Another** (or pastes an instance
-URL), show the exact returned `manualInstanceQuestion` once. A real
+before this question. If the Maker chooses **Provide another ServiceNow
+instance URL**, show the exact returned `manualInstanceQuestion` once. A real
 discovery error remains embedded in those questions; it does not convert an
 empty or failed discovery into success.
 
@@ -159,8 +140,8 @@ The ServiceNow provider `resume-handoff` also enforces this boundary. If it
 returns top-level `pendingInput`, show `pendingInput.question` exactly and stop
 without running or reconstructing a checkpoint command. Use
 `pendingInput.choiceValues` to translate a selected option. Only
-`pendingInput.manualQuestion` may be shown after the Maker replies **Another**
-or **No** (or pastes an instance URL). This barrier covers first-run and historical `NotConfigured`
+`pendingInput.manualQuestion` may be shown after **Provide another ServiceNow
+instance URL**. This barrier covers first-run and historical `NotConfigured`
 state so normal unanswered Maker input is never rendered as an eight-section
 configuration failure.
 
@@ -251,26 +232,22 @@ DA ServiceNow uses the provider controller's
 `servicenow.lifecycle-transport.v2` result instead of the generic confirmation
 below.
 
-1. When `renderBlock.progressTodos` is non-empty, write it verbatim into the
-   todo list tool (one list, updated in place; do not also post it as chat
-   text). Only when `renderBlock.progressSnapshot` is non-empty instead
-   (`PROGRESS_DELIVERY = "chat"`), send it as its own short chat message.
-   Then send `renderBlock.text` as an ordinary agent response when
-   it is non-empty. The verbose collaboration-group view (automatic
-   preflight, the HR or IT groups, responsible roles and statuses) is hidden
-   by `SHOW_LEGACY_PHASE_VIEW`; it stays agent-facing state.
+1. Show `renderBlock.text` as an ordinary agent response. It has
+   one automatic preflight line, then exactly four HR or three IT
+   **Collaboration groups**. Each group has one responsible role and its
+   internal phase statuses.
 2. Preflight, chooser, and instance confirmation run before collaboration
    groups. When
    `transport.businessGroupAvailability.gateRequired` is false, continue the
    returned lifecycle decision without asking availability.
 3. When the gate is true, ask only
    `transport.businessGroupAvailability.question`. Pass that exact canonical
-   object through the plain-text question adapter above and send the returned
-   `plainText` verbatim as chat text ("Reply **Yes** or **No**."). Preserve the complete
+   object through the active ServiceNow question adapter above and call
+   `ask_user` with the returned arguments verbatim. Preserve the complete
    canonical object for answer handling and state semantics. Its explicit
    option labels answer only the current role-availability question.
-   The question contains no future roles, group plan, progress, defaults,
-   or hidden fields.
+   The elicitation contains no future roles, group plan, progress, defaults,
+   hidden fields, or required schema inputs.
 4. On **Yes**, rerun `resume-handoff` with
    `--roles-available yes --business-group-id {currentGroup.id}
    --availability-context-sha256 {contextIdentitySha256}`. The controller
@@ -304,10 +281,6 @@ business-group acknowledgement.
 
 ### Other providers
 
-ServiceNow never reaches this section: its plan, availability, and start
-questions come from the controller as plain chat text (`chatMessage`), and it
-never asks the generic start-confirmation card.
-
 Skip this section only when the state file has `attested: true` and
 `acceptedContractRevision` equals the current contract revision. A contract
 revision change must show the new complete plan before a newly introduced
@@ -321,9 +294,8 @@ Build the plan from the contract, in phase order:
   These roles explain external admin ownership; they do not create a role gate
   and must never be treated as authorization for an action.
 
-Render this complete plan as an ordinary visible agent response before asking
-for approval. (ServiceNow Connect skips this approval prompt entirely and never
-uses a card tool; the card payload below applies to other providers only.) It is a **Message**, not tool commentary or a question
+Render this complete plan as an ordinary visible agent response before calling
+`vscode_askQuestions`. It is a **Message**, not tool commentary or a question
 body. Showing the plan is not execution approval.
 
 **Message:**
@@ -372,10 +344,10 @@ confirmation question through the active ServiceNow question adapter:
 ]
 ```
 
-Keep its choices label-only, with no recommended, preselected, default, or
+Keep its options label-only, with no recommended, preselected, default, or
 automatic answer. The plan, roles, and progress belong only in the ordinary
 reply. This is the only plan confirmation question; initialize or continue
-only after the maker explicitly replies **Yes, let's go**.
+only after the user explicitly selects **Yes, let's go**.
 
 **If "Not now":** Stop here. On a first run, do not write the state file. On a
 contract-revision re-attestation, preserve the existing state unchanged,
@@ -628,9 +600,9 @@ The ServiceNow Entra action has one bounded pre-handoff exception when its
 producer returns `handoffMode: identity-requirement`: show that routing-only
 Maker question before any administrator instructions are shown. Its
 options identify only the intended user identifier type; they are not `Completed`/`Not yet` admin
-evidence. Send the returned question's `plainText` as chat text unchanged and
-map the typed reply with `match-reply`; its choices are label-only. Use the separate `identityRequirementChoices`
-envelope mapping to translate the matched label to the recorder's CLI choice;
+evidence. Pass the returned question to the question tool unchanged: its
+options are label-only. Use the separate `identityRequirementChoices`
+envelope mapping to translate the selected label to the recorder's CLI choice;
 never add `value` or another unsupported option field. A specific answer may
 persist only the scoped routing intent, then
 the caller reruns the producer and shows the normal admin instructions and
@@ -640,21 +612,21 @@ shows no administrator instructions. This clarification must not set
 question. Once a valid scoped requirement receipt exists, do not ask the
 routing question again.
 
-For every interactive provider action, the question body is the durable
-visible handoff. For ServiceNow, the question is plain chat text: use the
-controller-returned `plainText` (or the action document's
-`<!-- plain-chat-question:v1 -->` Message block), render its placeholders, and
-send it verbatim as an ordinary chat message, then end your turn. Never call
-`ask_user` or any card tool. Wait for the maker's typed reply and map it with
-`match-reply` as described above. The Message block is source data for the
-controller's canonical question (used for state semantics); never show a
-header or option list as a card. For DA ServiceNow,
-current status has already been shown in conversation text. ServiceNow action
-questions are question-only: never add the group plan, internal-step
-checklist, progress, future roles, checkpoint table, or a `Progress` field.
+For every interactive provider action, the canonical question body is the
+durable visible handoff. Read the action document's
+`<!-- visible-handoff-question:v1 -->` JSON payload, render its placeholders,
+pass the resulting single canonical object through `adapt-question`, and call
+the active `ask_user` tool with the generated arguments verbatim. Use the
+canonical `header`/`question`/`options`/`allowFreeformInput` shape exactly;
+`choices` is not a canonical ServiceNow question field. For DA ServiceNow,
+collaboration groups and current status have
+already been shown in an ordinary reply. ServiceNow action questions are
+question-only: never add the group plan, internal-step checklist, progress,
+future roles, checkpoint table, or a synthetic `Progress` input anywhere in
+the elicitation schema.
 Other providers retain their existing placeholder behavior.
 
-Do not send the question if the payload is missing, malformed, truncated,
+Do not call the question tool if the payload is missing, malformed, truncated,
 still contains placeholders, omits the action owner/instructions/completion
 evidence, or references "above" content that is not in the question itself.
 Stop and report the visible-handoff contract error instead of accepting
@@ -794,10 +766,9 @@ re-verifying completed phases in L.2.
 sets `checkpointRecording: "provider-command-v1"`, skip the U.0/U.0a
 routines: never render a `| Check | Status |` table, FlightCheck-health
 rows, or a "Confirmed by the Maker" echo. Checkpoint outcomes only drive
-the controller's grouped phase state (`renderBlock.text` when the checklist is
-shown; the `record-checkpoint-results`
+the grouped phase statuses in `renderBlock.text` (the `record-checkpoint-results`
 waiting/error `renderBlock` carries the same view). A Manual row's
-acknowledgement is asked as plain chat text, which carries
+acknowledgement is asked through the existing question card, which carries
 the controller's returned remediation/recovery text rather than a results
 table. Other providers keep U.0/U.0a unchanged.
 
@@ -861,7 +832,7 @@ below apply only to providers without this flag.
   include the complete just-rendered Manual/Warning row: status, description,
   result, remediation/manual steps, and final acknowledgement prompt. Do not
   rely on the preceding U.0/U.0a assistant message as the only visible copy.
-  For ServiceNow (no U.0 render), the plain-text question instead carries the controller's
+  For ServiceNow (no U.0 render), the card instead carries the controller's
   returned remediation/recovery text and the Manual prompt, never a table.
   Never reuse this shortcut
   for an older action, unrelated phase evidence, `Warning`, or mismatched

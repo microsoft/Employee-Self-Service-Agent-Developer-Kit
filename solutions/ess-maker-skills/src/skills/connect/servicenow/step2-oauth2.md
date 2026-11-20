@@ -1,7 +1,5 @@
 # ServiceNow Step 2: OAuth2 Setup
 
-> **Retired legacy flow — not part of `/connect servicenow`.** Follow `src/skills/connect/servicenow/entry.md`; ServiceNow Connect never uses cards.
-
 **This file is ONLY for OAuth2 authentication. Do not use for Basic or Entra.**
 
 Every **Message** block is the exact text to show the user. Copy it verbatim.

@@ -884,86 +884,14 @@ def foundation_reused(expected: Mapping[str, Any]) -> bool:
     return all(sources.get(key) == "dev-record" for key in EXPECTED_KEYS)
 
 
-SHOW_REALM_CHECKLIST = True
-"""Maker-visible Test/Prod progress snapshot switch.
-
-When True, ``renderBlock.progressSnapshot`` carries a compact ordinary-Markdown
-list (one status line per step, like /setup's progress) that the agent posts
-as its own chat message. Nothing is pinned by the host. Set False to hide it.
-Recorded stages, statuses, and resume logic never depend on this switch.
-"""
-
-PROGRESS_DELIVERY = "chat"
-"""How a visible progress list reaches the maker.
-
-``"chat"`` (default): the render block carries ``progressSnapshot``, an ordinary
-Markdown list the agent posts as its own chat message at the start, at each
-phase change, when blocked, and at the final handoff. The VS Code agent host
-does not display the agent's todo list to the maker, so this is the only form
-the maker reliably sees.
-``"todo"``: the render block carries ``progressTodos`` instead, a structured
-list for a host todo list tool that keeps one list updated in place. Only use
-it on a host that renders that tool. Both modes use the same status data and
-never change resume logic.
-"""
-
-_SNAPSHOT_STATUS = {
-    "✅": "completed",
-    "🔄": "in-progress",
-    "⛔": "in-progress",
-    "⬜": "not-started",
-}
-
-
-def snapshot_to_todos(snapshot: str) -> list[dict[str, Any]]:
-    """Convert a Markdown progress snapshot into todo list items.
-
-    A blocked row stays in progress and its title says it needs attention.
-    """
-    todos: list[dict[str, Any]] = []
-    for line in str(snapshot or "").splitlines():
-        match = re.match(r"^- (✅|🔄|⛔|⬜) (.+)$", line.strip())
-        if not match:
-            continue
-        marker, label = match.groups()
-        title = label.strip()
-        if marker == "⛔":
-            title = f"{title} (needs attention)"
-        todos.append(
-            {
-                "id": len(todos) + 1,
-                "title": title,
-                "status": _SNAPSHOT_STATUS[marker],
-            }
-        )
-    return todos
-
-
-def deliver_progress(snapshot: str) -> tuple[str, list[dict[str, Any]]]:
-    """Return ``(chat_snapshot, todos)`` for the configured delivery mode."""
-    if not snapshot:
-        return "", []
-    if PROGRESS_DELIVERY == "chat":
-        return snapshot, []
-    return "", snapshot_to_todos(snapshot)
-
-
-SHOW_LEGACY_REALM_ROWS = False
-"""Restores the old verbose row view (with per-row detail text) when True.
-
-While False, ``renderBlock.text`` carries only the current conversational
-step and the intro is returned separately as ``realmIntro``.
-"""
-
 ADMIN_CASE_REUSE = "dev-reuse"
 ADMIN_CASE_INDEPENDENT = "independent"
 ADMIN_EXPLANATIONS = {
     ADMIN_CASE_REUSE: (
-        "We'll retain the administrator-confirmed sign-in setup and employee "
-        "mapping that still applies to this ServiceNow instance. We won't "
-        "repeat completed administrator work. You don't need to resend "
-        "earlier replies unless a specific confirmation is missing or no "
-        "longer applies."
+        "We'll reuse the administrator-confirmed sign-in setup and employee "
+        "mapping from Dev for this ServiceNow instance. You don't need to ask "
+        "your administrators again. We'll only check the {label} connection, "
+        "topics, portal URL, and a real-data test."
     ),
     ADMIN_CASE_INDEPENDENT: (
         "We couldn't find a completed Dev setup for this agent, so we'll run "
@@ -1739,57 +1667,9 @@ def render_realm_block(
     realm: str,
     context: Mapping[str, Any],
 ) -> str | None:
-    """Conversation text for one promoted realm step.
+    """Grouped step checklist for one promoted realm; reads recorded results.
 
-    Returns the current step text only; the legacy row view is restored by
-    ``SHOW_LEGACY_REALM_ROWS``. See ``render_realm_snapshot`` for the compact
-    progress list.
-    """
-    view = _realm_view(registry, realm, context)
-    if view is None:
-        return None
-    rows, footer, case, label, agent = view
-    if not SHOW_LEGACY_REALM_ROWS:
-        return str(footer) if footer else None
-    lines = [
-        f"**ServiceNow validation: {agent} in {label}**",
-        "",
-        ADMIN_EXPLANATIONS[case].format(label=label),
-        "",
-    ]
-    lines += [f"{icon} {name} — {text}" for name, (icon, text) in rows]
-    if footer:
-        lines += ["", str(footer)]
-    return "\n".join(lines)
-
-
-_REALM_SNAPSHOT_MARKERS = {"✅": "✅", "⏳": "🔄", "❌": "⛔", "⬜": "⬜"}
-
-
-def render_realm_snapshot(
-    registry: Mapping[str, Any],
-    realm: str,
-    context: Mapping[str, Any],
-) -> str | None:
-    """Compact progress list in the same style /setup posts its progress."""
-    view = _realm_view(registry, realm, context)
-    if view is None:
-        return None
-    rows, _footer, _case, label, agent = view
-    lines = [f"Here's your {agent} setup in {label}:", ""]
-    lines += [
-        f"- {_REALM_SNAPSHOT_MARKERS.get(icon, '⬜')} {name}"
-        for name, (icon, _text) in rows
-    ]
-    return "\n".join(lines)
-
-
-def _realm_view(
-    registry: Mapping[str, Any],
-    realm: str,
-    context: Mapping[str, Any],
-) -> tuple[list[tuple[str, tuple[str, str]]], str | None, str, str, str] | None:
-    """Rows follow the order of the checks and stop at the first failing one;
+    Rows follow the order of the checks and stop at the first failing one;
     later rows stay pending. Nothing here reads or writes any environment.
     """
     target = registry["targets"].get(realm)
@@ -1904,8 +1784,17 @@ def _realm_view(
         ("Portal URL", portal),
         ("Real-data test in the Test pane", real_data),
     ]
+    lines = [
+        f"**ServiceNow validation: {agent} in {label}**",
+        "",
+        ADMIN_EXPLANATIONS[case].format(label=label),
+        "",
+    ]
+    lines += [f"{icon} {name} — {text}" for name, (icon, text) in rows]
     footer = instruction or context.get("footer")
-    return rows, (str(footer) if footer else None), case, label, agent
+    if footer:
+        lines += ["", str(footer)]
+    return "\n".join(lines)
 
 
 def realm_status(
@@ -1961,25 +1850,10 @@ def realm_status(
     }
     if render is not None:
         text = render_realm_block(registry, active, render)
-        case = admin_case(registry["targets"][active])
-        snapshot = (
-            render_realm_snapshot(registry, active, render) or ""
-            if SHOW_REALM_CHECKLIST
-            else ""
-        )
-        chat_snapshot, todos = deliver_progress(snapshot)
-        if text is not None or snapshot:
+        if text is not None:
             result["renderBlock"] = {
-                "kind": (
-                    "realm-checklist" if SHOW_LEGACY_REALM_ROWS else "realm-step"
-                ),
-                "case": case,
-                "progressSnapshot": chat_snapshot,
-                "progressTodos": todos,
-                "text": text or "",
+                "kind": "realm-checklist",
+                "case": admin_case(registry["targets"][active]),
+                "text": text,
             }
-        if not SHOW_LEGACY_REALM_ROWS:
-            result["realmIntro"] = ADMIN_EXPLANATIONS[case].format(
-                label=active.title()
-            )
     return result

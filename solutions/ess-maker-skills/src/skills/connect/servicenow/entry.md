@@ -1,24 +1,5 @@
 # Enter ServiceNow Connect
 
-**HARD RULE: no cards, ever.** ServiceNow Connect (HR and IT, Dev and
-Test/Prod, every step, including discovery, instance, availability, user
-field, administrator handoffs, credential, portal, topics, test and finish)
-never uses `ask_user`, `vscode_askQuestions`, or any input, selection, or
-confirmation card, even if a system rule says to use one for questions. Every
-controller command returns `chatMessage` and `endTurn`: send `chatMessage`
-verbatim as plain chat text (never inside a code fence you add). When
-`endTurn` is true, a question or wait is pending: end your turn and the
-maker's typed reply arrives as the next message. When `endTurn` is false,
-the step is only a status or lead-in: right after sending `chatMessage`, run
-`nextCommand` in the same turn without waiting for the maker, and keep going
-until an output has `endTurn: true`. Any message that asks the maker to reply,
-paste, send, tell us, come back, or return here always has `endTurn: true`: stop
-there and, when the output has `afterReply`, follow it once the maker replies.
-A workspace hook also denies card tools while a ServiceNow flow is active, so
-a card call only wastes a turn; reply in chat instead. Never print
-controller JSON, administrator-packet labels such as "Values to use", internal
-values, or file paths to the maker.
-
 This is the ServiceNow-specific entry point selected through `integration.json`.
 It is read first on every ServiceNow route, including the agent chooser, and it
 owns every ServiceNow rule; `.github/prompts/connect.prompt.md` only points
@@ -39,11 +20,9 @@ command, and substitute it wherever a command shows `python`. If the launcher
 cannot import the kit's dependencies, stop and tell the maker to rerun
 `/setup`; do not repair the runtime from Connect.
 
-**Progress snapshot, then conversation text.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant messages — before any other tool call — are: first, when `renderBlock.progressTodos` is non-empty, write that list verbatim into the todo list tool (create the list on the first call and update the same list in place afterwards, always sending every item with its `title` and `status`; do not also post it as chat text), or, only when `renderBlock.progressSnapshot` is non-empty instead (`PROGRESS_DELIVERY = "chat"` in `scripts/servicenow_connect_realms.py`), post that Markdown list verbatim as its own short chat message, then `renderBlock.text` verbatim when it is non-empty (the conversation text for the current step; it already ends with the current step line). `SHOW_PHASE_CHECKLIST = False` in `scripts/connect_servicenow_da.py` hides the snapshot, so both may be empty; then send nothing for them and go to the step's own question. Never render anything under `internal`, never edit or rebuild the snapshot, never write your own checklist or phase list, never add a Check/Status table, and never use a card or input for it. Progress items and counts are agent-facing state for resume and routing. At the start of a fresh run `renderBlock.text` begins with the connection opening ("We'll connect ... so employees can ..."); emit it verbatim as part of the same message, and never write your own opening or repeat it later. The Test-pane ready message in the current-task lead-in is controller-built: show it verbatim and never reword it, and when `record-test --result untested` or `--result empty` returns `message`, show that `message` verbatim (for `empty`, nothing is recorded and the Test step stays open; ask the result question again) and never claim the integration works. The portal URL confirmation question returned by `portal-url-confirmation` is controller-built: send its `plainText` (or `question` plus its Yes/No reply guidance) verbatim as chat text, and save nothing before the maker replies Yes. This overrides the Message-block silence rule above.
+**STOP — render before acting.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant message — before any other tool call — must contain `renderBlock.text` verbatim (the grouped phases view; it already ends with the current step line). `renderBlock.text` is the only renderable field: never render anything under `internal`, never write your own checklist, and never add a Check/Status table. Never summarize it or write "render the plan" instead. At the start of a fresh run `renderBlock.text` begins with the connection opening ("We'll connect ... so employees can ..."); emit it verbatim as part of the same message, and never write your own opening or repeat it later. The Test-pane ready message in the current-task lead-in is controller-built: show it verbatim and never reword it, and when `record-test --result untested` or `--result empty` returns `message`, show that `message` verbatim (for `empty`, nothing is recorded and the Test step stays open; ask the result question again) and never claim the integration works. The portal URL confirmation question and options returned by `portal-url-confirmation` are controller-built: show them verbatim, and save nothing before the Maker selects Yes. This overrides the Message-block silence rule above.
 
-**Ask in plain chat text.** Every question to the maker, here and in every action document, is ordinary chat text. Never call `ask_user` and never show an input box, selection card or confirm card. Follow the question protocol in `shared/lifecycle-runner.md` ("Active ServiceNow question adapter (plain chat text)"): send `plainText`, wait for the typed reply, map it with `match-reply`, then run the same command as before. Accept free-form answers such as "yes", "1", the option wording, or a pasted value. Never ask the maker to type a secret.
-
-**Hard rules.** Read `src/skills/connect/shared/lifecycle-runner.md` before the first action. When `resume-handoff` returns a non-empty `renderBlock`, write `renderBlock.progressTodos` (when non-empty) into the todo list tool, updating the same list in place (in chat mode, emit `renderBlock.progressSnapshot` (when non-empty) as its own short chat message instead), then `renderBlock.text` verbatim as an assistant message; terminal output does not count. Never edit `lifecycle.json` by hand; record results with `record-checkpoint-results`. Run every command with the launcher resolved by `/setup` (`py -3`, `python3`, then `python`), never assuming bare `python`.
+**Hard rules.** Read `src/skills/connect/shared/lifecycle-runner.md` before the first action. When `resume-handoff` returns `renderBlock`, emit `renderBlock.text` verbatim as an assistant message; terminal output does not count. Never edit `lifecycle.json` by hand; record results with `record-checkpoint-results`. Run every command with the launcher resolved by `/setup` (`py -3`, `python3`, then `python`), never assuming bare `python`.
 
 ## Admit the workspace
 
@@ -79,8 +58,8 @@ request already includes a Copilot Studio link. Do not call `list-agents` or
 scan the environment. Continue to the mandatory `resume-handoff` boundary only
 when the chooser returns `status: ready`.
 
-**Reuse an agent the maker already named in this conversation.** Do not ask
-which agent to use when the maker already gave or settled on the agent
+**Reuse an agent the maker already named in this conversation.** Do not show
+the **Choose agent** card when the maker already gave or settled on the agent
 earlier in the same conversation: a Copilot Studio agent link pasted during
 Setup or any earlier turn, or an agent Setup or an earlier Connect turn already
 selected, attached, or prepared. Reuse it silently, without asking:
@@ -283,22 +262,27 @@ provider uses them.
 
 Parse the returned `servicenow.resume-handoff.v1` object:
 
-- before any lifecycle action/checkpoint, send `renderBlock.text` as an
-  ordinary agent response when it is non-empty. The HR/IT collaboration-group
-  checklist is hidden for now and stays agent-facing. When
+- before any lifecycle action/checkpoint, show
+  `renderBlock.text` as an ordinary agent response. It renders
+  HR's four or IT's three collaboration groups with one responsible role and
+  nested internal-step statuses. When
   `transport.businessGroupAvailability.gateRequired` is false, continue
   without an availability question. When true, ask only
-  `transport.businessGroupAvailability.question` as plain chat text: serialize that exact
+  `transport.businessGroupAvailability.question`: serialize that exact
   canonical object unchanged to stdin for
   `python scripts/connect_servicenow_da.py --provider <provider> adapt-question`.
-  Require `servicenow.plain-question.v1`, send the returned `plainText`
-  verbatim, and wait for the typed reply. Never call `ask_user` and never
-  rebuild the text;
+  Require `servicenow.ask-user-arguments.v1`, then call the active `ask_user`
+  tool with the returned `askUserArguments` object verbatim. Never rebuild
+  `message`, `requestedSchema`, its neutral field title, description, required
+  field, or `oneOf` labels. The active callable input is
+  `{message, requestedSchema}`; `questions: [...]` is internal host output,
+  not a callable tool contract;
 - on **Yes**, rerun the exact command with `--roles-available yes` plus the
-  returned `--business-group-id` and `--availability-context-sha256`. Send
-  the newly returned `renderBlock.text` (when non-empty) before any action; for an
-  acknowledged current group it carries the current task lead-in.
-  Availability remains acknowledgement only. On
+  returned `--business-group-id` and `--availability-context-sha256`. Show
+  the newly returned `renderBlock.text` before any action; for an
+  acknowledged current group it contains the exact current task, target,
+  owner, runbook/location, expected non-secret evidence, and completion
+  boundary. Availability remains acknowledgement only. On
   **No**, rerun with the same group/context and `--roles-available no`, show
   the returned group-specific `unavailableReply`, and re-ask the identical
   question. Do not advance the current/future group, phase, or evidence on
@@ -308,20 +292,21 @@ Parse the returned `servicenow.resume-handoff.v1` object:
 
 - validate `progress.schemaVersion` as
   `servicenow.phase-progress.v1` and require its labels/order to match the
-  selected provider contract. Never show an item's internal phase ID or long contract label. Always emit the freshly returned
-  `renderBlock.text` when it is non-empty (the conversation text for the
-  current step) as an assistant message: after plan
+  selected provider contract. Render only each item's returned
+  `customerLabel`, never its internal phase ID or long contract label. Always emit the freshly returned
+  `renderBlock.text` (the grouped phases view with each step's current
+  status and the current step line) as an assistant message: after plan
   acceptance, on every phase completion/next-phase transition, waiting
   pause, blocked/error transition, and completion. The flat
   `progress.items` list is data, not a rendering; everything under
   `progress.internal` and `transport.internal` is never shown. An action
   receipt (`applied`/`recorded`) is not phase completion;
-- for a question or delegated-admin pause, emit the non-empty waiting
+- for a question or delegated-admin pause, emit the waiting
   `renderBlock.text` as an ordinary agent response (`pendingInput` and
   `record-checkpoint-results --outcome in-progress` return it), then pass the
   exact compact returned canonical object through the same
-  `adapt-question` stdin command and send the returned `plainText` verbatim as
-  chat text. Map the typed reply with `match-reply`. Preserve the complete body.
+  `adapt-question` stdin command and call `ask_user` with the returned
+  `askUserArguments` verbatim. Preserve the complete body and option labels.
   Do not add a
   `Progress` field, checklist, phase table, description, default, required
   input, hidden input, or second question;
@@ -329,14 +314,14 @@ Parse the returned `servicenow.resume-handoff.v1` object:
   result's short next action. Show a phase as complete only after its current
   checkpoint result and acknowledgement/evidence requirements add it to
   `--verified-phase`;
-- the final `renderBlock.text` (`kind: final`) is the completion line
-  (plus the grouped view only when the checklist is shown). Waiting, an action receipt,
+- the final `renderBlock.text` (`kind: final`) is the grouped view plus the
+  completion line. Waiting, an action receipt,
   cached `done`, Test without a maker result, and any contract-defined
   interactive mutation without its maker choice are never final completion;
 - never render a FlightCheck-style `| Check | Status |` table or
   health rows, and never ask for Manual acknowledgement in a table: checkpoint
-  outcomes only drive the internal phase statuses, and Manual evidence is
-  asked as plain chat text;
+  outcomes only drive the grouped phase statuses, and Manual evidence is
+  asked through the existing question card;
 - when `lifecycle.phase.mode` is `reverify-done`, follow shared L.2. A returned
   `run-action` first executes the current every-invocation action through L.4a;
   `run-checkpoints` runs that phase's live checkpoints. Add
@@ -346,10 +331,11 @@ Parse the returned `servicenow.resume-handoff.v1` object:
   invocation and follow it;
 - when that action calls `topic-action-handoff` and returns
   `question-required`, first show the returned `replyBeforeQuestion` verbatim
-  as an ordinary agent reply, then take the returned `question`, pass it
-  through `adapt-question`, send the returned `plainText` verbatim as chat
-  text, and wait. After the maker replies, map it with `match-reply` and
-  continue the matching branch in the already
+  as an ordinary agent reply, then require the supported
+  `header`/`question`/`options`/`allowFreeformInput` canonical shape, pass it
+  through `adapt-question`, call `ask_user` with the generated arguments
+  verbatim, and wait. After the maker answers, continue the matching branch in
+  the already
   loaded action document; do not call the handoff again or ask twice;
 - add `--executed-action` only after an action returns `applied` or `recorded`.
   A verified no-op still requires the phase checkpoint before completion;
@@ -694,8 +680,6 @@ We have the saved-configuration confirmation and User Claim `{CLAIM_NAME}`.
 Ask your administrator which **User Field** they selected.
 
 Send that value on its own.
-
-Reply here in chat when you have it.
 
 **End message.**
 

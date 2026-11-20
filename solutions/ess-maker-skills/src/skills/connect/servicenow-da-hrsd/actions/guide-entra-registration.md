@@ -47,29 +47,27 @@ portal URL, agent binding, Test, Publish, lifecycle plan, or consent.
 - `none`: continue the normal Entra direct-capture flow without a reuse question.
 - `already-recorded`: continue; the owning Entra and OIDC checkpoints still
   evaluate the current evidence.
-- `source-selection-required`: send one plain chat question listing the
-  returned candidate labels by number, then rerun with the selected internal
-  `sourceKey`. Do not expose the key.
-- `question-required`: the returned `question` is already plain chat text
-  (`servicenow.plain-question.v1`). Send its `plainText` verbatim as an
-  ordinary message, never through `ask_user` or any selection card, and map the
-  typed reply with `match-reply`. Its body contains the exact target, source
-  agent, and eligible identity items. Translate the matched label through
-  `reuseDecisionChoices`.
-  - **Yes**: run
+- `source-selection-required`: ask one label-only question from the returned
+  candidate labels, then rerun with the selected internal `sourceKey`. Do not
+  expose the key.
+- `question-required`: pass the returned `question` object unchanged through
+  the question tool. Its body contains the exact target, source agent, and
+  eligible identity items; its `options` are label-only. Translate the
+  selected label through `reuseDecisionChoices`.
+  - **Reuse shared identity**: run
     `record-shared-reuse --source-key <internal-source-key> --decision accept`.
     This rechecks only local source hash/scope/bindings and imports only the
     listed identity evidence. It does not call Connectivity or mark the owning
     checkpoints Passed.
-  - **No**: run
+  - **Configure separately**: run
     `record-shared-reuse --source-key <internal-source-key> --decision decline`
     and continue normally.
-  - No answer yet: record nothing and return `ACTION_RESULT = "waiting"`.
+  - **Not now**: record nothing and return `ACTION_RESULT = "waiting"`.
 
 After an accepted reuse, rerun `identity-direct-handoff --stage entra`.
 If it returns `decision: no-action`, immediately return
-`ACTION_RESULT = "recorded"`. Do not render instructions, send any question,
-rerun `record-identity-direct`, or replace the reused admin
+`ACTION_RESULT = "recorded"`. Do not render instructions, call the
+question tool, rerun `record-identity-direct`, or replace the reused admin
 handoff with `record-admin-phase`; the runner-owned Entra checkpoints still
 run next. Only `decision: question-required` enters the missing administrator
 work below. Partial reuse continues with only the missing administrator work.
@@ -104,11 +102,10 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-sl
 
 Require `decision: instructions-required`. Render `ordinaryReply.text`
 verbatim; it already contains the plain-text lead-in before the
-Ready-to-send fenced block, so do not rewrap or edit either part. The returned
-`questions` list is empty and nothing else is asked with `ask_user` or any input
-card. The returned question list intentionally excludes
+Ready-to-send fenced block, so do not rewrap or edit either part. Then pass every returned `askUserArguments` object verbatim through
+the active `ask_user` tool. The returned question list intentionally excludes
 availability because `resume-handoff` owns and deduplicates that gate. Do not
-ask the maker for the claim up front: the maker replies in ordinary chat by pasting
+ask the maker for the claim up front: the maker answers one prompt by pasting
 the Entra administrator's non-sensitive reply or the Client ID. Read the claim
 name only from that reply: a custom claim name the administrator states, or
 `email` or `upn` when the administrator states that the standard email or UPN

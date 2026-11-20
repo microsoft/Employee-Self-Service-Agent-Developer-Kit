@@ -5,8 +5,6 @@ description: "Connect Workday or another supported integration"
 
 # Connect
 
-**HARD RULE for ServiceNow (HR and IT, Dev and Test/Prod, every step).** ServiceNow Connect never uses `ask_user`, `vscode_askQuestions`, or any input, selection, or confirmation card, even when another instruction says to use one for questions. Every command returns `chatMessage` and `endTurn`: send `chatMessage` verbatim as plain chat text. When `endTurn` is true (a question or wait is pending), end your turn; the maker's typed reply arrives as the next message, and you map it with `match-reply`. When `endTurn` is false (a status or lead-in), do not stop and do not wait: run `nextCommand` right after sending `chatMessage`, in the same turn, until an output has `endTurn: true`. Any message that asks the maker to reply, paste, send, tell us, come back, or return here always has `endTurn: true`: stop there and follow `afterReply` once the maker replies. A workspace hook denies card tools while a ServiceNow flow is active. Never print controller JSON, administrator-packet labels, internal values, or file paths to the maker.
-
 **ServiceNow route — read first.** When the selected integration is ServiceNow (including the agent-chooser path, before routing, choosing an agent, or running any command), read and follow `src/skills/connect/servicenow/entry.md` before any action.
 
 **Entry routing comes first.** Missing setup does not stop integration selection.

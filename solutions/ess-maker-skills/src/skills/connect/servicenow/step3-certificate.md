@@ -1,7 +1,5 @@
 # ServiceNow Step 3: Install Extension Pack (Certificate Auth)
 
-> **Retired legacy flow — not part of `/connect servicenow`.** Follow `src/skills/connect/servicenow/entry.md`; ServiceNow Connect never uses cards.
-
 **This file is ONLY for Certificate (service-to-service) authentication.
 Do not use for Entra ID User Login, OAuth2, or Basic.**
 

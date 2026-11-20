@@ -201,10 +201,6 @@ If the row is `manual`/`attest` and `ACK` is `false`, before leaving the row
 manual verification steps — U.0a — for this row's checkpoint must already have been
 rendered in chat. If they were not, show them now, then ask.)
 
-**ServiceNow override:** ServiceNow Connect (HR and IT) never uses this card;
-its acknowledgements are plain chat questions returned by the controller as
-`chatMessage`.
-
 <!-- visible-handoff-question:v1 -->
 ```json
 [

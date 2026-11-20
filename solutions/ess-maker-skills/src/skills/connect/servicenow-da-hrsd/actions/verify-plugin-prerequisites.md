@@ -37,32 +37,39 @@ verification.
 
 ## Completion signal and evidence
 
+Return this exact compact canonical payload to the shared lifecycle runner's
+`adapt-question` path.
 Render the target link and complete instructions above in the ordinary
 current-task reply first. After the target lines it has a short plain-text
-lead-in ("First, your ServiceNow administrator needs to confirm that this
-instance supports the HR scenarios. Send them this message. When they reply,
-paste their confirmation here."), then a Ready-to-send fenced block, which is
-the message the Maker forwards to the ServiceNow administrator (instance URL,
-the Plugins path, and what to send back); it is already in the controller
-text, so render it verbatim. Ask nothing else: there is no yes/no question.
-Wait for the Maker's typed reply, never call `ask_user`, and never preselect
-an answer. Read the reply as follows:
+lead-in, then a Ready-to-send fenced block, which is the message the
+Maker forwards to the ServiceNow administrator (instance URL, the Plugins
+path, and what to send back); it is already in the controller text, so render
+it verbatim. The native question carries only the required
+evidence summary and completion decision:
 
-- **The reply states that the administrator confirmed the plugin is installed
-  and active** (a pasted confirmation, or the Maker relaying it explicitly):
-  record the phase handoff with `reused` when it was already valid, or
-  `completed` when the administrator completed the installation.
-- **The reply is only an acknowledgement such as "Done"** with no
-  confirmation: send this message verbatim, then wait again:
+<!-- visible-handoff-question:v1 -->
+```json
+[
+  {
+    "header": "HR Service Delivery Core",
+    "question": "Your ServiceNow administrator should see **Human Resources Scoped App: Core** (`com.sn_hr_core`) listed as Installed, with the message `Your application is installed and ready for you to use on your instance`.\n\nHas the ServiceNow administrator confirmed that all of this HR Service Delivery Core evidence is present?",
+    "options": [
+      { "label": "Yes, all listed installed-and-ready evidence is present" },
+      { "label": "No, one or more required items are missing" },
+      { "label": "Not sure, the administrator still needs to check" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
 
-  ```text
-  Ask your ServiceNow administrator to confirm that the HR Service Delivery Core plugin is installed and active so we can continue.
+Leave the selection unset.
 
-  Paste their reply here or relay their explicit confirmation.
-  ```
-
-- **The reply says the plugin is missing, not installed, or the administrator
-  is not sure:** show the direct link and identifiers
+- **Yes, all listed installed-and-ready evidence is present:** record the phase
+  handoff with `reused` when it was already valid, or `completed` when the
+  administrator completed the installation.
+- **No, one or more required items are missing** / **Not sure, the
+  administrator still needs to check:** show the direct link and identifiers
   above, then show this fixed waiting text verbatim (do not paraphrase it),
   return `ACTION_RESULT = "waiting"`, and do not record completion:
 

@@ -78,7 +78,7 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
 
     assert "after rendering its declared placeholders" in normalized
     assert "Contract phase `label` values are customer-facing text" in normalized
-    assert "ordinary visible agent response before asking" in plan_normalized
+    assert "ordinary visible agent response before calling" in plan_normalized
     assert "It is a **Message**, not tool commentary or a question body" in (
         plan_normalized
     )
@@ -121,7 +121,7 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
     assert "`preActionHandoff`" in runner
     assert "Do not render\nor ask Entra availability in the same turn" in runner
     assert "After decline, the next\nresume may ask Entra availability" in runner
-    assert "only after the maker explicitly replies **Yes, let's go**" in (
+    assert "only after the user explicitly selects **Yes, let's go**" in (
         plan_normalized
     )
     assert "The `question` field itself must contain the complete" not in plan
@@ -155,10 +155,11 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
     assert "without re-showing the\n   up-front plan" in resume
     assert "Do **not**\n   re-render the U.0 table" in resume
     assert "DA ServiceNow business-group availability" in runner
-    assert "`renderBlock.text`" in runner
-    assert "`SHOW_PHASE_CHECKLIST = False`" in runner
+    assert "exactly four HR or three IT" in runner
+    assert "Preflight, chooser, and instance confirmation" in runner
     assert "`renderBlock.text`" in runner
     assert "`transport.businessGroupAvailability.question`" in runner
+    assert "exactly four HR or three IT" in runner
     assert "Preflight, chooser, and instance confirmation" in runner
     assert "One acknowledgement unlocks every internal phase" in runner
     assert "question-only" in normalized
@@ -214,22 +215,19 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert "stateInitializationCommand" in runner
     assert "**Visible ServiceNow handoff style:**" in runner
     assert "separate sections with two newlines" in runner
-    assert "ordinary\nchat text" in runner
-    assert "Never call `ask_user`" in runner
-    assert "use\nnumbered or bulleted lines for steps" in runner
-    assert "Never recommend," in runner
+    assert "Use numbered or bulleted lines under Action" in runner
+    assert "Prefer buttons with no recommended" in runner
     assert (
-        "Ask for one genuinely unknown non-secret value per message"
+        "Freeform is allowed only for one genuinely unknown non-secret value "
+        "per card"
         in runner_normalized
     )
     assert "**ServiceNow phase-progress extension:**" in runner
     assert "Other providers retain this runner's existing output" in runner
     assert "`renderBlock.text`" in runner
-    assert "Re-emit\nthe freshly returned non-empty text" in runner
+    assert "Re-emit the freshly returned block" in runner_normalized
     assert "phase checklist once" not in runner
-    assert "treated as rechecking until this invocation adds" in (
-        runner_normalized
-    )
+    assert "cached `done` phase displays **Rechecking**" in runner_normalized
     assert "**Complete — admin confirmed**" in runner
     assert "**Reused — checked**" in runner
     assert (
@@ -254,7 +252,7 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert "they are not `Completed`/`Not yet` admin evidence" in (
         runner_normalized
     )
-    assert "its choices are label-only" in runner_normalized
+    assert "options are label-only" in runner_normalized
     assert "`identityRequirementChoices`" in runner
     assert "never add `value`" in runner_normalized
     assert "`Not sure` returns waiting, writes no receipt" in runner_normalized

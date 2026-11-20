@@ -93,14 +93,6 @@ def _disable_tamper_check_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(snow, "state_integrity_mismatch", lambda _state: False)
 
 
-@pytest.fixture(autouse=True)
-def _checklist_visible(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Rendering tests exercise the restorable legacy grouped view; the
-    default-view tests set the flags back inside the test."""
-    monkeypatch.setattr(snow, "SHOW_PHASE_CHECKLIST", True)
-    monkeypatch.setattr(snow, "SHOW_LEGACY_PHASE_VIEW", True)
-
-
 @pytest.fixture
 def tamper_check_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
@@ -2623,41 +2615,41 @@ def test_generated_question_families_have_distinct_headers_and_bodies() -> None:
         ), family
         options = question.get("options")
         if options:
-            assert all(option["label"].strip() for option in options), family
-            if len(options) == 2:
-                assert [option["label"] for option in options] == [
-                    "Yes",
-                    "No",
-                ], family
-        else:
-            assert question["allowFreeformInput"] is True, family
-        adapted = snow.adapt_question_to_plain_text(question)
-        assert adapted["schemaVersion"] == "servicenow.plain-question.v1", family
-        assert adapted["canonicalQuestion"] == snow._neutral_question(
-            question
-        ), family
-        text = adapted["plainText"]
-        assert text.startswith(question["question"].strip()), family
-        assert "askUserArguments" not in adapted, family
-        assert "requestedSchema" not in adapted, family
-        if options:
-            assert [item["label"] for item in adapted["choices"]] == [
-                option["label"] for option in options
-            ], family
-            assert adapted["replyKind"] in {"choice", "yes-no"}, family
-            assert all(option["label"] in text for option in options) or (
-                adapted["replyKind"] == "yes-no"
+            assert all(
+                option["label"].strip()
+                and option["label"].casefold() not in {"yes", "no"}
+                for option in options
             ), family
         else:
-            assert adapted["replyKind"] == "freeform", family
-            assert adapted["choices"] == [], family
-            assert text == question["question"].strip(), family
+            assert question["allowFreeformInput"] is True, family
+        adapted = snow.adapt_question_to_ask_user(question)
+        assert adapted["canonicalQuestion"] == question, family
+        assert adapted["askUserArguments"]["message"] == (
+            question["header"]
+        ), family
+        field = adapted["askUserArguments"]["requestedSchema"][
+            "properties"
+        ]["response"]
+        assert field["description"] == question["question"], family
+        assert adapted["askUserArguments"]["requestedSchema"]["required"] == [
+            "response"
+        ], family
+        if options:
+            assert field["title"] == "Selection", family
+            assert [item["title"] for item in field["oneOf"]] == [
+                option["label"] for option in options
+            ], family
+            assert adapted["knownHostLimitation"], family
+        else:
+            assert field["title"] == "Input", family
+            assert "oneOf" not in field, family
+            assert adapted["knownHostLimitation"] is None, family
 
 
-def test_plain_text_adapter_renders_choices_and_tolerates_typed_replies() -> None:
+def test_ask_user_adapter_preserves_selection_values_and_freeform() -> None:
     selection = {
         "header": "Choose agent",
-        "question": "Which agent should be used?",
+        "question": "Which prepared agent should be used?",
         "options": [
             {
                 "label": "Employee Self-Service (HR)",
@@ -2671,128 +2663,55 @@ def test_plain_text_adapter_renders_choices_and_tolerates_typed_replies() -> Non
         "allowFreeformInput": False,
     }
     original = copy.deepcopy(selection)
-    adapted = snow.adapt_question_to_plain_text(selection)
+    adapted = snow.adapt_question_to_ask_user(selection)
+    field = adapted["askUserArguments"]["requestedSchema"]["properties"][
+        "response"
+    ]
     assert selection == original
-    assert adapted["replyKind"] == "choice"
-    assert adapted["plainText"] == (
-        "Which agent should be used?\n\n"
-        "1. Employee Self-Service (HR)\n"
-        "2. Use another agent\n\n"
-        "Reply with the number or the wording of your choice."
-    )
-    assert "prepared:hr" not in adapted["plainText"]
-
-    def selected(reply: str) -> str | None:
-        match = snow.match_question_reply(selection, reply)
-        if match["status"] != "matched":
-            return None
-        return match["selectedOption"]["selectionKey"]
-
-    assert selected("1") == "prepared:hr"
-    assert selected(" 2. ") == "another-agent"
-    assert selected("employee self-service (hr)") == "prepared:hr"
-    assert selected("another agent") == "another-agent"
-    assert selected("3") is None
-    assert snow.match_question_reply(selection, "banana")["status"] == (
-        "unmatched"
-    )
-
-
-def test_plain_text_adapter_yes_no_and_freeform() -> None:
-    yes_no = snow._native_question(
-        header="Admin",
-        question="Is your ServiceNow administrator available?",
-        option_labels=[
-            "Yes, the ServiceNow admin is available now",
-            "No, I need to bring the ServiceNow admin in",
+    assert adapted["askUserArguments"]["message"] == "Choose agent"
+    assert field == {
+        "type": "string",
+        "title": "Selection",
+        "description": "Which prepared agent should be used?",
+        "oneOf": [
+            {
+                "const": "prepared:hr",
+                "title": "Employee Self-Service (HR)",
+            },
+            {
+                "const": "another-agent",
+                "title": "Use another agent",
+            },
         ],
-    )
-    adapted = snow.adapt_question_to_plain_text(yes_no)
-    assert adapted["replyKind"] == "yes-no"
-    assert adapted["plainText"] == (
-        "Is your ServiceNow administrator available?\n\n"
-        "Reply **Yes** or **No**."
-    )
-    for reply, index in (
-        ("yes", 0),
-        ("Yeah", 0),
-        ("1", 0),
-        ("No, not yet", 1),
-        ("nope", 1),
-    ):
-        match = snow.match_question_reply(yes_no, reply)
-        assert match["status"] == "matched", reply
-        assert match["selectedOption"]["label"] == (
-            yes_no["options"][index]["label"]
-        ), reply
-    assert snow.match_question_reply(yes_no, "maybe later")["status"] == (
-        "unmatched"
-    )
+    }
+    assert adapted["canonicalAllowFreeformInput"] is False
+    assert "no freeform-control field" in adapted["knownHostLimitation"]
 
     freeform = {
         "header": "ServiceNow instance URL",
         "question": "Enter the public ServiceNow HTTPS root URL.",
         "allowFreeformInput": True,
     }
-    adapted = snow.adapt_question_to_plain_text(freeform)
-    assert adapted["replyKind"] == "freeform"
-    assert adapted["plainText"] == (
-        "Enter the public ServiceNow HTTPS root URL."
-    )
-    typed = snow.match_question_reply(freeform, " https://dev1.service-now.com ")
-    assert typed == {
-        "schemaVersion": "servicenow.question-reply-match.v1",
-        "replyKind": "freeform",
-        "status": "freeform",
-        "reply": "https://dev1.service-now.com",
+    adapted = snow.adapt_question_to_ask_user(freeform)
+    assert adapted["askUserArguments"] == {
+        "message": "ServiceNow instance URL",
+        "requestedSchema": {
+            "properties": {
+                "response": {
+                    "type": "string",
+                    "title": "Input",
+                    "description": (
+                        "Enter the public ServiceNow HTTPS root URL."
+                    ),
+                }
+            },
+            "required": ["response"],
+        },
     }
-    assert snow.match_question_reply(freeform, "  ")["status"] == "unmatched"
+    assert adapted["knownHostLimitation"] is None
 
 
-def test_plain_text_adapter_reports_ambiguous_replies() -> None:
-    question = snow._native_question(
-        header="Choose",
-        question="Which connection should be used?",
-        option_labels=["Use the shared connection", "Use the shared service"],
-    )
-    match = snow.match_question_reply(question, "shared")
-    assert match["status"] == "ambiguous"
-    assert len(match["choices"]) == 2
-
-
-def test_plain_text_output_leaves_no_card_shaped_question_anywhere() -> None:
-    card = snow._native_question(
-        header="Choose",
-        question="Which instance should this agent use?",
-        option_labels=["Use this one", "Use another"],
-    )
-    payload = {
-        "chooser": card,
-        "nested": {"items": [card, {"keep": "value"}]},
-        "questions": [],
-    }
-    result = snow.plain_text_output(payload)
-
-    def walk(value: object) -> None:
-        if isinstance(value, dict):
-            assert "askUserArguments" not in value
-            assert not (
-                isinstance(value.get("question"), str)
-                and ("options" in value or "allowFreeformInput" in value)
-            )
-            for item in value.values():
-                walk(item)
-        elif isinstance(value, list):
-            for item in value:
-                walk(item)
-
-    walk(result)
-    assert result["questions"] == []
-    assert result["nested"]["items"][1] == {"keep": "value"}
-    assert result["chooser"]["plainText"]
-
-
-def test_adapt_question_cli_returns_plain_text_from_stdin(
+def test_adapt_question_cli_reads_canonical_json_from_stdin(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -2816,43 +2735,17 @@ def test_adapt_question_cli_returns_plain_text_from_stdin(
     assert snow.main(["adapt-question"]) == 0
 
     result = json.loads(capsys.readouterr().out)
-    assert result["schemaVersion"] == "servicenow.plain-question.v1"
-    assert result["canonicalQuestion"] == snow._neutral_question(question)
-    assert "options" not in result["canonicalQuestion"]
-    assert "allowFreeformInput" not in result["canonicalQuestion"]
-    assert result["replyKind"] == "yes-no"
-    assert result["plainText"].endswith("Reply **Yes** or **No**.")
-    assert "askUserArguments" not in result
-
-
-def test_match_reply_cli_maps_typed_reply_from_stdin(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    question = snow._native_question(
-        header="Admin",
-        question="Is your ServiceNow administrator available?",
-        option_labels=[
-            "Yes, the ServiceNow admin is available now",
-            "No, I need to bring the ServiceNow admin in",
-        ],
-    )
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(question)))
-    monkeypatch.setattr(
-        snow,
-        "load_context",
-        lambda **_kwargs: pytest.fail(
-            "match-reply must not load lifecycle context"
-        ),
-    )
-
-    assert snow.main(["match-reply", "--reply", "yes"]) == 0
-
-    result = json.loads(capsys.readouterr().out)
-    assert result["schemaVersion"] == "servicenow.question-reply-match.v1"
-    assert result["status"] == "matched"
-    assert result["selectedOption"]["number"] == 1
-    assert "agentRules" not in result
+    assert result["schemaVersion"] == "servicenow.ask-user-arguments.v1"
+    assert result["canonicalQuestion"] == question
+    assert result["askUserArguments"]["message"] == "HR prerequisite"
+    field = result["askUserArguments"]["requestedSchema"]["properties"][
+        "response"
+    ]
+    assert field["title"] == "Selection"
+    assert field["description"] == question["question"]
+    assert [item["title"] for item in field["oneOf"]] == [
+        option["label"] for option in question["options"]
+    ]
 
 
 @pytest.mark.parametrize("legacy_status", ("pending", "done"))
@@ -4533,37 +4426,35 @@ def test_preflight_requires_maker_confirmation_for_single_candidate(
         "https://dev123.service-now.com"
     ]
     assert discovery["instanceQuestion"]["options"] == [
-        {"label": "Yes"},
-        {"label": "No"},
+        {"label": "Use https://dev123.service-now.com"},
+        {"label": "Provide another ServiceNow instance URL"},
     ]
     candidate_body = discovery["instanceQuestion"]["question"]
-    assert candidate_body == (
-        "Which ServiceNow instance should Employee Self-Service HR use? "
-        "We found **dev123** in your existing connections. Use this one?"
-    )
-    assert "employee-self-service-hr" not in candidate_body
-    assert ENVIRONMENT_ID not in candidate_body
-    assert APP_CLIENT_ID not in candidate_body
-    assert "Resource URI" not in candidate_body
-    assert "Dev realm" not in candidate_body
+    assert "We found ServiceNow instance candidate" in candidate_body
+    assert "Employee Self-Service (HR)" in candidate_body
+    assert "employee-self-service-hr" in candidate_body
+    assert ENVIRONMENT_ID in candidate_body
+    assert "Dev realm" in candidate_body
+    assert "Which instance should this agent use" in candidate_body
+    assert "**Problem**" not in candidate_body
+    assert "**Category**" not in candidate_body
+    assert "**Check again and resume**" not in candidate_body
     manual = discovery["manualInstanceQuestion"]
     assert manual["allowFreeformInput"] is True
-    assert "Employee Self-Service HR" in manual["question"]
-    assert ENVIRONMENT_ID not in manual["question"]
+    assert "Employee Self-Service (HR)" in manual["question"]
+    assert ENVIRONMENT_ID in manual["question"]
     assert "`https://<your-instance>.service-now.com`" in manual["question"]
     assert "ask your ServiceNow administrator" in manual["question"]
     assert "/sp" in manual["question"]
-    assert "not credentials" in manual["question"]
+    assert "password" in manual["question"]
+    assert "token" in manual["question"]
     assert discovery["instanceChoices"][
-        "Yes"
+        "Use https://dev123.service-now.com"
     ] == "https://dev123.service-now.com"
-    assert discovery["instanceChoices"][
-        "No"
-    ] == "manual"
     recorded = snow.record_preflight_instance(
         _context(),
         instance_url=discovery["instanceChoices"][
-            "Yes"
+            "Use https://dev123.service-now.com"
         ],
     )
     refreshed = snow.inspect_admin_setup(_context())
@@ -4627,16 +4518,16 @@ def test_preflight_requests_only_missing_instance_url(
         discovery["manualInstanceQuestion"]
     )
     manual_body = discovery["instanceQuestion"]["question"]
-    assert "employee-self-service-hr" not in manual_body
-    assert ENVIRONMENT_ID not in manual_body
-    assert "Dev realm" not in manual_body
+    assert "employee-self-service-hr" in manual_body
+    assert ENVIRONMENT_ID in manual_body
+    assert "Dev realm" in manual_body
     assert "`https://<your-instance>.service-now.com`" in manual_body
     assert (
-        "Which ServiceNow instance should Employee Self-Service HR use? "
-        "Send its public HTTPS URL, not credentials."
+        "which ServiceNow instance should Employee Self-Service use? Send its "
+        "public HTTPS root URL, not credentials."
     ) in manual_body
-    assert "portal path" in manual_body
-    assert "not credentials" in manual_body
+    assert "portal or module path" in manual_body
+    assert "credential" in manual_body
     assert recorded["instanceName"] == "dev123"
     assert refreshed["instanceInputRequired"] is False
     assert "scenario" not in recorded
@@ -4668,26 +4559,24 @@ def test_preflight_multiple_candidates_are_independent_normal_choices(
         )
 
     assert [option["label"] for option in question["options"]] == [
-        "dev111",
-        "dev222",
-        "Another",
+        "Use https://dev111.service-now.com",
+        "Use https://dev222.service-now.com",
+        "Provide another ServiceNow instance URL",
     ]
     assert not any(
         option.get("recommended") for option in question["options"]
     )
     assert choices == {
-        "dev111": (
+        "Use https://dev111.service-now.com": (
             "https://dev111.service-now.com"
         ),
-        "dev222": (
+        "Use https://dev222.service-now.com": (
             "https://dev222.service-now.com"
         ),
-        "Another": "manual",
+        "Provide another ServiceNow instance URL": "manual",
     }
-    assert display_name.replace("(", "").replace(")", "") in (
-        question["question"]
-    )
-    assert slug not in question["question"]
+    assert display_name in question["question"]
+    assert slug in question["question"]
     assert "**Problem**" not in question["question"]
     assert manual["header"] == "ServiceNow instance URL"
     assert "`https://<your-instance>.service-now.com`" in manual["question"]
@@ -5126,29 +5015,30 @@ def test_shared_reuse_partial_hr_to_it_requires_one_maker_acceptance(
             "servicenow-oidc",
         ]
         assert handoff["question"]["options"] == [
-            {"label": "Yes"},
-            {"label": "No"},
+            {"label": "Reuse shared identity"},
+            {"label": "Configure separately"},
+            {"label": "Not now"},
         ]
         assert handoff["question"]["header"] == "Reuse shared identity"
         assert handoff["reuseDecisionChoices"] == [
-            {"label": "Yes", "decision": "accept"},
-            {"label": "No", "decision": "decline"},
+            {
+                "label": "Reuse shared identity",
+                "decision": "accept",
+            },
+            {"label": "Configure separately", "decision": "decline"},
+            {"label": "Not now", "decision": "not-now"},
         ]
         body = handoff["question"]["question"]
-        assert "ServiceNow instance dev123" in body
-        assert "`" not in body
+        assert "ServiceNow instance `dev123`" in body
         for technical in ("Current target:", "Environment:", "Realm:", "Agent:"):
             assert technical not in body
         assert ENVIRONMENT_ID not in body
-        assert "HR agent in this workspace" in body
-        assert "employee-self-service-hr" not in body
-        assert "we'll still check this agent's own setup" in body
+        assert "HRSD agent `employee-self-service-hr`" in body
         assert "Entra administrator-confirmed application" in body
         assert "Current target-bound ServiceNow user-field mapping" in body
         assert "Physical ServiceNow" not in body
         assert "fresh read of that exact connection" not in body
-        assert "we'll still check this agent's own setup" in body
-        assert "each owning readiness check still runs" not in body
+        assert "each owning readiness check still runs" in body
 
         result = snow.apply_shared_configuration_reuse(
             context,
@@ -6237,8 +6127,9 @@ def test_saved_portal_value_persists_and_reloads_for_future_agent(
         "https://dev123.service-now.com/employee"
     )
     assert offer["question"]["options"] == [
-        {"label": "Yes"},
-        {"label": "No"},
+        {"label": "Reuse saved portal URL"},
+        {"label": "Enter separately"},
+        {"label": "Not now"},
     ]
     assert accepted["decision"] == "accepted"
     assert resumed["decision"] == "already-recorded"
@@ -6606,7 +6497,7 @@ def test_local_confirmed_instance_is_preflight_candidate_only(
         "https://dev123.service-now.com"
     ]
     assert discovery["instanceChoices"][
-        "Yes"
+        "Use https://dev123.service-now.com"
     ] == "https://dev123.service-now.com"
     saved = json.loads(target_path.read_text(encoding="utf-8"))
     assert saved["adminSetup"]["preflight"].get("instanceName") is None
@@ -7466,6 +7357,14 @@ def test_ready_to_send_messages_are_wrapped_in_one_fenced_block(
         "When they reply, paste their response here without secrets. "
         "We'll use it to prepare the ServiceNow handoff; you don't need to "
         "interpret the settings.\n\n"
+        "If your ServiceNow administrator identifies employees by something "
+        "other than email or UPN, such as a payroll ID, the custom-claim "
+        "part of the message applies. Ask your Entra administrator to "
+        "coordinate with them first, to confirm the exact claim name, its "
+        "format, and that its source attribute is populated for every "
+        "intended employee, and to say whether an existing setup was reused "
+        "and whether the setup is complete. You don't need to choose the "
+        "identifier or send anyone's payroll ID.\n\n"
     )
     for technical in (
         "Target agent:",
@@ -7482,8 +7381,8 @@ def test_ready_to_send_messages_are_wrapped_in_one_fenced_block(
         "We have the Entra values. Send this message to your ServiceNow "
         "administrator to set up employee matching.\n\n"
         "It includes the values already supplied. When they reply, paste "
-        "their saved-configuration confirmation, **User Claim**, and "
-        "**User Field** here without secrets.\n\n"
+        "their saved-configuration confirmation, **User Field**, and "
+        "same-value confirmation here without secrets.\n\n"
     )
     if plugin is not None:
         assert plugin.split("**Ready-to-send message**")[0].endswith(
@@ -7529,21 +7428,25 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     assert gated["ordinaryReply"] is None
     assert gated["questions"] == []
     assert gated["availability"]["question"]["question"] == (
-        "Is your Microsoft Entra administrator available now to complete this step?"
+        "Is your Microsoft Entra administrator available to complete this step?"
     )
-    gated_plain = gated["availability"]["plainText"]
-    assert gated_plain == (
-        "Is your Microsoft Entra administrator available now to complete this step?"
-        "\n\nReply **Yes** or **No**."
-    )
-    assert "askUserArguments" not in gated["availability"]
+    gated_arguments = gated["availability"]["askUserArguments"]
+    gated_field = gated_arguments["requestedSchema"]["properties"]["response"]
+    assert gated_arguments["message"] == "Entra identity"
+    assert gated_field["title"] == "Selection"
+    assert gated_field["description"] == "Is your Microsoft Entra administrator available to complete this step?"
+    assert [option["title"] for option in gated_field["oneOf"]] == [
+        "Yes, the Entra admin is available now",
+        "No, I need to bring the Entra admin in",
+    ]
+    assert gated_arguments["requestedSchema"]["required"] == ["response"]
     assert entra["decision"] == "instructions-required"
     assert entra["availability"]["acknowledged"] is True
     assert entra["runtimeInstructionPath"].replace("\\", "/").endswith(
         "runtime-instructions/entra-administrator.md"
     )
     assert entra["runtimeInstructionSha256"] == (
-        "ECEA5FA5851686CF75919734718DD07D23AB40E64BC097C50C3B017CE5DDDD9A"
+        "0306CE216C696E56C02CBEC78DB152096867B2D26C7AC06BE8AD89D8B01B4D04"
     )
     assert "sourceWorkbookSha256" not in entra
     assert "sourceWorkbookRole" not in entra
@@ -7554,8 +7457,25 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     )
     assert source_text == canonical_entra
     assert "The Entra administrator should:" not in ordinary
-    assert entra["questions"] == []
-    assert "askUserArguments" not in json.dumps(entra)
+    assert len(entra["questions"]) == 1
+    assert [
+        item["canonicalQuestion"]["header"]
+        for item in entra["questions"]
+    ] == [
+        "Application client ID",
+    ]
+    assert "Selected User Claim" not in json.dumps(entra["questions"])
+    assert "non-sensitive reply" in entra["questions"][0]["canonicalQuestion"][
+        "question"
+    ]
+    for item in entra["questions"]:
+        canonical = item["canonicalQuestion"]
+        arguments = item["askUserArguments"]
+        field = arguments["requestedSchema"]["properties"]["response"]
+        assert arguments["message"] == canonical["header"]
+        assert field["description"] == canonical["question"]
+        assert field["title"] in {"Selection", "Input"}
+        assert arguments["requestedSchema"]["required"] == ["response"]
 
     with snow.product_profile_context(profile_key):
         captured = snow.record_identity_direct(
@@ -7632,7 +7552,7 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
         "runtime-instructions/servicenow-administrator.md"
     )
     assert service_now["runtimeInstructionSha256"] == (
-        "F8BC6E2D77395638D9CE6D0FE151E528D300B6EBABCE2D304B27C1A3D991E5A8"
+        "ED080226F6E6A956BFAB0AFD1AA2D3DD2EFD449DE16869B18CC82282E4B35632"
     )
     assert service_now["lockedValues"] == {
         "applicationClientId": APP_CLIENT_ID,
@@ -7674,18 +7594,20 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
             claim_name="employee_id",
         )
     assert source_text == expected_text
-    assert service_now["questions"] == []
-    assert ordinary.endswith(snow.SERVICENOW_USER_FIELD_TEXT_QUESTION)
-    assert "sys_user" not in snow.SERVICENOW_USER_FIELD_TEXT_QUESTION
-    assert "ServiceNow internal user field" not in json.dumps(service_now)
+    assert len(service_now["questions"]) == 1
+    input_card = service_now["questions"][0]
+    assert input_card["canonicalQuestion"]["allowFreeformInput"] is True
+    assert input_card["askUserArguments"]["requestedSchema"]["properties"][
+        "response"
+    ]["description"] == input_card["canonicalQuestion"]["question"]
     assert service_now_completion["ordinaryReply"] == {
         "kind": "ordinary-agent-response",
         "text": (
-            "Thanks—please ask your ServiceNow administrator to confirm that "
-            "the configuration is saved and name both the **User Claim** and "
-            "**User Field**.\n\n"
-            "That will clarify which settings use `employee_id` to identify "
-            "the signed-in employee."
+            "I recorded the User Field `u_employee_id`. I still need your "
+            "ServiceNow administrator's confirmation that the configuration "
+            "is saved and that this field holds exactly the same value as "
+            "the User Claim `employee_id`. You don't need to send the field "
+            "again."
         ),
     }
     assert "```" not in service_now_completion["ordinaryReply"]["text"]
@@ -7713,10 +7635,10 @@ def test_canonical_runtime_instruction_sources_are_exact_and_structured():
         "runtime-instructions/servicenow-administrator.md"
     )
     assert entra_sha == (
-        "ECEA5FA5851686CF75919734718DD07D23AB40E64BC097C50C3B017CE5DDDD9A"
+        "0306CE216C696E56C02CBEC78DB152096867B2D26C7AC06BE8AD89D8B01B4D04"
     )
     assert service_now_sha == (
-        "F8BC6E2D77395638D9CE6D0FE151E528D300B6EBABCE2D304B27C1A3D991E5A8"
+        "ED080226F6E6A956BFAB0AFD1AA2D3DD2EFD449DE16869B18CC82282E4B35632"
     )
     assert "\u00a0" not in entra + service_now
     assert entra.startswith("#### Instructions for the Entra administrator")
@@ -7749,7 +7671,7 @@ def test_canonical_runtime_instruction_sources_are_exact_and_structured():
     assert service_now.startswith(
         "#### Instructions for the ServiceNow administrator"
     )
-    assert "**Values to use:** Client ID `<client ID>`" in service_now
+    assert "**Values from the maker:** Client ID `<client ID>`" in service_now
     assert "tenant ID" not in service_now.split("**Send back")[0].split(
         "OIDC Metadata URL"
     )[0]
@@ -7765,7 +7687,7 @@ def test_canonical_runtime_instruction_sources_are_exact_and_structured():
     assert "   - **Client ID:** `<client ID>`." in service_now
     assert "   - **OIDC Metadata URL:**" in service_now
     assert "8. **HR agent only:**" in service_now
-    assert "**Please send back:**" in service_now
+    assert "**Send back to the maker:**" in service_now
     for profile in ("servicenow-da-hrsd", "servicenow-da-itsm"):
         entra_guide = (
             snow.SOLUTION_ROOT
@@ -7876,19 +7798,40 @@ def test_direct_identity_handoff_pauses_before_instructions_until_ack(
     assert acknowledgement["businessGroupId"] == "entra-identity"
     assert after_yes["decision"] == "instructions-required"
     assert after_yes["ordinaryReply"]["text"]
-    assert after_yes["questions"] == []
-    assert after_client["questions"] == []
+    assert after_yes["questions"][0]["canonicalQuestion"]["header"] == (
+        "Application client ID"
+    )
+    assert [
+        item["canonicalQuestion"]["header"]
+        for item in after_client["questions"]
+    ] == [
+        "Entra claim name",
+    ]
     assert after_client["retainedDirectInput"] == {
         "applicationClientId": APP_CLIENT_ID,
     }
-    assert after_client["ordinaryReply"]["text"] == (
-        snow.ENTRA_CLAIM_FOLLOW_UP_TEXT
+    assert after_client["ordinaryReply"] is None
+    claim_followup = after_client["questions"][0]["canonicalQuestion"][
+        "question"
+    ]
+    assert claim_followup.startswith(
+        f"We have the Client ID `{APP_CLIENT_ID}`. Next, we need the "
+        "**exact claim name** your Entra administrator configured for "
+        "ServiceNow to use (`email`, `upn`, or a custom claim name).\n\n"
+        "Ask your Entra administrator for that name, or paste the rest of "
+        "their non-sensitive reply. You don't need to resend the Client ID."
     )
-    assert "do not enter `aud`" not in after_client["ordinaryReply"]["text"]
-    assert APP_CLIENT_ID not in after_client["ordinaryReply"]["text"]
+    assert "do not enter `aud`" in claim_followup
+    assert all(
+        item["canonicalQuestion"]["header"]
+        != "Entra administrator availability"
+        for item in after_yes["questions"]
+    )
     assert same_group_resume["availability"]["acknowledged"] is True
+    assert same_group_resume["questions"][0]["canonicalQuestion"][
+        "header"
+    ] == "Application client ID"
     assert same_group_resume["questions"] == after_yes["questions"]
-    assert same_group_resume["ordinaryReply"] == after_yes["ordinaryReply"]
     assert path.read_bytes() == acknowledged_bytes
 
 
@@ -8385,8 +8328,9 @@ def test_direct_identity_cli_roundtrips_both_admin_stages(
     _ack_identity_availability(context, stage="entra")
     assert snow.main(["identity-direct-handoff", "--stage", "entra"]) == 0
     entra_handoff = json.loads(capsys.readouterr().out)
-    assert entra_handoff["questions"] == []
-    assert entra_handoff["ordinaryReply"]["text"]
+    assert entra_handoff["questions"][0]["askUserArguments"][
+        "message"
+    ] == "Application client ID"
     assert snow.main(
         [
             "identity-direct-handoff",
@@ -8397,10 +8341,9 @@ def test_direct_identity_cli_roundtrips_both_admin_stages(
         ]
     ) == 0
     after_client = json.loads(capsys.readouterr().out)
-    assert after_client["questions"] == []
-    assert after_client["ordinaryReply"]["text"] == (
-        snow.ENTRA_CLAIM_FOLLOW_UP_TEXT
-    )
+    assert after_client["questions"][0]["askUserArguments"][
+        "message"
+    ] == "Entra claim name"
     assert snow.main(
         [
             "record-identity-direct",
@@ -10345,8 +10288,8 @@ def test_test_connection_docs_hr_and_it_are_identical_except_domain_nouns() -> N
 
 
 PORTAL_CONFIRMATION_OPTIONS = [
-    {"label": "Yes"},
-    {"label": "No"},
+    {"label": "Yes, that's the portal URL"},
+    {"label": "No, use a different URL"},
 ]
 
 
@@ -10388,12 +10331,7 @@ def test_portal_url_confirmation_shows_normalized_url_and_saves_nothing(
     assert result["question"] == f"Is **{shown}** the employee portal URL?"
     assert result["options"] == PORTAL_CONFIRMATION_OPTIONS
     assert result["allowFreeformInput"] is False
-    topic_family = "HR" if profile == "hrsd" else "IT"
-    assert result["savedMessage"] == (
-        f"We'll save that portal URL and turn on the built-in ServiceNow "
-        f"{topic_family} topics, including system topics. Unrelated topics "
-        "will stay unchanged."
-    )
+    assert result["savedMessage"] == "We'll save that portal URL."
     assert path.read_bytes() == before
 
 
@@ -10478,13 +10416,7 @@ def test_portal_url_confirmation_hr_and_it_are_identical() -> None:
             results[profile] = snow.portal_url_confirmation(
                 context, "https://dev123.service-now.com/esc"
             )
-    for profile in results:
-        topic_family = "HR" if profile == "hrsd" else "IT"
-        saved = results[profile]["savedMessage"]
-        assert f"built-in ServiceNow {topic_family} topics" in saved
-    assert {k: v for k, v in results["hrsd"].items() if k != "savedMessage"} == {
-        k: v for k, v in results["itsm"].items() if k != "savedMessage"
-    }
+    assert results["hrsd"] == results["itsm"]
 
 
 def test_portal_url_docs_require_confirmation_before_save_hr_and_it() -> None:
@@ -10498,21 +10430,16 @@ def test_portal_url_docs_require_confirmation_before_save_hr_and_it() -> None:
     for text in docs.values():
         assert "portal-url-confirmation --portal-url" in text
         assert "Is **{NORMALIZED_PORTAL_URL}** the employee portal URL?" in text
-        assert 'the choices are "Yes" and "No"' in " ".join(text.split())
-        assert "Yes, that's the portal URL" not in text
-        assert "No, use a different URL" not in text
-        assert "Nothing is saved before the Maker replies **Yes**." in text
+        assert "Yes, that's the portal URL" in text
+        assert "No, use a different URL" in text
+        assert "Nothing is saved before the Maker selects **Yes**." in text
         assert text.index("portal-url-confirmation --portal-url") < text.index(
             "set-portal-url --portal-url"
         )
     def confirmation_block(text: str) -> str:
         start = text.index("portal-url-confirmation --portal-url")
-        end = text.index("Nothing is saved before the Maker replies **Yes**.")
-        return (
-            text[start:end]
-            .replace("itsm", "hrsd")
-            .replace("ServiceNow IT topics", "ServiceNow HR topics")
-        )
+        end = text.index("Nothing is saved before the Maker selects **Yes**.")
+        return text[start:end].replace("itsm", "hrsd")
 
     assert confirmation_block(docs["itsm"]) == confirmation_block(docs["hrsd"])
     skill_root = root / "servicenow"
@@ -10581,7 +10508,7 @@ def test_dev_test_follow_up_question_follows_spec(
         question = snow._dev_test_clarifying_question()
 
     assert question == (
-        f"What did the request return—your expected {records}, an empty "
+        f"What did the request return: your expected {records}, an empty "
         f"result, or an error? No need to share {record} contents."
     )
 
@@ -12561,8 +12488,13 @@ def test_topic_action_handoff_returns_complete_it_question(
         "allowFreeformInput",
     }
     assert result["question"]["options"] == [
-        {"label": "Yes"},
-        {"label": "No"},
+        {"label": "Enable all listed inactive ServiceNow topics"},
+        {
+            "label": (
+                "Keep the current topic states for this configuration"
+            )
+        },
+        {"label": "Not now, leave the phase incomplete"},
     ]
     assert "choices" not in result["question"]
     question = result["question"]["question"]
@@ -12573,7 +12505,7 @@ def test_topic_action_handoff_returns_complete_it_question(
     for technical in ("Selected agent:", "Environment:", "Component hash"):
         assert technical not in reply
     assert result["componentHash"]
-    assert "Do you want to turn on all listed inactive" in question
+    assert "Do you want to enable all listed inactive" in question
     assert "ServiceNowITSMSystemReadExecution" not in question
     for instruction in (
         "Purpose:",
@@ -12656,18 +12588,22 @@ def test_topic_action_handoff_has_hr_parity(
         assert technical not in reply
     assert result["componentHash"]
     assert question == (
-        "Do you want to turn on all listed inactive ServiceNow topics? "
-        "Reply No to keep their current states. Only topics in the "
-        "inventory listed above are in scope; unrelated topics remain "
-        "unchanged."
+        "Do you want to enable all listed inactive ServiceNow topics, or "
+        "keep their current states? Only topics in the inventory listed "
+        "above are in scope; unrelated topics remain unchanged."
     )
     assert "Selected agent:" not in question
     assert "Current topic inventory:" not in question
     assert "Inactive ServiceNow HRSD topics" not in question
     assert result["question"]["header"] == "ServiceNow topic states"
     assert result["question"]["options"] == [
-        {"label": "Yes"},
-        {"label": "No"},
+        {"label": "Enable all listed inactive ServiceNow topics"},
+        {
+            "label": (
+                "Keep the current topic states for this configuration"
+            )
+        },
+        {"label": "Not now, leave the phase incomplete"},
     ]
     assert "Purpose:" not in question
     assert "Owner:" not in question
@@ -12757,7 +12693,7 @@ def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
         )
         assert "   - **Resource URI:** `" in text
         assert (
-            "   - **Instance name:** `dev123`—not the full URL\n"
+            "   - **Instance name:** `dev123`, not the full URL\n"
             "4. Complete the connection creation.\n\n"
             "Return here and tell us which connection you used. You won't "
             "need to resend the administrator replies.\n\n"
@@ -12777,7 +12713,7 @@ def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
         expected_test = (
             "We're ready to try an HR request.\n\n"
             "In **Employee Self-Service HR's Test pane**, run a request that "
-            "should return your real ServiceNow data—for example **\"Show "
+            "should return your real ServiceNow data, for example **\"Show "
             "my open HR cases,\"** if you have open cases.\n\n"
             "Come back and tell us what happened and whether it matched what "
             "you expected. You don't need to paste case contents.\n\n"
@@ -12788,7 +12724,7 @@ def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
         expected_test = (
             "We're ready to try an IT request.\n\n"
             "In **Employee Self-Service IT's Test pane**, run a request that "
-            "should return your real ServiceNow data—for example **\"Show "
+            "should return your real ServiceNow data, for example **\"Show "
             "my open IT tickets,\"** if you have open tickets.\n\n"
             "Come back and tell us what happened and whether it matched what "
             "you expected. You don't need to paste ticket contents.\n\n"
@@ -13160,7 +13096,7 @@ def test_resume_handoff_withholds_preflight_checkpoint_for_pending_instance(
     assert pending["manualQuestion"] == manual_question
     assert pending["choiceValues"] == choices
     body = pending["question"]["question"]
-    assert body.startswith("Which ServiceNow instance should Employee Self-Service")
+    assert "Which instance should this agent use" in body
     assert "Progress" not in body
     assert "Connection progress" not in body
     assert "**Phases**" not in body
@@ -13239,86 +13175,6 @@ def test_resume_handoff_allows_preflight_checkpoint_after_instance_recorded(
     assert result["checkpoints"]["commands"][0]["target"] == (
         "SN-DA-ITSM-ADMIN-PREFLIGHT-001"
     )
-
-
-@pytest.mark.parametrize(
-    ("profile", "agent_id", "agent_slug"),
-    (
-        ("hrsd", AGENT_ID, "employee-self-service-hr"),
-        ("itsm", OTHER_AGENT_ID, "employee-self-service-it"),
-    ),
-)
-def test_lead_in_output_continues_to_the_permission_check_without_the_maker(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    profile: str,
-    agent_id: str,
-    agent_slug: str,
-) -> None:
-    product = snow.PRODUCT_PROFILES[profile]
-    context = _profile_context(
-        profile,
-        agent_id=agent_id,
-        agent_slug=agent_slug,
-    )
-    context["root"] = tmp_path
-    contract = json.loads(
-        (
-            snow.SOLUTION_ROOT
-            / "src"
-            / "skills"
-            / "connect"
-            / product.provider_key
-            / "contract.json"
-        ).read_text(encoding="utf-8")
-    )
-    contract_path = (
-        tmp_path
-        / "src"
-        / "skills"
-        / "connect"
-        / product.provider_key
-        / "contract.json"
-    )
-    contract_path.parent.mkdir(parents=True, exist_ok=True)
-    contract_path.write_text(json.dumps(contract), encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
-    with snow.product_profile_context(profile):
-        state = snow._state_base(context, _components())
-        state["attested"] = True
-        state["attestedAt"] = "2026-10-29T00:00:00Z"
-        state["acceptedContractRevision"] = contract["contractRevision"]
-        state["phases"] = {
-            phase["id"]: {
-                "status": (
-                    "in-progress"
-                    if phase["id"] == "preflight"
-                    else "pending"
-                ),
-                "checkpointResults": {},
-            }
-            for phase in contract["phases"]
-        }
-        state["adminSetup"]["preflight"]["instanceName"] = "dev184242"
-        state["adminSetup"]["preflight"]["discovery"] = {
-            "instanceInputRequired": False,
-        }
-        snow._write_lifecycle_state(context, state)
-        result = snow.resume_handoff(
-            context,
-            executed_actions=frozenset({"preflight"}),
-        )
-        wrapped = snow._with_agent_rules(
-            snow.plain_text_output(result), "resume-handoff"
-        )
-
-    assert wrapped["endTurn"] is False
-    target = result["checkpoints"]["commands"][0]["target"]
-    assert target in wrapped["nextCommand"]
-    assert "flightcheck" in wrapped["nextCommand"]
-    assert list(wrapped)[:3] == ["chatMessage", "endTurn", "nextCommand"]
-    rules = " ".join(wrapped["agentRules"])
-    assert "endTurn is false" in rules and "nextCommand" in rules
 
 
 @pytest.mark.parametrize(
@@ -14019,13 +13875,10 @@ def test_resume_handoff_cli_jit_group_no_is_byte_stable(
     availability = first["transport"]["businessGroupAvailability"]
     assert first["status"] == "business-group-availability-required"
     assert availability["currentGroup"]["id"] == "hr-prerequisite"
-    question = availability["question"]
-    assert question["schemaVersion"] == "servicenow.plain-question.v1"
-    assert "options" not in question
-    assert [
-        choice["label"] for choice in question["choices"]
-    ] == ["Yes", "No"]
-    assert question["plainText"].endswith("Reply **Yes** or **No**.")
+    assert availability["question"]["options"] == [
+        {"label": "Yes, the ServiceNow admin is available now"},
+        {"label": "No, I need to bring the ServiceNow admin in"},
+    ]
 
     command = [
         "--provider",
@@ -14230,19 +14083,19 @@ def test_business_group_question_is_just_in_time_after_preflight(
     expected_questions = {
         "hr-prerequisite": {
             "header": "HR prerequisite",
-            "question": "Is your ServiceNow administrator available now to complete this step?",
+            "question": "Is your ServiceNow administrator available to complete this step?",
             "options": [
-                {"label": "Yes"},
-                {"label": "No"},
+                {"label": "Yes, the ServiceNow admin is available now"},
+                {"label": "No, I need to bring the ServiceNow admin in"},
             ],
             "allowFreeformInput": False,
         },
         "entra-identity": {
             "header": "Entra identity",
-            "question": "Is your Microsoft Entra administrator available now to complete this step?",
+            "question": "Is your Microsoft Entra administrator available to complete this step?",
             "options": [
-                {"label": "Yes"},
-                {"label": "No"},
+                {"label": "Yes, the Entra admin is available now"},
+                {"label": "No, I need to bring the Entra admin in"},
             ],
             "allowFreeformInput": False,
         },
@@ -14503,10 +14356,22 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
         assert sso["question"] == {
             "header": "ServiceNow SSO and user mapping",
             "question": (
-                "Is the ServiceNow administrator who can manage security "
-                "settings available now to complete this step?"
+                "Is the ServiceNow admin with security_admin available now?"
             ),
-            "options": [{"label": "Yes"}, {"label": "No"}],
+            "options": [
+                {
+                    "label": (
+                        "Yes, the ServiceNow admin with security_admin is "
+                        "available now"
+                    )
+                },
+                {
+                    "label": (
+                        "No, I need to bring the ServiceNow admin with "
+                        "security_admin in"
+                    )
+                },
+            ],
             "allowFreeformInput": False,
         }
         sso_yes = snow.resume_handoff(
@@ -14550,9 +14415,12 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             "header": "Maker configuration and validation",
             "question": (
                 "Are you available, with the ESS Maker / Agent Developer "
-                "role, to complete this step now?"
+                "role, to complete this step?"
             ),
-            "options": [{"label": "Yes"}, {"label": "No"}],
+            "options": [
+                {"label": "Yes, the Maker is available now"},
+                {"label": "No, I need to bring the Maker in"},
+            ],
             "allowFreeformInput": False,
         }
         maker_yes = snow.resume_handoff(
@@ -14611,7 +14479,7 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
 
 MAKER_ROLE_QUESTION = (
     "Are you available, with the ESS Maker / Agent Developer role, to "
-    "complete this step now?"
+    "complete this step?"
 )
 
 
@@ -15209,7 +15077,7 @@ def test_agent_chooser_lists_prepared_agents_without_remote_discovery(
         "selectionKey": f"prepared:{AGENT_ID}",
     }
     assert result["question"]["options"][-1] == {
-        "label": "Another agent",
+        "label": "Use another agent (paste link)",
         "selectionKey": "another-agent",
     }
     selected = snow.agent_chooser_handoff(
@@ -15277,7 +15145,7 @@ def test_agent_chooser_offers_link_when_no_agent_is_prepared(
     assert result["agents"] == []
     assert result["question"]["options"] == [
         {
-            "label": "Another agent",
+            "label": "Use another agent (paste link)",
             "selectionKey": "another-agent",
         }
     ]
@@ -16218,10 +16086,10 @@ def test_inspect_admin_timeout_preserves_error_and_allows_manual_target(
         "category": "timeout",
         "mutationMayHaveOccurred": False,
     }
-    assert "couldn't check your existing connections" in (
+    assert "not an empty inventory" in (
         discovery["instanceQuestion"]["question"]
     )
-    assert "couldn't check your existing connections" in (
+    assert "not an empty inventory" in (
         discovery["manualInstanceQuestion"]["question"]
     )
     assert "**Problem**" not in discovery["instanceQuestion"]["question"]
@@ -16811,15 +16679,13 @@ def test_every_command_output_carries_agent_rules(
     ) == 0
     output = json.loads(capsys.readouterr().out)
     rules = " ".join(output["agentRules"])
-    assert len(output["agentRules"]) <= 8
+    assert len(output["agentRules"]) <= 5
     assert "launcher resolved by /setup" in rules
-    assert "never uses ask_user" in rules
-    assert "END YOUR TURN" in rules
-    assert "chatMessage" in rules
+    assert "renderBlock.text" in rules
     assert "lifecycle.json by hand" in rules
     assert "*> $null" in rules
     assert "lifecycle-runner.md" in rules
-    assert "agentRules" in list(output)[:3]
+    assert next(iter(output)) == "agentRules"
 
     assert snow.main(
         [
@@ -16844,14 +16710,7 @@ def test_agent_rules_put_render_block_first_and_skip_adapt_question() -> None:
 
     ordered = snow._with_agent_rules(result, "resume-handoff")
 
-    assert list(ordered)[:5] == [
-        "chatMessage",
-        "endTurn",
-        "renderBlock",
-        "agentRules",
-        "decision",
-    ]
-    assert ordered["chatMessage"] == "T"
+    assert list(ordered)[:3] == ["renderBlock", "agentRules", "decision"]
     assert snow._with_agent_rules(result, "adapt-question") is result
 
 
@@ -16989,91 +16848,6 @@ def test_dev_opening_includes_instance_and_omits_unrecorded_environment(
     assert "**ServiceNow instance:** https://dev184242.service-now.com" in text
     assert "can configure this agent before setup begins." in text
     assert context["environment"]["id"] not in text
-
-
-def test_phase_checklist_default_is_a_compact_snapshot_and_progress_is_kept(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    def handoff(subdir: str, *, snapshot: bool, legacy: bool) -> dict[str, Any]:
-        context, _, profile = _recording_setup(monkeypatch, tmp_path / subdir, "hrsd")
-        context["environment"]["display_name"] = "Contoso Dev"
-        with snow.product_profile_context(profile):
-            monkeypatch.setattr(snow, "SHOW_PHASE_CHECKLIST", snapshot)
-            monkeypatch.setattr(snow, "SHOW_LEGACY_PHASE_VIEW", legacy)
-            return snow.resume_handoff(context, executed_actions=frozenset())
-
-    legacy = handoff("legacy", snapshot=True, legacy=True)
-    compact = handoff("compact", snapshot=True, legacy=False)
-    hidden = handoff("hidden", snapshot=False, legacy=False)
-
-    for marker in ("Automatic setup", "Phases", "Complete — admin confirmed"):
-        assert marker in legacy["renderBlock"]["text"]
-        assert marker not in compact["renderBlock"]["text"]
-        assert marker not in hidden["renderBlock"]["text"]
-    assert compact["renderBlock"]["text"].startswith("We'll connect")
-
-    snapshot = snow._render_progress_snapshot(
-        snow._load_json(Path(snow.__file__).resolve().parents[1] / snow.CONTRACT_PATH),
-        compact["progress"]["items"],
-        title="Here's your connection setup:",
-    )
-    lines = snapshot.splitlines()
-    assert lines[0].startswith("Here's your ")
-    bullets = lines[2:]
-    assert len(bullets) == 4
-    assert all(line.startswith("- ") and line[2] in "✅🔄⛔⬜" for line in bullets)
-    assert "HR prerequisite" in snapshot
-    assert "Responsible" not in snapshot and "Complete — " not in snapshot
-
-    # Default delivery is a Markdown chat snapshot (the host does not show a todo list).
-    assert compact["renderBlock"]["progressTodos"] == []
-    snapshot_text = compact["renderBlock"]["progressSnapshot"]
-    assert snapshot_text.splitlines()[0].startswith("Here's your ")
-    assert "HR prerequisite" in snapshot_text
-    assert "progressSnapshot" in compact["renderBlock"]["instruction"]
-    assert hidden["renderBlock"]["progressSnapshot"] == ""
-    assert hidden["renderBlock"]["progressTodos"] == []
-    assert "✅" not in hidden["renderBlock"]["text"]
-
-    monkeypatch.setattr(snow.realms, "PROGRESS_DELIVERY", "todo")
-    todo = handoff("todo", snapshot=True, legacy=False)
-    assert todo["renderBlock"]["progressSnapshot"] == ""
-    todos = todo["renderBlock"]["progressTodos"]
-    assert len(todos) == 4
-    assert [t["id"] for t in todos] == [1, 2, 3, 4]
-    assert all(
-        t["status"] in {"completed", "in-progress", "not-started"} for t in todos
-    )
-    assert "HR prerequisite" in todos[0]["title"]
-    assert "progressTodos" in todo["renderBlock"]["instruction"]
-    assert "todo list tool" in todo["renderBlock"]["instruction"]
-    monkeypatch.setattr(snow.realms, "PROGRESS_DELIVERY", "chat")
-
-    assert hidden["progress"]["items"] == compact["progress"]["items"]
-    ignored = {"renderedAt", "internal"}
-    assert {k: v for k, v in hidden["progress"].items() if k not in ignored} == {
-        k: v for k, v in compact["progress"].items() if k not in ignored
-    }
-
-
-def test_progress_snapshot_marks_blocked_and_completed_groups() -> None:
-    contract = snow._load_json(
-        Path(snow.__file__).resolve().parents[1] / snow.CONTRACT_PATH
-    )
-    groups = snow._business_groups(contract)
-    items = [
-        {"id": phase_id, "status": "complete-verified"}
-        for group in groups
-        for phase_id in group["phaseIds"]
-    ]
-    done = snow._render_progress_snapshot(contract, items, title="T")
-    assert done.splitlines()[2:] == [f"- ✅ {group['label']}" for group in groups]
-
-    first = groups[0]["phaseIds"][0]
-    items[0] = {"id": first, "status": "needs-attention"}
-    blocked = snow._render_progress_snapshot(contract, items, title="T")
-    assert blocked.splitlines()[2] == f"- ⛔ {groups[0]['label']}"
 
 
 def test_dev_opening_is_not_shown_on_resume(
@@ -17227,8 +17001,6 @@ def test_resume_render_block_final_is_grouped_final_text() -> None:
 
     assert block == {
         "kind": "final",
-        "progressSnapshot": "",
-        "progressTodos": [],
         "text": "G\n\nDONE",
         "instruction": snow._RENDER_INSTRUCTION,
     }

@@ -1,11 +1,5 @@
 # ServiceNow Step 1: Gather Instance Info & Set Up MCP
 
-> **Retired legacy flow — not part of `/connect servicenow`.** The current
-> ServiceNow Connect flow starts at `src/skills/connect/servicenow/entry.md`
-> and never uses cards. If you reached this file from a ServiceNow Connect
-> request, stop reading it and follow `entry.md` instead. Never use
-> `ask_user` or `vscode_askQuestions` for ServiceNow Connect.
-
 Every **Message** block is the exact text to show the user. Copy it verbatim.
 Do not rephrase, add commentary, or tell the user what tools you are calling.
 

@@ -22,25 +22,23 @@ workspace. This is local-only and must not call AgentBuilder or Connectivity:
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} portal-reuse-handoff
 ```
 
-- `none`: the output's `chatMessage` is the portal URL question. Send it
-  verbatim as ordinary chat text and end your turn. Never ask it yourself.
+- `none`: continue to the manual URL question below.
 - `already-recorded` with an accepted record: use its exact `portalUrl`
   without asking the Maker again, then run the guarded `set-portal-url` command
   below. A declined record continues to the manual question.
-- `source-selection-required`: send the returned plain question (its
-  `plainText`), translate the typed reply through `portalSourceChoices`, and
-  rerun `portal-reuse-handoff --source-key <internal-source-key>`.
-- `question-required`: send the returned question's `plainText` verbatim as
-  ordinary chat text and map the typed reply with `match-reply`. Translate the
-  answer through `portalDecisionChoices`.
-  - **Yes**: run
+- `source-selection-required`: ask the returned label-only question, translate
+  the selected label through `portalSourceChoices`, and rerun
+  `portal-reuse-handoff --source-key <internal-source-key>`.
+- `question-required`: show the exact returned question. Translate the answer
+  through `portalDecisionChoices`.
+  - **Reuse saved portal URL**: run
     `record-portal-reuse --source-key <internal-source-key> --decision accept`,
     then pass the returned `portalUrl` directly to the guarded
     `set-portal-url` command. Never ask the Maker to type it.
-  - **No**: run
+  - **Enter separately**: run
     `record-portal-reuse --source-key <internal-source-key> --decision decline`
     and continue to the manual question.
-  - No answer yet: record nothing and return `ACTION_RESULT = "waiting"`.
+  - **Not now**: record nothing and return `ACTION_RESULT = "waiting"`.
 
 Candidate discovery and decision recording do not complete the phase or copy
 the source topic ID, binding, phase result, or readback. The current agent must
@@ -65,18 +63,16 @@ Next, we'll make sure the agent's IT ticket links open in the right employee por
 
 **End message.**
 
-Send the question below as ordinary chat text and end your turn. Never call
-`ask_user` or any card tool: the maker answers by typing in chat, and a hook
-blocks card tools during this flow.
-
-<!-- plain-chat-question:v1 -->
-**Message:**
-
-What is the full HTTPS base URL of your ServiceNow employee portal? It may differ from the instance URL, so we won't assume `/sp` or `/esc`.
-
-Reply here in chat with the URL.
-
-**End message.**
+<!-- visible-handoff-question:v1 -->
+```json
+[
+  {
+    "header": "ServiceNow employee portal",
+    "question": "What is the full HTTPS base URL of your ServiceNow employee portal? It may differ from the instance URL, so we won't assume `/sp` or `/esc`.",
+    "allowFreeformInput": true
+  }
+]
+```
 
 Validate that the answer:
 
@@ -92,22 +88,20 @@ normalization as `set-portal-url` (HTTPS, no trailing slash) and saves nothing:
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} portal-url-confirmation --portal-url <typed-url>
 ```
 
-Send the output's `chatMessage` verbatim as chat text and end your turn; map
-the typed reply with `match-reply`. It is a Yes or No question.
+Show the returned `question` and `options` verbatim, with no free-form input.
 The question is "Is **{NORMALIZED_PORTAL_URL}** the employee portal URL?" and
-the choices are "Yes" and "No". The question text carries the context.
-A pasted new URL in the reply also means "No".
-- **No**: save nothing and ask the URL question above
+the options are "Yes, that's the portal URL" and "No, use a different URL".
+- **No, use a different URL**: save nothing and ask the URL question above
   again.
-- **Yes**: send the returned `savedMessage` verbatim ("We'll save that
-  portal URL and turn on the built-in ServiceNow IT topics, including system
-  topics. Unrelated topics will stay unchanged."). Then run:
+- **Yes, that's the portal URL**: show the returned `savedMessage` verbatim
+  ("We'll save that portal URL."). Do not announce topic changes in this step;
+  topics were handled in the earlier Topics step. Then run:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} set-portal-url --portal-url <returned-portalUrl> --yes
 ```
 
-Nothing is saved before the Maker replies **Yes**.
+Nothing is saved before the Maker selects **Yes**.
 
 On `committed` or `already-configured`, return
 `ACTION_RESULT = "applied"`. `already-configured` is successful only because
@@ -129,22 +123,24 @@ fallback in the ordinary current-task reply:
 4. Set `To` to the exact administrator-confirmed URL `{PORTAL_URL}`.
 5. Save the topic without publishing.
 
-Then use the compact completion confirmation below. Send it as ordinary chat
-text (never `ask_user` or any card tool), end your turn, and map the typed
-reply: Yes means saved, No means not yet.
+Then use the compact completion confirmation below:
 
-<!-- plain-chat-question:v1-manual-fallback -->
-**Message:**
+<!-- visible-handoff-question:v1-manual-fallback -->
+```json
+[
+  {
+    "header": "Save portal Base URI manually",
+    "question": "We couldn't update the portal URL automatically, so it needs to be set in Copilot Studio. Is `{PORTAL_URL}` now saved in the target topic?\n\nYou don't need to publish. Selecting the completed option triggers one fresh read-only verification.",
+    "options": [
+      { "label": "Completed, the exact portal URL is saved" },
+      { "label": "Not yet, the portal URL is not saved" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
 
-We couldn't update the portal URL automatically, so it needs to be set in Copilot Studio. Is `{PORTAL_URL}` now saved in the target topic?
-
-You don't need to publish. A reply that it is saved triggers one fresh read-only verification.
-
-Reply **Yes** or **No**.
-
-**End message.**
-
-After the maker replies **Yes**, run:
+After **Completed, the exact portal URL is saved**, run:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} inspect-portal-url --expected-portal-url <full-url>
