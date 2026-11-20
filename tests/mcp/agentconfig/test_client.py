@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 import httpx
+import pytest
 
 
 REPO_ROOT = Path(__file__).parents[3]
@@ -26,10 +27,16 @@ AGENTCONFIG_DIR = (
 sys.path.insert(0, str(AGENTCONFIG_DIR))
 
 import client as agentconfig_client  # noqa: E402
+import base_client  # noqa: E402
 
 
 TENANT_ID = "11111111-2222-3333-4444-555555555555"
 BASE_URL = "https://substrate.office.com/weveb2/api/v1.1"
+
+
+@pytest.fixture(autouse=True)
+def isolate_workspace_tenant(monkeypatch) -> None:
+    monkeypatch.setattr(base_client, "configured_tenant_id", lambda: TENANT_ID)
 
 
 def _token() -> str:

@@ -208,6 +208,34 @@ def test_msal_uses_the_resolved_authority_and_coordinated_cache(
     assert ("interactive" in calls) is not silent
 
 
+@pytest.mark.parametrize("account_count", [0, 2])
+def test_msal_prompts_when_cached_account_selection_requires_user_input(
+    monkeypatch, account_count,
+) -> None:
+    token = _token_for_tenant(TENANT_ID)
+
+    class FakeApp:
+        def get_accounts(self):
+            return [{"home_account_id": f"account-{index}"} for index in range(account_count)]
+
+        def acquire_token_silent(self, *args, **kwargs):
+            pytest.fail("Account selection requires an interactive sign-in")
+
+    app = FakeApp()
+    monkeypatch.setattr(base_client, "configured_tenant_id", lambda: TENANT_ID)
+    monkeypatch.setattr(base_client, "_create_msal_app", lambda tenant: app)
+    prompted = []
+
+    def interactive(actual_app):
+        prompted.append(actual_app)
+        return {"access_token": token}
+
+    monkeypatch.setattr(base_client, "_acquire_token_interactive_form_post", interactive)
+
+    assert base_client._resolve_token() == token
+    assert prompted == [app]
+
+
 def test_scoped_login_failure_does_not_retry_unrestricted(monkeypatch) -> None:
     monkeypatch.setattr(base_client, "configured_tenant_id", lambda: TENANT_ID)
     calls = []

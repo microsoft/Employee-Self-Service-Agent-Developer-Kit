@@ -10,18 +10,22 @@ PromptCardDefinitionValidation.cs. These are not live-deployment/FlightCheck tes
 
 import asyncio
 import base64
+from contextlib import asynccontextmanager
 import importlib.util
 import json
 from pathlib import Path
 import sys
+from threading import Event, Lock
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 import warnings
 
 import httpx
 import pytest
+from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import ValidationError
 from pydantic_settings.exceptions import IncompleteFieldDefinitionWarning
+from portalocker.exceptions import LockException
 
 
 ROOT = Path(__file__).parents[3]
@@ -47,7 +51,7 @@ ID = "00000000-0000-0000-0000-000000003333"
 TITLE = "test-title"
 COLLECTION = f"/weveb2/api/v1.1/tenants('{TENANT}')/EmployeeAgents('{TITLE}')/PromptCardDefinitions"
 API_DEFINITION = {
-    "DefinitionId": ID, "DefinitionName": "Recipe", "DataPrompt": "Employee question",
+    "DefinitionId": ID, "DefinitionName": "Card prompt", "DataPrompt": "Employee question",
     "PresentationGuidance": None, "Audience": [], "IsDisabled": True, "SortOrder": 0,
 }
 
@@ -60,6 +64,9 @@ def isolate_auth_and_telemetry(monkeypatch):
     monkeypatch.setattr(server.adk_telemetry, "emit_api_call", lambda **kwargs: None)
     monkeypatch.setattr(server.adk_telemetry, "initialize_tenant_identity", lambda *args, **kwargs: None)
     monkeypatch.setattr(server, "_client", None)
+    monkeypatch.setattr(server, "_graph_client", None)
+    monkeypatch.setattr(server, "_graph_client_users", {})
+    monkeypatch.setattr(server, "_client_auth_lock", Lock())
 
 
 def run(awaitable):
@@ -86,7 +93,7 @@ def test_routes_and_canonical_payloads():
             assert baseline[0].isDisabled is True
             assert baseline[0].audience == []
             await client.create_definition(
-                TITLE, PromptCardCreate(definitionName="Recipe", dataPrompt="Employee question"),
+                TITLE, PromptCardCreate(definitionName="Card prompt", dataPrompt="Employee question"),
             )
             await client.update_definition(
                 TITLE, ID, PromptCardPatch(presentationGuidance=None, audience=None),
@@ -121,7 +128,7 @@ def test_routes_and_canonical_payloads():
 ])
 def test_create_rejects_invalid_authored_contract(changes):
     with pytest.raises(ValidationError):
-        PromptCardCreate.model_validate({"definitionName": "Recipe", "dataPrompt": "Question", **changes})
+        PromptCardCreate.model_validate({"definitionName": "Card prompt", "dataPrompt": "Question", **changes})
 
 
 @pytest.mark.parametrize("patch", [{}, {"definitionId": ID}, {"dataPrompt": None}, {"isDisabled": None}, {"sortOrder": None}])
@@ -161,7 +168,7 @@ def test_create_and_nonatomic_reorder_do_not_replay_ambiguous_failures(failure, 
                 with pytest.raises((httpx.RequestError, AgentConfigApiError)):
                     if operation == "create":
                         await client.create_definition(
-                            TITLE, PromptCardCreate(definitionName="Recipe", dataPrompt="Question"),
+                            TITLE, PromptCardCreate(definitionName="Card prompt", dataPrompt="Question"),
                         )
                     else:
                         await client.reorder_definitions(
@@ -186,11 +193,26 @@ def test_protocol_tools_visibility_schemas_and_resource():
     assert set(tools) == {
         "open_prompt_cards", "list_prompt_card_definitions", "create_prompt_card_definition",
         "update_prompt_card_definition", "reorder_prompt_card_definitions", "delete_prompt_card_definition",
-        "report_client_events",
+        "report_client_events", "search_audience_groups", "resolve_audience_groups",
     }
     assert tools["open_prompt_cards"].meta["ui"]["resourceUri"] == server.RESOURCE_URI
     assert tools["open_prompt_cards"].annotations.readOnlyHint
-    for name in set(tools) - {"open_prompt_cards", "list_prompt_card_definitions", "report_client_events"}:
+    assert "Open Card Prompts" in tools["open_prompt_cards"].description
+    assert "Save for later" in tools["create_prompt_card_definition"].description
+    search = tools["search_audience_groups"]
+    assert search.annotations.readOnlyHint
+    assert search.annotations.idempotentHint
+    assert search.meta["ui"]["visibility"] == ["model", "app"]
+    assert search.inputSchema["required"] == ["query"]
+    resolve = tools["resolve_audience_groups"]
+    assert resolve.annotations.readOnlyHint
+    assert resolve.annotations.idempotentHint
+    assert resolve.meta["ui"]["visibility"] == ["app"]
+    assert resolve.inputSchema["required"] == ["groupIds"]
+    for name in set(tools) - {
+        "open_prompt_cards", "list_prompt_card_definitions", "report_client_events",
+        "search_audience_groups", "resolve_audience_groups",
+    }:
         assert tools[name].meta["ui"]["visibility"] == ["app"]
         assert {"tenantId", "titleId"} <= set(tools[name].inputSchema["required"])
     create_schema = tools["create_prompt_card_definition"].inputSchema
@@ -198,15 +220,300 @@ def test_protocol_tools_visibility_schemas_and_resource():
     assert "definitionId" not in create_schema["$defs"]["PromptCardCreate"]["properties"]
     resources = run(server.mcp.list_resources())
     assert str(resources[0].uri) == server.RESOURCE_URI
+    assert resources[0].name == "Card Prompts"
+    assert resources[0].title == "Card Prompts"
     assert resources[0].meta["ui"]["csp"]["connectDomains"] == []
     assert "/mcp-widget/prompt-cards/widget.js" in server.prompt_cards_widget()
+
+
+def test_resource_read_remains_responsive_during_shared_authoring_sign_in(monkeypatch):
+    started = Event()
+    release = Event()
+    client = SimpleNamespace(
+        tenant_id=TENANT, object_id=ID, validate_scope=lambda *args: None,
+        list_definitions=AsyncMock(return_value=[]),
+    )
+
+    def authenticate():
+        started.set()
+        release.wait(timeout=5)
+        return client
+
+    constructor = Mock(side_effect=authenticate)
+    monkeypatch.setattr(server, "PromptCardsClient", constructor)
+    graph = Mock(
+        tenant_id=TENANT, object_id=ID,
+        search_groups=AsyncMock(return_value={
+            "groups": [], "exhausted": True, "pagesExamined": 1,
+        }),
+    )
+    monkeypatch.setattr(server, "GraphDirectoryClient", lambda **kwargs: graph)
+
+    async def scenario():
+        opened = asyncio.create_task(server.mcp.call_tool("open_prompt_cards", {"titleId": TITLE}))
+        searched = asyncio.create_task(server.mcp.call_tool("search_audience_groups", {"query": "group"}))
+        try:
+            assert await asyncio.to_thread(started.wait, 5)
+            resource = await server.mcp.read_resource(server.RESOURCE_URI)
+            assert "mcp-root" in resource[0].content
+            assert not opened.done()
+            assert not searched.done()
+        finally:
+            release.set()
+            results = await asyncio.gather(opened, searched)
+        assert all(not result.isError for result in results)
+        constructor.assert_called_once()
+
+    run(scenario())
+
+
+@pytest.mark.parametrize("first_operation", ["open", "search"])
+def test_cancelled_authoring_sign_in_keeps_initialization_serialized(monkeypatch, first_operation):
+    started = Event()
+    release = Event()
+    client = SimpleNamespace(
+        tenant_id=TENANT, object_id=ID, validate_scope=lambda *args: None,
+        list_definitions=AsyncMock(return_value=[]),
+    )
+
+    def authenticate():
+        if not started.is_set():
+            started.set()
+            assert release.wait(timeout=5)
+        return client
+
+    constructor = Mock(side_effect=authenticate)
+    monkeypatch.setattr(server, "PromptCardsClient", constructor)
+    graph = SimpleNamespace(
+        search_groups=AsyncMock(return_value={
+            "groups": [], "exhausted": True, "pagesExamined": 1,
+        }),
+    )
+
+    @asynccontextmanager
+    async def directory_client(*args):
+        yield graph
+
+    monkeypatch.setattr(server, "get_graph_client", directory_client)
+
+    async def scenario():
+        calls = {
+            "open": lambda: server.open_prompt_cards(TITLE),
+            "search": lambda: server.search_audience_groups("finance"),
+        }
+        first = asyncio.create_task(calls[first_operation]())
+        second = None
+        try:
+            assert await asyncio.to_thread(started.wait, 5)
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+            other_operation = "search" if first_operation == "open" else "open"
+            second = asyncio.create_task(calls[other_operation]())
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(asyncio.shield(second), timeout=0.1)
+            resource = await server.mcp.read_resource(server.RESOURCE_URI)
+            assert "mcp-root" in resource[0].content
+            constructor.assert_called_once()
+        finally:
+            release.set()
+            await asyncio.gather(first, return_exceptions=True)
+            if second is not None:
+                result = await second
+                assert not result.isError
+        constructor.assert_called_once()
+        assert server._client is client
+
+    run(scenario())
+
+
+def test_audience_dispatch_reuses_announcements_group_policy_and_authenticated_scope(monkeypatch):
+    claims = base64.urlsafe_b64encode(
+        json.dumps({"tid": TENANT, "oid": ID}).encode(),
+    ).decode().rstrip("=")
+    token = f"header.{claims}.signature"
+    monkeypatch.setattr(base_client, "_resolve_token", lambda: token)
+    client = PromptCardsClient()
+    monkeypatch.setattr(server, "get_client", lambda: client)
+    requests = []
+    distribution_id = "00000000-0000-0000-0000-000000005555"
+
+    def handle(request):
+        requests.append(request)
+        assert request.headers["Authorization"] == f"Bearer {token}"
+        assert request.headers["ConsistencyLevel"] == "eventual"
+        assert request.url.params["$search"] == '"displayName:Finance" OR "mail:Finance"'
+        return httpx.Response(200, json={"value": [
+            {"id": ID, "displayName": "Finance security", "groupTypes": [], "securityEnabled": True},
+            {"id": distribution_id, "displayName": "Finance distribution", "groupTypes": [], "mailEnabled": True},
+            {"id": ID, "displayName": "Duplicate", "groupTypes": [], "securityEnabled": True},
+            {"id": OTHER_TENANT, "displayName": "Unified", "groupTypes": ["Unified"], "mailEnabled": True},
+            {"id": OTHER_TENANT, "displayName": "Dynamic", "groupTypes": ["DynamicMembership"], "securityEnabled": True},
+        ]})
+
+    graph_client = server.GraphDirectoryClient(
+        tenant_id=TENANT, object_id=ID, access_token=token,
+        transport=httpx.MockTransport(handle),
+    )
+    monkeypatch.setattr(server, "_graph_client", graph_client)
+
+    async def scenario():
+        try:
+            result = await server.mcp.call_tool("search_audience_groups", {"query": "Finance"})
+            payload = result.structuredContent
+            assert payload == {
+                "status": "success",
+                "groups": [
+                    {"id": ID, "displayName": "Finance security", "mail": None, "isValid": True},
+                    {"id": distribution_id, "displayName": "Finance distribution", "mail": None, "isValid": True},
+                ],
+                "exhausted": True, "pagesExamined": 1,
+            }
+            assert len(requests) == 1
+            assert requests[0].url.host == "graph.microsoft.com"
+        finally:
+            await graph_client.aclose()
+            await client.aclose()
+    run(scenario())
+
+
+def test_saved_audience_names_use_authenticated_directory_metadata_and_preserve_missing_ids(monkeypatch):
+    claims = base64.urlsafe_b64encode(
+        json.dumps({"tid": TENANT, "oid": ID}).encode(),
+    ).decode().rstrip("=")
+    token = f"header.{claims}.signature"
+    monkeypatch.setattr(server, "get_client", lambda: SimpleNamespace(tenant_id=TENANT, object_id=ID))
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        assert request.url.host == "graph.microsoft.com"
+        assert request.headers["Authorization"] == f"Bearer {token}"
+        assert request.url.params["$filter"] == f"id eq '{OTHER_TENANT}' or id eq '{ID}'"
+        return httpx.Response(200, json={"value": [
+            {"id": ID, "displayName": "Engineering", "groupTypes": [], "securityEnabled": True},
+            {"id": OTHER_TENANT, "displayName": "Unified", "groupTypes": ["Unified"], "mailEnabled": True},
+        ]})
+
+    graph_client = server.GraphDirectoryClient(
+        tenant_id=TENANT, object_id=ID, access_token=token,
+        transport=httpx.MockTransport(handle),
+    )
+    monkeypatch.setattr(server, "_graph_client", graph_client)
+
+    async def scenario():
+        try:
+            result = await server.mcp.call_tool("resolve_audience_groups", {"groupIds": [OTHER_TENANT, ID]})
+            assert not result.isError
+            assert result.structuredContent == {
+                "status": "success",
+                "groups": [
+                    {"id": OTHER_TENANT, "displayName": "Unavailable group", "mail": None, "isValid": False},
+                    {"id": ID, "displayName": "Engineering", "mail": None, "isValid": True},
+                ],
+            }
+            await server.mcp.call_tool("resolve_audience_groups", {"groupIds": [ID]})
+            assert len(requests) == 1
+        finally:
+            await graph_client.aclose()
+    run(scenario())
+
+
+@pytest.mark.parametrize("group_ids", [
+    [], [ID] * 16, ["not-a-guid"], ["00000000-0000-0000-0000-000000000000"],
+])
+def test_invalid_saved_audience_ids_are_rejected_before_authentication(group_ids, monkeypatch):
+    monkeypatch.setattr(server, "get_client", lambda: pytest.fail("Invalid IDs must be rejected before authentication"))
+    with pytest.raises(ToolError, match="validation"):
+        run(server.mcp.call_tool("resolve_audience_groups", {"groupIds": group_ids}))
+
+
+@pytest.mark.parametrize("query", ["", " ", "a" * 257, "private\nquery"])
+def test_audience_invalid_query_does_not_authenticate(query, monkeypatch):
+    def fail():
+        pytest.fail("Invalid queries must be rejected before authentication")
+    monkeypatch.setattr(server, "get_client", fail)
+    result = run(server.search_audience_groups(query))
+    assert result.isError
+    assert result.structuredContent == {"status": "failure", "code": "InvalidRequest", "retryable": False}
+    if query.strip():
+        assert query not in result.model_dump_json()
+
+
+@pytest.mark.parametrize("tool_name, argument, operation", [
+    ("search_audience_groups", "private query", "searchAudienceGroups"),
+    ("resolve_audience_groups", [ID], "resolveAudienceGroups"),
+])
+def test_audience_failures_preserve_contract_and_content_free_telemetry(tool_name, argument, operation, monkeypatch):
+    client = SimpleNamespace(tenant_id=TENANT, object_id=ID)
+    monkeypatch.setattr(server, "get_client", lambda: client)
+    telemetry = []
+    monkeypatch.setattr(server.adk_telemetry, "emit_api_call", lambda **kwargs: telemetry.append(kwargs))
+    graph_client = Mock(
+        tenant_id=TENANT, object_id=ID,
+        search_groups=AsyncMock(side_effect=server.GraphDirectoryError(
+            "private group and query", code="AuthorizationDenied", retryable=False,
+        )),
+        resolve_groups=AsyncMock(side_effect=server.GraphDirectoryError(
+            "private group and query", code="AuthorizationDenied", retryable=False,
+        )),
+    )
+    monkeypatch.setattr(server, "_graph_client", graph_client)
+    result = run(getattr(server, tool_name)(argument))
+    assert result.isError
+    assert result.structuredContent == {"status": "failure", "code": "AuthorizationDenied", "retryable": False}
+    assert "private" not in result.model_dump_json()
+    assert telemetry[0]["api_endpoint"] == f"PromptCardDefinitions.{operation}"
+    assert telemetry[0]["outcome"] == "failure"
+    assert set(telemetry[0]) == {"api_endpoint", "outcome", "latency_ms"}
+
+
+def test_audience_missing_identity_returns_authentication_failure(monkeypatch):
+    client = SimpleNamespace(tenant_id=TENANT, object_id=None)
+    monkeypatch.setattr(server, "get_client", lambda: client)
+    result = run(server.search_audience_groups("Finance"))
+    assert result.isError
+    assert result.structuredContent == {"status": "failure", "code": "AuthenticationRequired", "retryable": False}
+
+
+@pytest.mark.parametrize("error", [
+    ValueError("private credential details"), LockException("private cache path"),
+    PermissionError("private token file"),
+])
+def test_audience_authentication_failures_are_sanitized(error, monkeypatch):
+    def fail():
+        raise error
+    monkeypatch.setattr(server, "get_client", fail)
+    result = run(server.search_audience_groups("Finance"))
+    assert result.isError
+    assert result.structuredContent == {"status": "failure", "code": "AuthenticationRequired", "retryable": False}
+    assert "private" not in result.model_dump_json()
+
+
+def test_audience_identity_switch_keeps_captured_client_until_lease_completes(monkeypatch):
+    def make_client(**identity):
+        return Mock(**identity, aclose=AsyncMock())
+
+    monkeypatch.setattr(server, "GraphDirectoryClient", make_client)
+
+    async def scenario():
+        async with server.get_graph_client(TENANT, ID) as first:
+            async with server.get_graph_client(OTHER_TENANT, ID) as second:
+                first.aclose.assert_not_awaited()
+                assert second is not first
+                assert second.tenant_id == OTHER_TENANT
+            first.aclose.assert_not_awaited()
+        first.aclose.assert_awaited_once()
+        second.aclose.assert_not_awaited()
+        assert server._graph_client_users == {}
+    run(scenario())
 
 
 def test_open_list_scope_and_tenant_mismatch(monkeypatch):
     client = PromptCardsClient()
     client.list_definitions = AsyncMock(return_value=[
         PromptCardDefinition.model_validate({
-            "definitionId": ID, "definitionName": "Recipe", "dataPrompt": "Question", "isDisabled": True,
+            "definitionId": ID, "definitionName": "Card prompt", "dataPrompt": "Question", "isDisabled": True,
             "sortOrder": 0,
         }),
     ])
@@ -215,16 +522,18 @@ def test_open_list_scope_and_tenant_mismatch(monkeypatch):
     assert opened.structuredContent["tenantId"] == TENANT
     assert opened.structuredContent["titleId"] == TITLE
     assert opened.structuredContent["definitions"][0]["isDisabled"] is True
+    assert opened.content[0].text == "Card prompts loaded."
     mismatch = run(server.list_prompt_card_definitions(OTHER_TENANT, TITLE))
     assert mismatch.isError
     assert mismatch.structuredContent["tenantId"] == TENANT
     assert mismatch.structuredContent["errors"][0]["code"] == "InvalidRequest"
+    assert "card prompt fields" in mismatch.structuredContent["errors"][0]["message"]
     assert client.list_definitions.await_count == 1
 
 
-def test_save_for_later_and_regular_save_persist_disabled_state(monkeypatch):
+def test_save_for_later_and_submit_persist_disabled_state(monkeypatch):
     stored = PromptCardDefinition(
-        definitionId=ID, definitionName="Recipe", dataPrompt="Question",
+        definitionId=ID, definitionName="Card prompt", dataPrompt="Question",
         isDisabled=False, sortOrder=0,
     )
     client = SimpleNamespace(
@@ -236,14 +545,95 @@ def test_save_for_later_and_regular_save_persist_disabled_state(monkeypatch):
     for disabled in (True, False):
         result = run(server.create_prompt_card_definition(
             TENANT, TITLE,
-            PromptCardCreate(definitionName="Recipe", dataPrompt="Question", isDisabled=disabled),
+            PromptCardCreate(definitionName="Card prompt", dataPrompt="Question", isDisabled=disabled),
         ))
         assert not result.isError
+        assert result.content[0].text == "Card prompts saved."
         assert client.create_definition.await_args.args[1].isDisabled is disabled
         run(server.update_prompt_card_definition(
             TENANT, TITLE, ID, PromptCardPatch(isDisabled=disabled),
         ))
         assert client.update_definition.await_args.args[2].model_dump(exclude_unset=True) == {"isDisabled": disabled}
+
+
+@pytest.mark.parametrize("populated", [False, True])
+@pytest.mark.parametrize("disabled", [False, True])
+def test_sdk_creation_position_allocation_keeps_saved_prompts_in_order(monkeypatch, populated, disabled):
+    second_id = "00000000-0000-0000-0000-000000004444"
+    created_id = "00000000-0000-0000-0000-000000005555"
+    definitions = [
+        {**API_DEFINITION, "SortOrder": 4},
+        {
+            **API_DEFINITION, "DefinitionId": second_id, "DefinitionName": "Second prompt",
+            "DataPrompt": "Another employee question", "IsDisabled": False, "SortOrder": 9,
+        },
+    ] if populated else []
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json={"value": list(reversed(definitions))})
+        body = json.loads(request.content)
+        if request.method == "PATCH":
+            positions = {item["DefinitionId"]: item["SortOrder"] for item in body["Definitions"]}
+            for item in definitions:
+                item["SortOrder"] = positions[item["DefinitionId"]]
+            return httpx.Response(200, json={"value": list(reversed(definitions))})
+        assert request.method == "POST"
+        stored = {**body, "DefinitionId": created_id}
+        definitions.append(stored)
+        return httpx.Response(201, json=stored)
+
+    client = PromptCardsClient(transport=httpx.MockTransport(handle))
+    monkeypatch.setattr(server, "get_client", lambda: client)
+
+    async def scenario():
+        try:
+            baseline = await server.mcp.call_tool("list_prompt_card_definitions", {
+                "tenantId": TENANT, "titleId": TITLE,
+            })
+            assert not baseline.isError
+            existing = baseline.structuredContent["definitions"]
+            shifted = [{**item, "sortOrder": index + 1} for index, item in enumerate(existing)]
+            if existing:
+                result = await server.mcp.call_tool("reorder_prompt_card_definitions", {
+                    "tenantId": TENANT, "titleId": TITLE,
+                    "definitions": [
+                        {"definitionId": item["definitionId"], "sortOrder": item["sortOrder"]}
+                        for item in shifted
+                    ],
+                })
+                assert not result.isError
+                assert result.structuredContent == {
+                    "tenantId": TENANT, "titleId": TITLE, "definitions": shifted,
+                }
+                assert json.loads(requests[-1].content) == {"Definitions": [
+                    {"DefinitionId": item["definitionId"], "SortOrder": item["sortOrder"]}
+                    for item in shifted
+                ]}
+
+            created = await server.mcp.call_tool("create_prompt_card_definition", {
+                "tenantId": TENANT, "titleId": TITLE,
+                "definition": {
+                    "definitionName": "New card prompt", "dataPrompt": "New employee question",
+                    "presentationGuidance": None, "audience": [], "isDisabled": disabled, "sortOrder": 0,
+                },
+            })
+            assert not created.isError
+            assert created.structuredContent["definition"]["definitionId"] == created_id
+            assert created.structuredContent["definition"]["isDisabled"] is disabled
+            saved = await server.mcp.call_tool("list_prompt_card_definitions", {
+                "tenantId": TENANT, "titleId": TITLE,
+            })
+            assert not saved.isError
+            assert saved.structuredContent["definitions"] == [created.structuredContent["definition"], *shifted]
+        finally:
+            await client.aclose()
+
+    run(scenario())
+    assert [request.method for request in requests] == ["GET", *(["PATCH"] if populated else []), "POST", "GET"]
+    assert all(request.url.path == COLLECTION for request in requests if request.method in {"PATCH", "POST"})
 
 
 @pytest.mark.parametrize("operation", ["create", "reorder", "delete"])
@@ -260,7 +650,7 @@ def test_failures_preserve_scope_and_require_reconciliation_without_leaking_cont
     monkeypatch.setattr(server.adk_telemetry, "emit_api_call", lambda **kwargs: telemetry.append(kwargs))
     if operation == "create":
         call = server.create_prompt_card_definition(
-            TENANT, TITLE, PromptCardCreate(definitionName="Recipe", dataPrompt="secret prompt"),
+            TENANT, TITLE, PromptCardCreate(definitionName="Card prompt", dataPrompt="secret prompt"),
         )
     elif operation == "reorder":
         call = server.reorder_prompt_card_definitions(
@@ -344,7 +734,7 @@ def test_malformed_success_response_is_ambiguous_not_invalid_input(monkeypatch):
     async def scenario():
         try:
             return await server.create_prompt_card_definition(
-                TENANT, TITLE, PromptCardCreate(definitionName="Recipe", dataPrompt="Question"),
+                TENANT, TITLE, PromptCardCreate(definitionName="Card prompt", dataPrompt="Question"),
             )
         finally:
             await client.aclose()
@@ -357,7 +747,7 @@ def test_malformed_success_response_is_ambiguous_not_invalid_input(monkeypatch):
 @pytest.mark.parametrize("audience", [None, []])
 def test_response_audience_is_always_an_array(audience):
     stored = PromptCardDefinition.model_validate({
-        "definitionId": ID, "definitionName": "Recipe", "dataPrompt": "Question",
+        "definitionId": ID, "definitionName": "Card prompt", "dataPrompt": "Question",
         "audience": audience, "isDisabled": False, "sortOrder": 0,
     })
     assert stored.model_dump()["audience"] == []
