@@ -603,6 +603,30 @@ repeat the request in this agent's Test pane.
 
 **End message.**
 
+**Target changes (environment, agent, instance, tenant, or signed-in user).**
+When the maker switches to another environment or agent, or says the instance,
+tenant, or signed-in user is different, get the Message from the controller
+instead of writing it: run
+`python scripts/connect_servicenow_da.py --provider {PROVIDER} target-change-handoff --change {environment|agent|instance|tenant|user}`
+(add `--target "<new environment or agent name>"` for an environment or agent
+change, using the friendly name the maker used, never an ID or a URL). Send
+`chatMessage` verbatim, then follow `nextCommand` and `afterReply`. The command
+records nothing. Do not reuse evidence from the earlier target until the
+permission and applicability checks pass; only the affected evidence is
+reopened. For a promoted Test or Prod destination, the realm-change and
+different-instance messages in `realms.md` apply instead. The Message for an
+environment change is:
+
+**Message:**
+
+That changes the target environment. We'll check your permission for
+**{Agent} in {New environment}** and which earlier setup information still
+applies.
+
+We won't reuse evidence from {Previous environment} without those checks.
+
+**End message.**
+
 **HR service areas empty (HR agent only).** When the maker reports that the
 HR service-area list is empty (for example when creating an HR case), get the
 Message from the controller instead of writing it: run

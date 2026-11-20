@@ -12828,6 +12828,20 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     metadata_parser.add_argument("--metadata-url", required=True)
+    target_change_parser = subparsers.add_parser(
+        "target-change-handoff",
+        help=(
+            "Fixed notice when the maker changes the target environment, "
+            "agent, instance, tenant, or signed-in user."
+        ),
+    )
+    target_change_parser.add_argument(
+        "--change", choices=_TARGET_CHANGES, required=True
+    )
+    target_change_parser.add_argument(
+        "--target",
+        help="Friendly name of the new environment or agent (never an ID or URL).",
+    )
     service_areas_parser = subparsers.add_parser(
         "empty-service-areas-handoff",
         help=(
@@ -13886,6 +13900,79 @@ def empty_service_areas_handoff(realm: str = "dev") -> dict[str, Any]:
     }
 
 
+_TARGET_CHANGES = ("environment", "agent", "instance", "tenant", "user")
+_TARGET_CHANGE_AFTER_REPLY = (
+    "Send the message above, then follow nextCommand so the permission and "
+    "applicability checks run again. For a promoted destination run "
+    "discover-realm-target first; it proves the maker's permission there "
+    "and reuses only setup information that still applies. Do not reuse "
+    "evidence from the earlier target until those checks pass. Nothing is "
+    "recorded by this command."
+)
+_FRIENDLY_NAME_BLOCKED_RE = re.compile(
+    r"https?://|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    re.IGNORECASE,
+)
+
+
+def target_change_handoff(
+    context: dict[str, Any],
+    change: str,
+    target: str | None = None,
+) -> dict[str, Any]:
+    """Fixed notice when the target, user, instance, or tenant changes.
+
+    The message names the agent and environments the maker knows. It records
+    nothing; earlier evidence is reused only after the permission and
+    applicability checks pass.
+    """
+    name = (target or "").strip()
+    if change in {"environment", "agent"} and not name:
+        raise ServiceNowConnectError(
+            "Pass --target with the new environment or agent name."
+        )
+    if name and _FRIENDLY_NAME_BLOCKED_RE.search(name):
+        raise ServiceNowConnectError(
+            "Pass the friendly name the maker used, not an ID or a URL."
+        )
+    agent = _display_agent_name(context)
+    environment = _recorded_environment_name(context)
+    if change == "environment":
+        subject = f"{agent} in {name}"
+        earlier = environment or "the earlier environment"
+        headline = "That changes the target environment."
+    elif change == "agent":
+        subject = f"{name} in {environment}" if environment else name
+        earlier = agent
+        headline = "That changes the target agent."
+    else:
+        subject = f"{agent} in {environment}" if environment else agent
+        headline, earlier = {
+            "instance": (
+                "That changes the ServiceNow instance.",
+                "the earlier instance",
+            ),
+            "tenant": ("That changes the tenant.", "the earlier tenant"),
+            "user": (
+                "That changes the signed-in user.",
+                "the earlier account",
+            ),
+        }[change]
+    text = (
+        f"{headline} We'll check your permission for **{subject}** and which "
+        "earlier setup information still applies.\n\n"
+        f"We won't reuse evidence from {earlier} without those checks."
+    )
+    return {
+        "status": "target-change-notice",
+        "decision": "revalidate-target",
+        "recordsNothing": True,
+        "change": change,
+        "renderBlock": {"kind": "info", "text": text},
+        "afterReply": _TARGET_CHANGE_AFTER_REPLY,
+    }
+
+
 def metadata_url_handoff(metadata_url: str) -> dict[str, Any]:
     """Fixed reply when the administrator reports a `/v2.0` metadata URL.
 
@@ -14445,6 +14532,8 @@ def main(argv: list[str] | None = None) -> int:
                 context,
                 contract_revision=args.contract_revision,
             )
+        elif args.command == "target-change-handoff":
+            result = target_change_handoff(context, args.change, args.target)
         elif args.command in REALM_COMMANDS:
             result = run_realm_command(context, args)
         elif args.command not in {

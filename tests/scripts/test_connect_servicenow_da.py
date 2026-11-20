@@ -17615,3 +17615,37 @@ def test_empty_service_areas_reply_is_hr_only_and_fixed(
     assert "destination agent's Test pane" in prod["chatMessage"]
     assert it["decision"] == "not-an-hr-agent"
     assert "chatMessage" not in it
+
+
+def test_target_change_notice_is_fixed_for_every_change_kind() -> None:
+    context = {
+        "environment": {"id": "env-1", "display_name": "Contoso Dev"},
+        "agent": {"id": "agent-1", "display_name": "Employee Self-Service HR"},
+    }
+    with snow.product_profile_context("hrsd"):
+        env = snow.target_change_handoff(context, "environment", "Contoso Dev 2")
+        agent = snow.target_change_handoff(context, "agent", "Other Agent")
+        user = snow.target_change_handoff(context, "user")
+        wrapped = snow._with_agent_rules(env, "target-change-handoff")
+        with pytest.raises(snow.ServiceNowConnectError):
+            snow.target_change_handoff(context, "environment")
+        with pytest.raises(snow.ServiceNowConnectError):
+            snow.target_change_handoff(context, "agent", "https://example.test")
+    assert env["renderBlock"]["text"] == (
+        "That changes the target environment. We'll check your permission for "
+        "**Employee Self-Service HR in Contoso Dev 2** and which earlier setup "
+        "information still applies.\n\n"
+        "We won't reuse evidence from Contoso Dev without those checks."
+    )
+    assert agent["renderBlock"]["text"].startswith(
+        "That changes the target agent. We'll check your permission for "
+        "**Other Agent in Contoso Dev**"
+    )
+    assert user["renderBlock"]["text"].endswith(
+        "We won't reuse evidence from the earlier account without those checks."
+    )
+    assert env["recordsNothing"] is True
+    assert wrapped["endTurn"] is False
+    assert "resume-handoff" in wrapped["nextCommand"]
+    assert "pendingCard" not in wrapped
+    assert "Do not reuse evidence from the earlier target" in wrapped["afterReply"]

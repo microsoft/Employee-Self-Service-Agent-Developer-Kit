@@ -1455,3 +1455,10 @@ def test_empty_service_areas_diagnosis_is_routed_in_hr_docs() -> None:
     ):
         text = " ".join(path.read_text(encoding="utf-8").split())
         assert "empty-service-areas-handoff" in text, path.name
+
+
+def test_target_change_notice_is_routed_in_shared_docs() -> None:
+    root = _SOLUTION / "src" / "skills" / "connect" / "servicenow"
+    for name in ("entry.md", "realms.md"):
+        text = " ".join((root / name).read_text(encoding="utf-8").split())
+        assert "target-change-handoff" in text, name

@@ -418,6 +418,11 @@ what to do next.
   > This run will establish the result for **{Agent} in {Environment}**. We still
   > need its destination connection and agent link, followed by your real-data
   > request.
+- **Target changes in Dev (environment, agent, instance, tenant, or signed-in
+  user).** Get the Message from the controller
+  (`target-change-handoff --change ...`, see `entry.md`) and send `chatMessage`
+  verbatim; it records nothing, and earlier evidence is reused only after the
+  permission and applicability checks pass.
 - **Maker changes the realm.** For example "Check Prod instead." Say the
   following, using the destination the maker named and the other realm's name
   in the last sentence:
