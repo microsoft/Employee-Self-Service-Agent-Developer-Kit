@@ -58,6 +58,32 @@ request already includes a Copilot Studio link. Do not call `list-agents` or
 scan the environment. Continue to the mandatory `resume-handoff` boundary only
 when the chooser returns `status: ready`.
 
+**Reuse an agent the maker already named in this conversation.** Do not show
+the **Choose agent** card when the maker already gave or settled on the agent
+earlier in the same conversation: a Copilot Studio agent link pasted during
+Setup or any earlier turn, or an agent Setup or an earlier Connect turn already
+selected, attached, or prepared. Reuse it silently, without asking:
+
+- When a link is known, run
+  `agent-chooser --selection-key "another-agent" --agent-link "{LINK}"`.
+- Otherwise, when the agent ID is known from the conversation (for example the
+  ID Setup reported), run `agent-chooser --selection-key "prepared:{AGENT_ID}"`.
+- Otherwise, when the maker only named the agent, run plain `agent-chooser`
+  without showing its `question`, and use the `prepared:{ID}` key of the one
+  `agents` entry whose `name` exactly matches that name.
+
+Continue only when the result is `status: ready`; then show the confirmation
+Message at the end of this section, with its **Choose a different agent**
+offer, which stays the maker's way to switch. Treat
+`setup-required` and `setup-incomplete` as the automatic Setup handoffs above,
+carrying the known link.
+
+Fall back to the normal chooser when the conversation names no agent, names
+more than one distinct agent, names an agent that does not match exactly one
+agent in this workspace, or the key returns an error such as the agent no
+longer being available. A single prepared agent that the maker never mentioned
+does not count as a choice already made: show the chooser.
+
 `setup-required` (branch `workspace-not-prepared` or `explicit-agent-link`) and
 `setup-incomplete` (branch `setup-not-finished`: the agent is already in this
 workspace but its Setup steps are still pending) are automatic Setup

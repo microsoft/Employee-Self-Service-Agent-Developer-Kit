@@ -3428,6 +3428,30 @@ def _unprepared_workspace_handoff(agent_link: str | None) -> dict[str, Any]:
     }
 
 
+def _chooser_option_labels(choices: list[dict[str, Any]]) -> list[str]:
+    """Return display labels; IDs and slugs are never shown to the maker."""
+    labels = [str(choice["name"]) for choice in choices]
+    totals = {label: labels.count(label) for label in labels}
+    # Only agents sharing a display name get a differentiator.
+    labels = [
+        label
+        if totals[label] == 1
+        else f"{label} — {choice['product']}"
+        for label, choice in zip(labels, choices)
+    ]
+    totals = {label: labels.count(label) for label in labels}
+    seen: dict[str, int] = {}
+    unique: list[str] = []
+    for label in labels:
+        if totals[label] == 1:
+            unique.append(label)
+            continue
+        # Same name and product: only an ordinal can tell them apart.
+        seen[label] = seen.get(label, 0) + 1
+        unique.append(f"{label} ({seen[label]})")
+    return unique
+
+
 def agent_chooser_handoff(
     root: Path = Path("."),
     *,
@@ -3485,12 +3509,13 @@ def agent_chooser_handoff(
             )
         return _prepared_agent_result(prepared)
 
+    labels = _chooser_option_labels(prepared_choices)
     options = [
         {
-            "label": f"{choice['name']} — {choice['product']}",
+            "label": label,
             "selectionKey": f"prepared:{choice['id']}",
         }
-        for choice in prepared_choices
+        for choice, label in zip(prepared_choices, labels)
     ]
     options.append(
         {
