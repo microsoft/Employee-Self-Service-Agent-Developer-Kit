@@ -15072,6 +15072,10 @@ def test_agent_chooser_lists_prepared_agents_without_remote_discovery(
     )
     assert result["question"]["allowFreeformInput"] is False
     assert result["question"]["header"] != result["question"]["question"]
+    assert result["question"]["options"][0] == {
+        "label": "Employee Self-Service (IT)",
+        "selectionKey": f"prepared:{AGENT_ID}",
+    }
     assert result["question"]["options"][-1] == {
         "label": "Use another agent (paste link)",
         "selectionKey": "another-agent",
@@ -15085,6 +15089,38 @@ def test_agent_chooser_lists_prepared_agents_without_remote_discovery(
     assert setup_path.read_text(encoding="utf-8") == setup_before
     assert config_path.read_text(encoding="utf-8") == config_before
     assert not (tmp_path / ".local" / "connect").exists()
+
+
+def test_agent_chooser_labels_show_only_names_unless_they_collide() -> None:
+    def choice(name: str, product: str) -> dict:
+        return {"name": name, "product": product}
+
+    assert snow._chooser_option_labels(
+        [
+            choice("Employee Self-Service (HR)", "ServiceNow HRSD"),
+            choice("Employee Self-Service (IT)", "ServiceNow ITSM"),
+        ]
+    ) == ["Employee Self-Service (HR)", "Employee Self-Service (IT)"]
+    assert snow._chooser_option_labels(
+        [
+            choice("Contoso Agent", "ServiceNow HRSD"),
+            choice("Contoso Agent", "ServiceNow ITSM"),
+            choice("Other Agent", "ServiceNow ITSM"),
+        ]
+    ) == [
+        "Contoso Agent — ServiceNow HRSD",
+        "Contoso Agent — ServiceNow ITSM",
+        "Other Agent",
+    ]
+    assert snow._chooser_option_labels(
+        [
+            choice("Contoso Agent", "ServiceNow HRSD"),
+            choice("Contoso Agent", "ServiceNow HRSD"),
+        ]
+    ) == [
+        "Contoso Agent — ServiceNow HRSD (1)",
+        "Contoso Agent — ServiceNow HRSD (2)",
+    ]
 
 
 def test_agent_chooser_offers_link_when_no_agent_is_prepared(

@@ -12,8 +12,20 @@ python scripts/connect_servicenow_da.py agent-chooser
 
 Show the exact returned `question`. Its prepared-agent choices come only from
 canonical HR/IT setup entries for the current bound workspace environment.
-They are labeled as prepared in this workspace, not as every agent in the
-environment. This command must not run a remote collection listing.
+Each option is labeled with the agent's recorded Copilot Studio display name
+only (no product suffix, ID, link, or slug); a product name or ordinal is added
+only when two options would otherwise read the same. They are prepared in this
+workspace, not every agent in the environment.
+This command must not run a remote collection listing.
+
+**Skip the chooser when the agent is already known.** If the maker already gave
+a Copilot Studio agent link, or the agent was already selected, set up, or
+discussed earlier in the same conversation, do not show the question. Reuse
+that agent silently with the selection-key commands below (link form when a
+link is known, `prepared:{AGENT_ID}` otherwise) and continue only on
+`status: ready`. Follow the rules in `src/skills/connect/servicenow/entry.md`
+(**Choose the agent**); when the conversation names no agent, several agents,
+or an agent that is not in this workspace, show the chooser as usual.
 
 When the maker selects a prepared agent, rerun with its returned internal
 selection key:

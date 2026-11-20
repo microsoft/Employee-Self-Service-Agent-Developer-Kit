@@ -547,6 +547,10 @@ def test_servicenow_connect_confirms_agent_only_after_ready_and_resumes_once() -
     assert "`setup-incomplete`" in chooser
     assert "no longer available" in chooser
     assert "at most one resume per invocation" in chooser
+    assert "Reuse an agent the maker already named in this conversation" in entry
+    assert 'agent-chooser --selection-key "prepared:{AGENT_ID}"' in entry
+    assert "does not count as a choice already made" in entry
+    assert "Skip the chooser when the agent is already known" in chooser
 
 
 def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
