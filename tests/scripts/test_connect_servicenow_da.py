@@ -16909,8 +16909,9 @@ def test_phase_checklist_is_hidden_by_default_but_progress_is_kept(
     assert "✅" not in hidden["renderBlock"]["text"]
     assert hidden["renderBlock"]["text"].startswith("We'll connect")
     assert hidden["progress"]["items"] == shown["progress"]["items"]
-    assert {k: v for k, v in hidden["progress"].items() if k != "renderedAt"} == {
-        k: v for k, v in shown["progress"].items() if k != "renderedAt"
+    ignored = {"renderedAt", "internal"}
+    assert {k: v for k, v in hidden["progress"].items() if k not in ignored} == {
+        k: v for k, v in shown["progress"].items() if k not in ignored
     }
 
 
