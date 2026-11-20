@@ -266,6 +266,30 @@
           "displayName": "ServiceNow HRSD Update Case",
           "classification": "unknown",
           "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.System-RecordSearchResults",
+          "displayName": "[System] - Record Search Results",
+          "description": "Stores the tool calls and search results of an answer, so that /diagnose can show them.",
+          "managedProperties": {
+            "isManaged": false,
+            "isCustomizable": true
+          },
+          "shareContext": {},
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfservicehr.topic.System-DiagnoseReport",
+          "displayName": "[System] - Diagnose Report",
+          "description": "Shows the evidence behind the previous answer when the user types /diagnose.",
+          "managedProperties": {
+            "isManaged": false,
+            "isCustomizable": true
+          },
+          "shareContext": {},
+          "classification": "unknown",
+          "required": null
         }
       ]
     },
@@ -417,6 +441,30 @@
         {
           "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.Workdayserviceanniversary",
           "displayName": null,
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.System-RecordSearchResults",
+          "displayName": "[System] - Record Search Results",
+          "description": "Stores the tool calls and search results of an answer, so that /diagnose can show them.",
+          "managedProperties": {
+            "isManaged": false,
+            "isCustomizable": true
+          },
+          "shareContext": {},
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedahr.topic.System-DiagnoseReport",
+          "displayName": "[System] - Diagnose Report",
+          "description": "Shows the evidence behind the previous answer when the user types /diagnose.",
+          "managedProperties": {
+            "isManaged": false,
+            "isCustomizable": true
+          },
+          "shareContext": {},
           "classification": "unknown",
           "required": null
         }
@@ -572,6 +620,30 @@
           "displayName": null,
           "classification": "unknown",
           "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.System-RecordSearchResults",
+          "displayName": "[System] - Record Search Results",
+          "description": "Stores the tool calls and search results of an answer, so that /diagnose can show them.",
+          "managedProperties": {
+            "isManaged": false,
+            "isCustomizable": true
+          },
+          "shareContext": {},
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "msdyn_copilotforemployeeselfservicedait.topic.System-DiagnoseReport",
+          "displayName": "[System] - Diagnose Report",
+          "description": "Shows the evidence behind the previous answer when the user types /diagnose.",
+          "managedProperties": {
+            "isManaged": false,
+            "isCustomizable": true
+          },
+          "shareContext": {},
+          "classification": "unknown",
+          "required": null
         }
       ]
     },
@@ -675,6 +747,30 @@
         {
           "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.ServiceNowITSMUpdateTicket",
           "displayName": "ServiceNow ITSM Update Ticket",
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.System-RecordSearchResults",
+          "displayName": "[System] - Record Search Results",
+          "description": "Stores the tool calls and search results of an answer, so that /diagnose can show them.",
+          "managedProperties": {
+            "isManaged": false,
+            "isCustomizable": true
+          },
+          "shareContext": {},
+          "classification": "unknown",
+          "required": null
+        },
+        {
+          "schemaName": "gptagent_copilotforemployeeselfserviceit.topic.System-DiagnoseReport",
+          "displayName": "[System] - Diagnose Report",
+          "description": "Shows the evidence behind the previous answer when the user types /diagnose.",
+          "managedProperties": {
+            "isManaged": false,
+            "isCustomizable": true
+          },
+          "shareContext": {},
           "classification": "unknown",
           "required": null
         }
@@ -862,6 +958,54 @@
           ]
         }
       ]
+    },
+    {
+      "key": "diagnostics",
+      "name": "Topics",
+      "contentFolder": "diagnostics",
+      "integration": {
+        "key": "diagnostics",
+        "name": "Diagnostics"
+      },
+      "sourceVariants": [
+        {
+          "packageKey": "source-family:gptagent_copilotforemployeeselfservicehr",
+          "membershipStatus": "provisional",
+          "membershipComplete": null,
+          "memberSchemaNames": [
+            "gptagent_copilotforemployeeselfservicehr.topic.System-RecordSearchResults",
+            "gptagent_copilotforemployeeselfservicehr.topic.System-DiagnoseReport"
+          ]
+        },
+        {
+          "packageKey": "source-family:msdyn_copilotforemployeeselfservicedahr",
+          "membershipStatus": "provisional",
+          "membershipComplete": null,
+          "memberSchemaNames": [
+            "msdyn_copilotforemployeeselfservicedahr.topic.System-RecordSearchResults",
+            "msdyn_copilotforemployeeselfservicedahr.topic.System-DiagnoseReport"
+          ]
+        },
+        {
+          "packageKey": "source-family:msdyn_copilotforemployeeselfservicedait",
+          "membershipStatus": "provisional",
+          "membershipComplete": null,
+          "memberSchemaNames": [
+            "msdyn_copilotforemployeeselfservicedait.topic.System-RecordSearchResults",
+            "msdyn_copilotforemployeeselfservicedait.topic.System-DiagnoseReport"
+          ]
+        },
+        {
+          "packageKey": "source-family:gptagent_copilotforemployeeselfserviceit",
+          "membershipStatus": "provisional",
+          "membershipComplete": null,
+          "memberSchemaNames": [
+            "gptagent_copilotforemployeeselfserviceit.topic.System-RecordSearchResults",
+            "gptagent_copilotforemployeeselfserviceit.topic.System-DiagnoseReport"
+          ]
+        }
+      ],
+      "guidance": null
     }
   ]
 }

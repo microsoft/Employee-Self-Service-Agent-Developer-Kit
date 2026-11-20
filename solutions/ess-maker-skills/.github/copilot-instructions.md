@@ -76,21 +76,27 @@ The selected entry point owns any metadata checks and missing-state handling.
 - If the user typed `/manage-topics` or its compatibility alias `/topic-actions`,
   explicitly asked to manage ESS topic-set states, enable or disable whole ESS
   topic sets, list their current states, or undo earlier Manage topics changes,
+  or asked to add a shipped-content set (such as Diagnostics Topics),
   re-read `src/skills/manage-topics/SKILL.md` from disk for this invocation.
   Use **Manage topics** as the skill name. Both commands enter the same flow;
   do not ask the maker to repeat the request or confirm the rename.
   That entry verifies canonical selected-agent identity and workspace
   preparation without requiring connection health or `connect_ready: true`.
-  It never starts setup or repairs a connection automatically. Native
+  It never starts setup or repairs a connection automatically. Native enable/disable
   writes use the exact source-defined set members present in the live agent and explicit fresh-review
   approval, without requiring a Dev realm or ALM enrollment. The native
   service still enforces edit access. Catalog/package authority and platform qualification remain
   unverified diagnostics, not write-admission gates. Render the helper's
   `userMessage` verbatim, not raw warning lists or internal codes. Material
   limitations remain in structured diagnostics, available on request.
-  Do not add a "Before you approve" section or replace it with warning notes.
-  When the action is unknown, ask Enable/Disable/List in that order,
-  keeping "Enter custom answer" fourth. For action, set-selection and approval
+  Except for diagnostics Add, do not add a "Before you approve" section or replace it with warning notes.
+  Give the skill's diagnostics notice before Add approval and its next steps after a successful add.
+  Add requires shipped content and a live Development agent enrolled in ALM.
+  This route does not authorize arbitrary topic creation, update or deletion;
+  the capability stops below still apply to those requests. There is no Remove;
+  the maker deletes added topics in Copilot Studio.
+  When the action is unknown, ask Enable/Disable/Add/List in that order,
+  keeping "Enter custom answer" fifth. For action, set-selection and approval
   cards, use the actual question as both `header` and `question` so it appears
   in the pinned top row without a generic title or repeated body text.
   Do not add a separate question or option-summary paragraph. Read the answer
@@ -100,8 +106,13 @@ The selected entry point owns any metadata checks and missing-state handling.
   Listing stops without a set question or approval. For enable/disable with
   unknown sets, pass that fresh result's `selectionQuestion` unchanged as
   the sole next structured question. Picker options show only friendly set
-  names for all four supported sets, without state/count suffixes or
+  names for all supported sets, without state/count suffixes or
   descriptions; keep counts and states in the overview only.
+  Always omit `setKeys`; omit `action` for List/Enable/Disable. For Add include
+  `action: "add"`: it lists supported content-backed sets not fully
+  present, using the same picker rules. When complete discovery lists exactly one
+  set, the helper omits the question: go directly to that set's fresh review.
+  Presence stays in the overview and does not establish write eligibility.
   Never batch action and set questions,
   reuse earlier choices, synthesize all catalog sets or add free-text keys.
   An absent/null question means no picker, not a catalog fallback. Reuse an already
@@ -110,20 +121,21 @@ The selected entry point owns any metadata checks and missing-state handling.
   names and current states, without a change plan or write-specific notes. Keep unresolved
   topics and blockers visible. Execution plans use "No change", not
   "Already correct"; full schema identities remain internal.
-  Successful read-only responses show only the heading and requested tables,
+  For List/Enable/Disable, successful read-only responses show only the heading and requested tables,
   without target identifiers, redundant set-total summaries, "No topics were
   changed" footers or publishing commentary. Execution reviews retain complete
   target and account details.
+  Add previews also show presence. Keep add's no-change note.
   Agent inventories may have different topic counts. Enable/disable all
   present members of each requested set without missing-topic warnings for
   absent template members. Only when no members are present say
   "<friendly topic-set name> are not available in this agent." Use the exact
-  key plus "topics" only when a display name is unavailable. Use Enable/Disable
+  key plus "topics" only when a display name is unavailable. Use Add/Enable/Disable
   for actions and Enabled/Disabled/Unknown for topic states. Reviews and results
   use the helper's grouped Markdown tables; shared members appear once with all
   associated selected sets. Review columns are # / Integration / Topic /
   Current state / Planned change, with no separate Requested state column.
-  Planned change says Enable, Disable, No change - already enabled/disabled,
+  Planned change says Add, Enable, Disable, No change - already enabled/disabled,
   or the evidenced skip reason. Keep complete target/account and selected
   scope visible. Omit the entire changed/no-change count summary line above
   review tables; keep the exact change count in the approval question.
@@ -136,10 +148,12 @@ The selected entry point owns any metadata checks and missing-state handling.
   counts in this scope. Preserve safeguards and any evidenced skipped rows
   inline, with their actual state and reason. Preserve
   uncertain-result and preservation qualifications, but omit routine submission
-  and publishing footers and zero unchanged/protected counts.
-  Cancellation says only "Canceled."; denial says only "Not approved."
+  and publishing footers for enable/disable and zero unchanged/protected counts.
+  For enable/disable, cancellation says only "Canceled."; denial says only "Not approved."
+  For add, retain the helper's draft/publish and no-change notes. Render
+  cancellation, denial and review errors as returned.
   Errors show the specific problem and one supported next step, not a generic
-  failure heading, repeated inventory or unchanged-topic footer.
+  failure heading or repeated inventory. Retain the helper's no-change note.
   Put that guidance under a standalone **NEXT STEPS** heading, not an inline
   "Next step:" label; do not invent unrelated setup or connection suggestions.
   Use this pattern for all Manage topics next-step guidance, including partial
@@ -154,9 +168,10 @@ The selected entry point owns any metadata checks and missing-state handling.
   structured chat approval → `--apply-review` flow for actual changes.
   Verified no-change enable/disable returns `already_correct` from `--review`;
   show its result and stop without approval or apply.
+  Add follows the same review, explicit approval, apply and no-change rules.
   Do not substitute preview, request computer control, build a bridge, or
   require a waiting terminal. Pass the fresh review's `approvalQuestion`
-  unchanged: action-specific Enable/Disable wording with the unique change
+  unchanged: action-specific Add/Enable/Disable wording with the unique change
   count and selected set names, plus Not now and the host custom-answer field.
   Leave approval unset and not recommended. Only selection of the action option
   maps to `approve`; Not now maps to `deny`; dismissal, custom text or an
@@ -168,6 +183,12 @@ The selected entry point owns any metadata checks and missing-state handling.
   an original baseline or a first-use/history question. Do not translate undo
   into the opposite action: the previous configuration may have mixed states.
   Existing original-state files are unused and must be left untouched.
+  Add inserts all absent members disabled and refuses partial or differing content.
+  The helper verifies presence, identity and content alongside state. Keep its no-change/skip plan wording.
+  Add needs the Object Model converter; listing and enable/disable
+  do not. Keep all checks and writes in the helper. No action publishes or
+  updates the local agent folder, component map or push baseline. Submitted
+  changes stay in the draft until the maker publishes in Copilot Studio.
 
 ### Setup gate for all other requests
 
