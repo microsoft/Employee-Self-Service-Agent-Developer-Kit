@@ -71,47 +71,51 @@ Do not describe authorization waiting as API processing. Do not start another
 discovery while the first command is running. A read-only discovery failure
 does not authorize continuing with cached connection evidence.
 
-Show the discovery exactly as evidence:
-
-- every connector-scoped `entraIDUserLogin` connection candidate and its
-  current status, Instance Name, and Resource URI;
-- the App/OIDC/plugin evidence that is known;
-- every item that cannot be verified through a supported read-only API.
+Keep the discovery evidence agent-facing. Do not show a candidate list, a
+status table, a Resource URI, a connection ID, or the App/OIDC/plugin evidence
+to the Maker; those values are technical. Say only what the Maker needs: the
+one plain question below. Items that cannot be verified through a supported
+read-only API stay internal and are re-checked by the later phases.
 
 Local state absence is not evidence that a remote app, OIDC provider, plugin,
 or connection is absent. Never create, patch, or recreate a remote object from
 this action.
 
-If `instanceInputRequired` is `false`, reuse the valid prior confirmation,
-briefly summarize discovery, and do not ask again. A newly visible connection
-never changes the confirmed instance automatically.
+If `instanceInputRequired` is `false`, reuse the valid prior confirmation and
+do not ask again. A newly visible connection never changes the confirmed
+instance automatically.
 
-When `instanceInputRequired` is `true`, send the exact returned
-`instanceQuestion` through the shared lifecycle runner's `adapt-question`
-path:
+When `instanceInputRequired` is `true`, the returned `instanceQuestion` is
+already plain chat text (`servicenow.plain-question.v1`). Send its `plainText`
+verbatim as an ordinary assistant message, never through `ask_user` or any
+input or selection card, and wait for the Maker's typed reply. Never write your
+own version of this question or add the connection details to it.
 
-- With candidates, every normalized URL is a separate **Use <URL>** choice,
-  even when there is only one, plus **Provide another ServiceNow instance
-  URL**. Translate the selected label through `instanceChoices`; never ask the
-  Maker to copy an internal key.
-- **Provide another ServiceNow instance URL** opens the exact returned
-  `manualInstanceQuestion`. Do not construct or shorten another free-form
-  question.
+- With one candidate the question asks "Yes" or "No" to use the found
+  instance. With several, it lists them by number plus an option to use
+  another. Map the typed reply with `match-reply`, passing the returned
+  `instanceQuestion` on stdin, then translate the matched label through
+  `instanceChoices`; never ask the Maker to copy an internal key. A pasted
+  ServiceNow URL in any reply is the manually provided instance.
+- When the reply means "use another instance", send the `plainText` of
+  `manualInstanceQuestion` verbatim. Do not construct or shorten another
+  free-form question.
 - With no candidates, the returned question is already that free-form URL
   question.
 - Discovery errors remain visible in the question. Manual target confirmation
   does not prove connection health, select/reuse a credential, create an
   instance, or bind the agent.
 
-The no-candidate/manual-URL form uses this supported visible shape. The
-runtime-rendered question may add the bounded discovery error:
+The no-candidate/manual-URL form uses this supported shape. The runtime
+question may add the bounded discovery error; it is source data for the
+controller and is never shown as-is:
 
 <!-- visible-handoff-question:v1 -->
 ```json
 [
   {
     "header": "ServiceNow instance",
-    "question": "For {AGENT_DISPLAY_NAME} (`{SELECTED_AGENT_SLUG}`) in environment `{ENVIRONMENT_ID}` and {REALM} realm, which ServiceNow instance should Employee Self-Service use? Send its public HTTPS root URL, not credentials.\n\nExample: `https://<your-instance>.service-now.com`\n\nUse only the instance root (`https://<instance>.service-now.com`). Do not enter a portal or module path such as `/sp`, `/esc`, or `/now/...`. Do not enter a username, password, credential, token, secret, or certificate. If you do not know the URL, ask your ServiceNow administrator for the public instance root.\n\n{DISCOVERY_ERROR_IF_ANY}",
+    "question": "Which ServiceNow instance should {AGENT_DISPLAY_NAME} use? Send its public HTTPS URL, not credentials.\n\nExample: `https://<your-instance>.service-now.com`\n\nUse only the instance address, without a portal path such as `/sp` or `/esc`. If you don't know it, ask your ServiceNow administrator.\n\n{DISCOVERY_ERROR_IF_ANY}",
     "allowFreeformInput": true
   }
 ]
@@ -124,7 +128,7 @@ selected or entered URL is confirmed, persist it and refresh discovery:
 Do not call `next-step`, `resume-handoff`, or the preflight checkpoint between
 showing the question and recording its answer. If a redundant provider
 `resume-handoff` call occurs, its top-level `pendingInput` is authoritative:
-show that exact question and stop without running a checkpoint.
+send its `question.plainText` verbatim and stop without running a checkpoint.
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-preflight --instance-url <https://instance.service-now.com>

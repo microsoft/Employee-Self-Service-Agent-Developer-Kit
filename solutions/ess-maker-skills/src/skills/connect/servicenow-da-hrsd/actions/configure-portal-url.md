@@ -26,11 +26,12 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-sl
 - `already-recorded` with an accepted record: use its exact `portalUrl`
   without asking the Maker again, then run the guarded `set-portal-url` command
   below. A declined record continues to the manual question.
-- `source-selection-required`: ask the returned label-only question, translate
-  the selected label through `portalSourceChoices`, and rerun
-  `portal-reuse-handoff --source-key <internal-source-key>`.
-- `question-required`: show the exact returned question. Translate the answer
-  through `portalDecisionChoices`.
+- `source-selection-required`: send the returned plain question (its
+  `plainText`), translate the typed reply through `portalSourceChoices`, and
+  rerun `portal-reuse-handoff --source-key <internal-source-key>`.
+- `question-required`: send the returned question's `plainText` verbatim as
+  ordinary chat text and map the typed reply with `match-reply`. Translate the
+  answer through `portalDecisionChoices`.
   - **Reuse saved portal URL**: run
     `record-portal-reuse --source-key <internal-source-key> --decision accept`,
     then pass the returned `portalUrl` directly to the guarded
@@ -63,6 +64,9 @@ Next, we'll make sure the agent's HR case links open in the right employee porta
 
 **End message.**
 
+Send the question below as an ordinary chat message (never `ask_user`) and
+wait for the typed URL:
+
 <!-- visible-handoff-question:v1 -->
 ```json
 [
@@ -88,9 +92,11 @@ normalization as `set-portal-url` (HTTPS, no trailing slash) and saves nothing:
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} portal-url-confirmation --portal-url <typed-url>
 ```
 
-Show the returned `question` and `options` verbatim, with no free-form input.
+Send the returned question's `plainText` verbatim as chat text and map the
+typed reply with `match-reply`; it is a Yes or No question.
 The question is "Is **{NORMALIZED_PORTAL_URL}** the employee portal URL?" and
-the options are "Yes, that's the portal URL" and "No, use a different URL".
+the choices are "Yes, that's the portal URL" and "No, use a different URL".
+A pasted new URL in the reply also means "use a different URL".
 - **No, use a different URL**: save nothing and ask the URL question above
   again.
 - **Yes, that's the portal URL**: show the returned `savedMessage` verbatim
@@ -101,7 +107,7 @@ the options are "Yes, that's the portal URL" and "No, use a different URL".
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} set-portal-url --portal-url <returned-portalUrl> --yes
 ```
 
-Nothing is saved before the Maker selects **Yes**.
+Nothing is saved before the Maker replies **Yes**.
 
 On `committed` or `already-configured`, return
 `ACTION_RESULT = "applied"`. `already-configured` is successful only because
@@ -123,14 +129,16 @@ fallback in the ordinary current-task reply:
 4. Set `To` to the exact administrator-confirmed URL `{PORTAL_URL}`.
 5. Save the topic without publishing.
 
-Then use the compact completion confirmation below:
+Then use the compact completion confirmation below. Pass it to
+`adapt-question` on stdin and send the returned `plainText` as ordinary chat
+text (never `ask_user`); map the typed reply with `match-reply`:
 
 <!-- visible-handoff-question:v1-manual-fallback -->
 ```json
 [
   {
     "header": "Save portal Base URI manually",
-    "question": "We couldn't update the portal URL automatically, so it needs to be set in Copilot Studio. Is `{PORTAL_URL}` now saved in the target topic?\n\nYou don't need to publish. Selecting the completed option triggers one fresh read-only verification.",
+    "question": "We couldn't update the portal URL automatically, so it needs to be set in Copilot Studio. Is `{PORTAL_URL}` now saved in the target topic?\n\nYou don't need to publish. A reply that it is saved triggers one fresh read-only verification.",
     "options": [
       { "label": "Completed, the exact portal URL is saved" },
       { "label": "Not yet, the portal URL is not saved" }

@@ -44,8 +44,10 @@ current-task reply first. After the target lines it has a short plain-text
 lead-in, then a Ready-to-send fenced block, which is the message the
 Maker forwards to the ServiceNow administrator (instance URL, the Plugins
 path, and what to send back); it is already in the controller text, so render
-it verbatim. The native question carries only the required
-evidence summary and completion decision:
+it verbatim. The question carries only the required
+evidence summary and completion decision. Send it as ordinary chat text
+(its `plainText` from `adapt-question`, never `ask_user`) and map the typed
+reply with `match-reply`:
 
 <!-- visible-handoff-question:v1 -->
 ```json
@@ -63,7 +65,7 @@ evidence summary and completion decision:
 ]
 ```
 
-Leave the selection unset.
+Wait for the Maker's typed reply; do not preselect an answer.
 
 - **Yes, all listed installed-and-ready evidence is present:** record the phase
   handoff with `reused` when it was already valid, or `completed` when the

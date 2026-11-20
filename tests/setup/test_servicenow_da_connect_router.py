@@ -11,6 +11,34 @@ _ROOT = Path(__file__).resolve().parents[2]
 _SOLUTION = _ROOT / "solutions" / "ess-maker-skills"
 
 
+def test_servicenow_connect_docs_never_instruct_ask_user() -> None:
+    connect = _SOLUTION / "src" / "skills" / "connect"
+    docs = [
+        *connect.glob("servicenow*/**/*.md"),
+        connect / "shared" / "lifecycle-runner.md",
+    ]
+    assert docs
+    negations = ("never", "do not", "don't", "no `ask_user`", "not ")
+    for path in docs:
+        text = path.read_text(encoding="utf-8")
+        for paragraph in text.split("\n\n"):
+            if "ask_user" not in paragraph and "askUserArguments" not in paragraph:
+                continue
+            flat = " ".join(paragraph.split()).lower()
+            assert any(word in flat for word in negations), (
+                path.name,
+                flat[:120],
+            )
+
+
+def test_servicenow_connect_controller_never_emits_ask_user_payloads() -> None:
+    scripts = _SOLUTION / "scripts"
+    for name in ("connect_servicenow_da.py", "servicenow_connect_realms.py"):
+        source = (scripts / name).read_text(encoding="utf-8")
+        assert '"askUserArguments"' not in source, name
+        assert "'askUserArguments'" not in source, name
+
+
 def test_test_and_prod_realm_surface_is_not_advertised() -> None:
     chooser = (
         _SOLUTION
@@ -68,17 +96,12 @@ def test_servicenow_connect_entry_files_gate_progress_rendering() -> None:
     )
     for path in gated_files:
         text = " ".join(path.read_text(encoding="utf-8").split())
-        assert "**STOP — conversation text only.**" in text, path.name
-        assert (
-            "your very next assistant message — before any other tool call — "
-            "must contain `renderBlock.text` verbatim"
-        ) in text, path.name
-        assert "`resume-handoff` or `record-checkpoint-results`" in text, (
-            path.name
-        )
-        assert "the only renderable field" in text, path.name
+        assert "**Progress snapshot, then conversation text.**" in text, path.name
+        assert "verbatim as its own" in text, path.name
+        assert "`resume-handoff` or `record-checkpoint-results`" in text, path.name
         assert "never add a Check/Status table" in text, path.name
         assert "SHOW_PHASE_CHECKLIST = False" in text, path.name
+        assert "never use a card or input" in text, path.name
         assert "`progress.checklistText`" not in text, path.name
         assert "`progress.currentPhase.startText`" not in text, path.name
         assert "never call `ask_user`" in text.lower() or (
@@ -121,7 +144,8 @@ def test_servicenow_connect_docs_suppress_flightcheck_health_table() -> None:
     for path in entry_files:
         text = " ".join(path.read_text(encoding="utf-8").split())
         assert "**Hard rules.** Read `src/skills/connect/shared/lifecycle-runner.md` before the first action." in text, path.name
-        assert "emit `renderBlock.text` verbatim as an assistant message" in text, path.name
+        assert "emit `renderBlock.progressSnapshot` (when non-empty)" in text, path.name
+        assert "then `renderBlock.text` verbatim as an assistant message" in text, path.name
         assert "Never edit `lifecycle.json` by hand" in text, path.name
         assert "`record-checkpoint-results`" in text, path.name
         assert (
@@ -860,15 +884,17 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "missing target topic" in topics
     assert "must not repeat the confirmed update" in topics
     assert "adapt-question" in topics
-    assert "while the\n  question is pending" in topics
-    assert "Absence of\n  an answer is not cancellation" in topics
+    assert "While the question is pending" in topics
+    assert "Absence of an answer is not cancellation" in " ".join(topics.split())
     assert "Maker-selected public ServiceNow instance" in preflight
     assert "does not ask the Maker to classify setup\nprogress" in preflight
     assert "which situation matches" not in preflight
     assert "--scenario" not in preflight
     assert "instanceInputRequired" in preflight
     assert "[Open this ServiceNow instance]" not in preflight
-    assert "A newly visible connection\nnever changes" in preflight
+    assert "A newly visible connection never changes" in " ".join(
+        preflight.split()
+    )
     assert "Connected physical connection does not prove" in preflight
     assert "top-level `pendingInput` is authoritative" in preflight
     assert "stop without running a checkpoint" in preflight
@@ -984,20 +1010,20 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "Settings >\nConnection Settings > ServiceNow > Connect > Create new connection" in (
         credential
     )
-    assert "opens the exact returned `manualInstanceQuestion`" in (
+    assert "send the `plainText` of `manualInstanceQuestion` verbatim" in (
         preflight_normalized
     )
     assert "shared-reuse-handoff" not in preflight
-    assert "pass the returned `question` object unchanged" in entra_normalized
-    assert "its `options` are label-only" in entra_normalized
-    assert "Translate the selected label through `reuseDecisionChoices`" in (
+    assert "already plain chat text" in entra_normalized
+    assert "never through `ask_user`" in entra_normalized
+    assert "Translate the matched label through `reuseDecisionChoices`" in (
         entra_normalized
     )
     assert "physical connections" in entra_normalized
     assert "It makes no API call" in entra_normalized
     assert "**Reuse shared identity**" in entra
     assert "If it returns `decision: no-action`, immediately return" in entra
-    assert "Do not render instructions, call the question tool" in (
+    assert "Do not render instructions, send any question" in (
         entra_normalized
     )
     assert "rerun `record-identity-direct`" in entra_normalized

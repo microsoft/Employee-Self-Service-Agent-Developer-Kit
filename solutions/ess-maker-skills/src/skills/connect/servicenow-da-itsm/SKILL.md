@@ -79,15 +79,15 @@ AGENT_SLUG = SELECTED_AGENT_SLUG
 The shared runner's `connect_lifecycle.py next-step` command is mandatory.
 Never jump directly from a result to another checkpoint or infer that
 `actionApplied` skips an incomplete provider action.
-**STOP — conversation text only.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant message — before any other tool call — must contain `renderBlock.text` verbatim when it is non-empty (the conversation text for the current step). The phase checklist ("Automatic setup", the "Phases" list, role labels and the status legend) is hidden for now (`SHOW_PHASE_CHECKLIST = False` in `scripts/connect_servicenow_da.py`), so `renderBlock.text` may be empty; then send nothing for it. `renderBlock.text` is the only renderable field: never render anything under `internal`, never write your own checklist or phase list, and never add a Check/Status table. At the start of a fresh run `renderBlock.text` begins with the connection opening ("We'll connect ... so employees can ..."); emit it verbatim as part of the same message, and never write your own opening or repeat it later. The Test-pane ready message in the current-task lead-in is controller-built: show it verbatim and never reword it, and when `record-test --result untested` or `--result empty` returns `message`, show that `message` verbatim (for `empty`, nothing is recorded and the Test step stays open; ask the result question again) and never claim the integration works.
+**Progress snapshot, then conversation text.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant messages — before any other tool call — are: first `renderBlock.progressSnapshot` verbatim as its own short chat message when it is non-empty (ordinary Markdown progress list like `/setup`'s: ✅ done, 🔄 current, ⛔ needs attention, ⬜ not started; nothing is pinned, so re-post the fresh snapshot at the start, after each phase change, on resume, when waiting or blocked, and at completion), then `renderBlock.text` verbatim when it is non-empty (the conversation text for the current step). `SHOW_PHASE_CHECKLIST = False` in `scripts/connect_servicenow_da.py` hides the snapshot, so both may be empty; then send nothing for them. Never render anything under `internal`, never edit or rebuild the snapshot, never write your own checklist or phase list, never add a Check/Status table, and never use a card or input for it. At the start of a fresh run `renderBlock.text` begins with the connection opening ("We'll connect ... so employees can ..."); emit it verbatim as part of the same message, and never write your own opening or repeat it later. The Test-pane ready message in the current-task lead-in is controller-built: show it verbatim and never reword it, and when `record-test --result untested` or `--result empty` returns `message`, show that `message` verbatim (for `empty`, nothing is recorded and the Test step stays open; ask the result question again) and never claim the integration works.
 
 **Ask in plain chat text.** Every question is ordinary chat text: never call `ask_user` or show an input, selection or confirm card. Send the controller's `plainText`, wait for the typed reply, map it with `match-reply`, and run the same command as before (see `shared/lifecycle-runner.md`). Accept free-form replies such as "yes", "1" or a pasted value. Never ask for a secret.
 
-**Hard rules.** Read `src/skills/connect/shared/lifecycle-runner.md` before the first action. When `resume-handoff` returns a non-empty `renderBlock`, emit `renderBlock.text` verbatim as an assistant message; terminal output does not count. Never edit `lifecycle.json` by hand; record results with `record-checkpoint-results`. Run every command with the launcher resolved by `/setup` (`py -3`, `python3`, then `python`), never assuming bare `python`.
+**Hard rules.** Read `src/skills/connect/shared/lifecycle-runner.md` before the first action. When `resume-handoff` returns a non-empty `renderBlock`, emit `renderBlock.progressSnapshot` (when non-empty) as its own short chat message, then `renderBlock.text` verbatim as an assistant message; terminal output does not count. Never edit `lifecycle.json` by hand; record results with `record-checkpoint-results`. Run every command with the launcher resolved by `/setup` (`py -3`, `python3`, then `python`), never assuming bare `python`.
 
 Keep the ServiceNow `resume-handoff.progress` items and current-step state
-as agent-facing data for resume and routing; do not render them as a checklist while
-`SHOW_PHASE_CHECKLIST` is False.
+as agent-facing data for resume and routing; the only maker-visible progress
+list is the controller's `renderBlock.progressSnapshot`, never one you write.
 
 On every first run and resume, track the controller's IT collaboration groups
 and nested internal-step statuses internally. Preflight and
@@ -118,8 +118,9 @@ does not enable ServiceNow topics before this check passes.
 **Topics and Portal:** After the connection check passes, Connect reads the topic
 states for Maker review and saves only approved changes. It also saves the
 administrator-provided portal URL after Maker confirmation. The confirmation
-question comes from `portal-url-confirmation`: show its `question` and
-`options` verbatim, and save nothing before the Maker selects Yes. FlightCheck
+question comes from `portal-url-confirmation`: send its `plainText` (the
+question and its Yes/No reply guidance) verbatim as chat text, and save nothing
+before the Maker replies Yes. FlightCheck
 verifies the resulting topic states and portal value.
 
 **Dev Test:** After topic and portal configuration is complete, the Maker runs

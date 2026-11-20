@@ -163,9 +163,10 @@ def _environments(*ids: str) -> list[dict[str, Any]]:
 
 @pytest.fixture(autouse=True)
 def _checklist_visible(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Rendering tests exercise the restorable checklist; default-hidden
-    tests set the flag back to False inside the test."""
+    """Rendering tests exercise the restorable legacy rows; the default-view
+    tests set the flags back inside the test."""
     monkeypatch.setattr(realms, "SHOW_REALM_CHECKLIST", True)
+    monkeypatch.setattr(realms, "SHOW_LEGACY_REALM_ROWS", True)
 
 
 @pytest.fixture
@@ -1392,7 +1393,7 @@ def test_realms_guide_carries_the_s5_recovery_wording() -> None:
         "Bring back their non-sensitive reply after any required access work is "
         "complete.",
         "We're continuing ServiceNow validation for **{Agent} in {Environment}**.",
-        "emit the returned text verbatim when it is non-empty",
+        "verbatim when it is non-empty",
         'reply "Done" and we\'ll recheck this step only',
         "publish the agent in Dev",
     ):
@@ -1632,10 +1633,11 @@ def test_realm_status_without_render_context_has_no_block() -> None:
     assert "renderBlock" not in realms.realm_status(_registry())
 
 
-def test_realm_checklist_is_hidden_by_default_and_state_is_intact(
+def test_realm_checklist_defaults_to_a_snapshot_and_state_is_intact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(realms, "SHOW_REALM_CHECKLIST", False)
+    monkeypatch.setattr(realms, "SHOW_REALM_CHECKLIST", True)
+    monkeypatch.setattr(realms, "SHOW_LEGACY_REALM_ROWS", False)
     registry = _registry()
     result = realms.realm_status(registry, render=_render_context(footer="Footer."))
     block = result["renderBlock"]
@@ -1644,8 +1646,21 @@ def test_realm_checklist_is_hidden_by_default_and_state_is_intact(
     assert block["text"].endswith("Footer.")
     assert "✅" not in block["text"] and "⬜" not in block["text"]
     assert result["realmIntro"]
+    snapshot = block["progressSnapshot"]
+    lines = snapshot.splitlines()
+    assert lines[0].startswith("Here's your ") and lines[1] == ""
+    assert lines[2:] and all(
+        line.startswith("- ") and line[2] in "✅🔄⛔⬜" for line in lines[2:]
+    )
+    assert "Permission to configure this agent" in snapshot
+    assert "—" not in snapshot
 
-    monkeypatch.setattr(realms, "SHOW_REALM_CHECKLIST", True)
+    monkeypatch.setattr(realms, "SHOW_REALM_CHECKLIST", False)
+    hidden = realms.realm_status(registry, render=_render_context(footer="Footer."))
+    assert hidden["renderBlock"]["progressSnapshot"] == ""
+    assert hidden["phases"] == result["phases"]
+
+    monkeypatch.setattr(realms, "SHOW_LEGACY_REALM_ROWS", True)
     shown = realms.realm_status(registry, render=_render_context(footer="Footer."))
     assert shown["renderBlock"]["kind"] == "realm-checklist"
     assert _icons(shown["renderBlock"]["text"])

@@ -202,14 +202,11 @@ def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
         (
             _ACTIONS / "admin-preflight.md",
             (
-                "For {AGENT_DISPLAY_NAME}",
+                "Which ServiceNow instance should {AGENT_DISPLAY_NAME} use?",
                 "`https://<your-instance>.service-now.com`",
                 "ask your ServiceNow administrator",
-                "which ServiceNow instance should Employee Self-Service use?",
-                "public HTTPS root URL",
-                "portal or module path",
-                "password",
-                "token",
+                "public HTTPS URL, not credentials",
+                "portal path",
             ),
         ),
         (
@@ -364,7 +361,9 @@ def test_servicenow_questions_use_buttons_and_bounded_freeform() -> None:
                 assert path.name in allowed_freeform
             adapted = snow.adapt_question_to_plain_text(question)
             assert adapted["schemaVersion"] == "servicenow.plain-question.v1"
-            assert adapted["canonicalQuestion"] == question
+            assert adapted["canonicalQuestion"] == snow._neutral_question(
+                question
+            )
             text = adapted["plainText"]
             assert question["question"].strip() in text
             assert "ask_user" not in text
@@ -508,7 +507,7 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
     assert "conditional remediation, not an observed current error" in (
         source_normalized
     )
-    assert "build the supported selector options directly from" in (
+    assert "build the supported choices directly from" in (
         source_normalized
     )
 

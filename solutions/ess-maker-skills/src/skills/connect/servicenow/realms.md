@@ -173,23 +173,26 @@ environment selection on **Check again**. Do not send the maker back to Dev.
 
 After discovery succeeds, `discover-realm-target`, `check-realm`,
 `realm-status`, `select-realm`, and `record-realm-test` each return
-`renderBlock.text`: the conversation text for the active Test or Prod step
-(`renderBlock.kind` is `realm-step`; `realmIntro` is the case paragraph). The
-step checklist is hidden for now (`SHOW_REALM_CHECKLIST = False` in
-`scripts/servicenow_connect_realms.py`), so emit the returned text verbatim
+`renderBlock.progressSnapshot` and `renderBlock.text`: the progress list (post
+it verbatim as its own short chat message, like `/setup`; nothing is pinned)
+and the conversation text for the active Test or Prod step
+(`renderBlock.kind` is `realm-step`; `realmIntro` is the case paragraph).
+`SHOW_REALM_CHECKLIST = False` in `scripts/servicenow_connect_realms.py` hides
+the snapshot, and `SHOW_LEGACY_REALM_ROWS = True` restores the old verbose
+rows. Emit the snapshot (when non-empty) and then the returned text verbatim
 when it is non-empty, before any other tool call. Never write your
 own checklist, status table, or item list, and do not paraphrase its
 explanation or its instruction. Use `phases` and `nextPhaseId` only to decide
 what to do next.
 
-The block opens with a one-paragraph explanation of the case (Dev reuse or
-independent). When the checklist is restored (`renderBlock.kind` is
-`realm-checklist`), it uses the same icons as the Dev view: ✅ done, ⏳
-waiting, ❌ needs attention, ⬜ not checked yet. Its steps are permission to
-configure the agent, then, in an independent run only, the Microsoft Entra
-administrator and the ServiceNow administrator, then the ServiceNow connection,
-topics, the portal URL, and the real-data test in the Test pane. The
-administrator rows show ⏳ until the reply is recorded. The checks are
+The snapshot lists the steps: permission to configure the agent, then, in an
+independent run only, the Microsoft Entra administrator and the ServiceNow
+administrator, then the ServiceNow connection, topics, the portal URL, and the
+real-data test in the Test pane, with ✅ done, 🔄 waiting, ⛔ needs attention,
+⬜ not checked yet. When the legacy rows are restored (`renderBlock.kind` is
+`realm-checklist`), the block also opens with a one-paragraph explanation of the
+case and each row carries detail text. The administrator rows show 🔄 until
+the reply is recorded. The checks are
 read-only API reads. They stop at the first step that needs attention or is
 waiting, so later steps stay ⬜. When a step needs attention or is waiting, the
 block ends with that step's own instruction; emit it as part of the block.

@@ -53,20 +53,19 @@ The command-generated question conforms to this visible contract:
 [Open Employee Self-Service (HR) in Copilot Studio]({COPILOT_STUDIO_AGENT_URL})
 
 Open `Topics`; do not invent a tab-specific URL. This link and action guidance
-belong in the ordinary current-task reply, not the native question. The
+belong in the ordinary current-task reply, not the question. The
 returned question is the wait boundary: while pending, do not return an
 `ACTION_RESULT`, emit a completion/remediation message, or return control to
 the lifecycle runner.
 Absence of an answer is not cancellation.
-The tool call is the wait boundary: while the
-  question is pending, preserve the historical action and transaction state.
-Absence of
-  an answer is not cancellation.
-- If the maker selects **Keep the current topic states for this
-  configuration**, run
+While the question is pending, preserve the historical action and transaction
+state.
+- If the maker replies that they want to keep the current topic states
+  (**Keep the current topic states for this
+  configuration**), run
   `python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-topic-choice --choice keep-current`
   and set `ACTION_RESULT = "applied"`.
-- If the maker selects **Enable all listed inactive ServiceNow topics**, run
+- If the maker replies to enable them (**Enable all listed inactive ServiceNow topics**), run
   `python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} enable-all-topics --yes`. Set
   `ACTION_RESULT = "applied"` only when the command reports
   `transactionStatus: "committed"` or `status: "already-active"`.
@@ -85,8 +84,6 @@ Absence of
   `actionApplied = false`, and stop so a later invocation uses a fresh gate and
   transaction. A later invocation that freshly observes all topics Active
   follows the no-mutation path above and must not repeat the confirmed update.
-- Set `ACTION_RESULT = "cancelled"` only if the maker explicitly selects
-  **Not now, leave the phase incomplete** or the host explicitly reports that
-  the question tool is
-  unavailable. Do not interpret a pending or unanswered question as
-  unavailable.
+- Set `ACTION_RESULT = "cancelled"` only if the maker explicitly replies
+  **Not now, leave the phase incomplete**. Do not interpret a pending or
+  unanswered question as cancellation.

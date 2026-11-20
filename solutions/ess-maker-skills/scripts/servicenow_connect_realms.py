@@ -884,12 +884,20 @@ def foundation_reused(expected: Mapping[str, Any]) -> bool:
     return all(sources.get(key) == "dev-record" for key in EXPECTED_KEYS)
 
 
-SHOW_REALM_CHECKLIST = False
-"""Maker-visible Test/Prod checklist switch (True restores the old rows).
+SHOW_REALM_CHECKLIST = True
+"""Maker-visible Test/Prod progress snapshot switch.
+
+When True, ``renderBlock.progressSnapshot`` carries a compact ordinary-Markdown
+list (one status line per step, like /setup's progress) that the agent posts
+as its own chat message. Nothing is pinned by the host. Set False to hide it.
+Recorded stages, statuses, and resume logic never depend on this switch.
+"""
+
+SHOW_LEGACY_REALM_ROWS = False
+"""Restores the old verbose row view (with per-row detail text) when True.
 
 While False, ``renderBlock.text`` carries only the current conversational
-step and the intro is returned separately as ``realmIntro``. Recorded
-stages, statuses, and resume logic never depend on this switch.
+step and the intro is returned separately as ``realmIntro``.
 """
 
 ADMIN_CASE_REUSE = "dev-reuse"
@@ -1676,9 +1684,57 @@ def render_realm_block(
     realm: str,
     context: Mapping[str, Any],
 ) -> str | None:
-    """Grouped step checklist for one promoted realm; reads recorded results.
+    """Conversation text for one promoted realm step.
 
-    Rows follow the order of the checks and stop at the first failing one;
+    Returns the current step text only; the legacy row view is restored by
+    ``SHOW_LEGACY_REALM_ROWS``. See ``render_realm_snapshot`` for the compact
+    progress list.
+    """
+    view = _realm_view(registry, realm, context)
+    if view is None:
+        return None
+    rows, footer, case, label, agent = view
+    if not SHOW_LEGACY_REALM_ROWS:
+        return str(footer) if footer else None
+    lines = [
+        f"**ServiceNow validation: {agent} in {label}**",
+        "",
+        ADMIN_EXPLANATIONS[case].format(label=label),
+        "",
+    ]
+    lines += [f"{icon} {name} — {text}" for name, (icon, text) in rows]
+    if footer:
+        lines += ["", str(footer)]
+    return "\n".join(lines)
+
+
+_REALM_SNAPSHOT_MARKERS = {"✅": "✅", "⏳": "🔄", "❌": "⛔", "⬜": "⬜"}
+
+
+def render_realm_snapshot(
+    registry: Mapping[str, Any],
+    realm: str,
+    context: Mapping[str, Any],
+) -> str | None:
+    """Compact progress list in the same style /setup posts its progress."""
+    view = _realm_view(registry, realm, context)
+    if view is None:
+        return None
+    rows, _footer, _case, label, agent = view
+    lines = [f"Here's your {agent} setup in {label}:", ""]
+    lines += [
+        f"- {_REALM_SNAPSHOT_MARKERS.get(icon, '⬜')} {name}"
+        for name, (icon, _text) in rows
+    ]
+    return "\n".join(lines)
+
+
+def _realm_view(
+    registry: Mapping[str, Any],
+    realm: str,
+    context: Mapping[str, Any],
+) -> tuple[list[tuple[str, tuple[str, str]]], str | None, str, str, str] | None:
+    """Rows follow the order of the checks and stop at the first failing one;
     later rows stay pending. Nothing here reads or writes any environment.
     """
     target = registry["targets"].get(realm)
@@ -1794,18 +1850,7 @@ def render_realm_block(
         ("Real-data test in the Test pane", real_data),
     ]
     footer = instruction or context.get("footer")
-    if not SHOW_REALM_CHECKLIST:
-        return str(footer) if footer else None
-    lines = [
-        f"**ServiceNow validation: {agent} in {label}**",
-        "",
-        ADMIN_EXPLANATIONS[case].format(label=label),
-        "",
-    ]
-    lines += [f"{icon} {name} — {text}" for name, (icon, text) in rows]
-    if footer:
-        lines += ["", str(footer)]
-    return "\n".join(lines)
+    return rows, (str(footer) if footer else None), case, label, agent
 
 
 def realm_status(
@@ -1862,13 +1907,21 @@ def realm_status(
     if render is not None:
         text = render_realm_block(registry, active, render)
         case = admin_case(registry["targets"][active])
-        if text is not None:
+        snapshot = (
+            render_realm_snapshot(registry, active, render) or ""
+            if SHOW_REALM_CHECKLIST
+            else ""
+        )
+        if text is not None or snapshot:
             result["renderBlock"] = {
-                "kind": "realm-checklist" if SHOW_REALM_CHECKLIST else "realm-step",
+                "kind": (
+                    "realm-checklist" if SHOW_LEGACY_REALM_ROWS else "realm-step"
+                ),
                 "case": case,
-                "text": text,
+                "progressSnapshot": snapshot,
+                "text": text or "",
             }
-        if not SHOW_REALM_CHECKLIST:
+        if not SHOW_LEGACY_REALM_ROWS:
             result["realmIntro"] = ADMIN_EXPLANATIONS[case].format(
                 label=active.title()
             )

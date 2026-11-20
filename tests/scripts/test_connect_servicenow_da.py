@@ -95,9 +95,10 @@ def _disable_tamper_check_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _checklist_visible(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Rendering tests exercise the restorable checklist; default-hidden
-    tests set the flag back to False inside the test."""
+    """Rendering tests exercise the restorable legacy grouped view; the
+    default-view tests set the flags back inside the test."""
     monkeypatch.setattr(snow, "SHOW_PHASE_CHECKLIST", True)
+    monkeypatch.setattr(snow, "SHOW_LEGACY_PHASE_VIEW", True)
 
 
 @pytest.fixture
@@ -2631,7 +2632,9 @@ def test_generated_question_families_have_distinct_headers_and_bodies() -> None:
             assert question["allowFreeformInput"] is True, family
         adapted = snow.adapt_question_to_plain_text(question)
         assert adapted["schemaVersion"] == "servicenow.plain-question.v1", family
-        assert adapted["canonicalQuestion"] == question, family
+        assert adapted["canonicalQuestion"] == snow._neutral_question(
+            question
+        ), family
         text = adapted["plainText"]
         assert text.startswith(question["question"].strip()), family
         assert "askUserArguments" not in adapted, family
@@ -2756,6 +2759,38 @@ def test_plain_text_adapter_reports_ambiguous_replies() -> None:
     assert len(match["choices"]) == 2
 
 
+def test_plain_text_output_leaves_no_card_shaped_question_anywhere() -> None:
+    card = snow._native_question(
+        header="Choose",
+        question="Which instance should this agent use?",
+        option_labels=["Use this one", "Use another"],
+    )
+    payload = {
+        "chooser": card,
+        "nested": {"items": [card, {"keep": "value"}]},
+        "questions": [],
+    }
+    result = snow.plain_text_output(payload)
+
+    def walk(value: object) -> None:
+        if isinstance(value, dict):
+            assert "askUserArguments" not in value
+            assert not (
+                isinstance(value.get("question"), str)
+                and ("options" in value or "allowFreeformInput" in value)
+            )
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+
+    walk(result)
+    assert result["questions"] == []
+    assert result["nested"]["items"][1] == {"keep": "value"}
+    assert result["chooser"]["plainText"]
+
+
 def test_adapt_question_cli_returns_plain_text_from_stdin(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -2781,7 +2816,9 @@ def test_adapt_question_cli_returns_plain_text_from_stdin(
 
     result = json.loads(capsys.readouterr().out)
     assert result["schemaVersion"] == "servicenow.plain-question.v1"
-    assert result["canonicalQuestion"] == question
+    assert result["canonicalQuestion"] == snow._neutral_question(question)
+    assert "options" not in result["canonicalQuestion"]
+    assert "allowFreeformInput" not in result["canonicalQuestion"]
     assert result["replyKind"] == "yes-no"
     assert result["plainText"].endswith("Reply **Yes** or **No**.")
     assert "askUserArguments" not in result
@@ -4495,16 +4532,19 @@ def test_preflight_requires_maker_confirmation_for_single_candidate(
         "https://dev123.service-now.com"
     ]
     assert discovery["instanceQuestion"]["options"] == [
-        {"label": "Use https://dev123.service-now.com"},
-        {"label": "Provide another ServiceNow instance URL"},
+        {"label": "Yes, use https://dev123.service-now.com"},
+        {"label": "No, use a different instance"},
     ]
     candidate_body = discovery["instanceQuestion"]["question"]
     assert candidate_body == (
         "Which ServiceNow instance should Employee Self-Service (HR) use? "
-        "We found this instance in existing connection details."
+        "We found https://dev123.service-now.com in your existing "
+        "connections. Use this one?"
     )
     assert "employee-self-service-hr" not in candidate_body
     assert ENVIRONMENT_ID not in candidate_body
+    assert APP_CLIENT_ID not in candidate_body
+    assert "Resource URI" not in candidate_body
     assert "Dev realm" not in candidate_body
     manual = discovery["manualInstanceQuestion"]
     assert manual["allowFreeformInput"] is True
@@ -4513,15 +4553,17 @@ def test_preflight_requires_maker_confirmation_for_single_candidate(
     assert "`https://<your-instance>.service-now.com`" in manual["question"]
     assert "ask your ServiceNow administrator" in manual["question"]
     assert "/sp" in manual["question"]
-    assert "password" in manual["question"]
-    assert "token" in manual["question"]
+    assert "not credentials" in manual["question"]
     assert discovery["instanceChoices"][
-        "Use https://dev123.service-now.com"
+        "Yes, use https://dev123.service-now.com"
     ] == "https://dev123.service-now.com"
+    assert discovery["instanceChoices"][
+        "No, use a different instance"
+    ] == "manual"
     recorded = snow.record_preflight_instance(
         _context(),
         instance_url=discovery["instanceChoices"][
-            "Use https://dev123.service-now.com"
+            "Yes, use https://dev123.service-now.com"
         ],
     )
     refreshed = snow.inspect_admin_setup(_context())
@@ -4593,8 +4635,8 @@ def test_preflight_requests_only_missing_instance_url(
         "Which ServiceNow instance should Employee Self-Service (HR) use? "
         "Send its public HTTPS URL, not credentials."
     ) in manual_body
-    assert "portal or module path" in manual_body
-    assert "credential" in manual_body
+    assert "portal path" in manual_body
+    assert "not credentials" in manual_body
     assert recorded["instanceName"] == "dev123"
     assert refreshed["instanceInputRequired"] is False
     assert "scenario" not in recorded
@@ -6568,7 +6610,7 @@ def test_local_confirmed_instance_is_preflight_candidate_only(
         "https://dev123.service-now.com"
     ]
     assert discovery["instanceChoices"][
-        "Use https://dev123.service-now.com"
+        "Yes, use https://dev123.service-now.com"
     ] == "https://dev123.service-now.com"
     saved = json.loads(target_path.read_text(encoding="utf-8"))
     assert saved["adminSetup"]["preflight"].get("instanceName") is None
@@ -10470,13 +10512,13 @@ def test_portal_url_docs_require_confirmation_before_save_hr_and_it() -> None:
         assert "Is **{NORMALIZED_PORTAL_URL}** the employee portal URL?" in text
         assert "Yes, that's the portal URL" in text
         assert "No, use a different URL" in text
-        assert "Nothing is saved before the Maker selects **Yes**." in text
+        assert "Nothing is saved before the Maker replies **Yes**." in text
         assert text.index("portal-url-confirmation --portal-url") < text.index(
             "set-portal-url --portal-url"
         )
     def confirmation_block(text: str) -> str:
         start = text.index("portal-url-confirmation --portal-url")
-        end = text.index("Nothing is saved before the Maker selects **Yes**.")
+        end = text.index("Nothing is saved before the Maker replies **Yes**.")
         return text[start:end].replace("itsm", "hrsd")
 
     assert confirmation_block(docs["itsm"]) == confirmation_block(docs["hrsd"])
@@ -13913,10 +13955,16 @@ def test_resume_handoff_cli_jit_group_no_is_byte_stable(
     availability = first["transport"]["businessGroupAvailability"]
     assert first["status"] == "business-group-availability-required"
     assert availability["currentGroup"]["id"] == "hr-prerequisite"
-    assert availability["question"]["options"] == [
-        {"label": "Yes, the ServiceNow admin is available now"},
-        {"label": "No, I need to bring the ServiceNow admin in"},
+    question = availability["question"]
+    assert question["schemaVersion"] == "servicenow.plain-question.v1"
+    assert "options" not in question
+    assert [
+        choice["label"] for choice in question["choices"]
+    ] == [
+        "Yes, the ServiceNow admin is available now",
+        "No, I need to bring the ServiceNow admin in",
     ]
+    assert question["plainText"].endswith("Reply **Yes** or **No**.")
 
     command = [
         "--provider",
@@ -16888,31 +16936,64 @@ def test_dev_opening_includes_instance_and_omits_unrecorded_environment(
     assert context["environment"]["id"] not in text
 
 
-def test_phase_checklist_is_hidden_by_default_but_progress_is_kept(
+def test_phase_checklist_default_is_a_compact_snapshot_and_progress_is_kept(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    context, _, profile = _recording_setup(monkeypatch, tmp_path, "hrsd")
-    context["environment"]["display_name"] = "Contoso Dev"
-    with snow.product_profile_context(profile):
-        monkeypatch.setattr(snow, "SHOW_PHASE_CHECKLIST", True)
-        shown = snow.resume_handoff(context, executed_actions=frozenset())
-    context, _, profile = _recording_setup(monkeypatch, tmp_path / "hidden", "hrsd")
-    context["environment"]["display_name"] = "Contoso Dev"
-    with snow.product_profile_context(profile):
-        monkeypatch.setattr(snow, "SHOW_PHASE_CHECKLIST", False)
-        hidden = snow.resume_handoff(context, executed_actions=frozenset())
+    def handoff(subdir: str, *, snapshot: bool, legacy: bool) -> dict[str, Any]:
+        context, _, profile = _recording_setup(monkeypatch, tmp_path / subdir, "hrsd")
+        context["environment"]["display_name"] = "Contoso Dev"
+        with snow.product_profile_context(profile):
+            monkeypatch.setattr(snow, "SHOW_PHASE_CHECKLIST", snapshot)
+            monkeypatch.setattr(snow, "SHOW_LEGACY_PHASE_VIEW", legacy)
+            return snow.resume_handoff(context, executed_actions=frozenset())
+
+    legacy = handoff("legacy", snapshot=True, legacy=True)
+    compact = handoff("compact", snapshot=True, legacy=False)
+    hidden = handoff("hidden", snapshot=False, legacy=False)
 
     for marker in ("Automatic setup", "Phases", "Complete — admin confirmed"):
-        assert marker in shown["renderBlock"]["text"]
+        assert marker in legacy["renderBlock"]["text"]
+        assert marker not in compact["renderBlock"]["text"]
         assert marker not in hidden["renderBlock"]["text"]
+    assert compact["renderBlock"]["text"].startswith("We'll connect")
+
+    snapshot = compact["renderBlock"]["progressSnapshot"]
+    lines = snapshot.splitlines()
+    assert lines[0].startswith("Here's your ")
+    bullets = lines[2:]
+    assert len(bullets) == 4
+    assert all(line.startswith("- ") and line[2] in "✅🔄⛔⬜" for line in bullets)
+    assert "HR prerequisite" in snapshot
+    assert "Responsible" not in snapshot and "Complete — " not in snapshot
+    assert "progressSnapshot" in compact["renderBlock"]["instruction"]
+    assert hidden["renderBlock"]["progressSnapshot"] == ""
     assert "✅" not in hidden["renderBlock"]["text"]
-    assert hidden["renderBlock"]["text"].startswith("We'll connect")
-    assert hidden["progress"]["items"] == shown["progress"]["items"]
+
+    assert hidden["progress"]["items"] == compact["progress"]["items"]
     ignored = {"renderedAt", "internal"}
     assert {k: v for k, v in hidden["progress"].items() if k not in ignored} == {
-        k: v for k, v in shown["progress"].items() if k not in ignored
+        k: v for k, v in compact["progress"].items() if k not in ignored
     }
+
+
+def test_progress_snapshot_marks_blocked_and_completed_groups() -> None:
+    contract = snow._load_json(
+        Path(snow.__file__).resolve().parents[1] / snow.CONTRACT_PATH
+    )
+    groups = snow._business_groups(contract)
+    items = [
+        {"id": phase_id, "status": "complete-verified"}
+        for group in groups
+        for phase_id in group["phaseIds"]
+    ]
+    done = snow._render_progress_snapshot(contract, items, title="T")
+    assert done.splitlines()[2:] == [f"- ✅ {group['label']}" for group in groups]
+
+    first = groups[0]["phaseIds"][0]
+    items[0] = {"id": first, "status": "needs-attention"}
+    blocked = snow._render_progress_snapshot(contract, items, title="T")
+    assert blocked.splitlines()[2] == f"- ⛔ {groups[0]['label']}"
 
 
 def test_dev_opening_is_not_shown_on_resume(
@@ -17066,6 +17147,7 @@ def test_resume_render_block_final_is_grouped_final_text() -> None:
 
     assert block == {
         "kind": "final",
+        "progressSnapshot": "",
         "text": "G\n\nDONE",
         "instruction": snow._RENDER_INSTRUCTION,
     }

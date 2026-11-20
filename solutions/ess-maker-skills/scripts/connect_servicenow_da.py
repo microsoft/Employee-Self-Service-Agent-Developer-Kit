@@ -896,13 +896,34 @@ def _yes_no_options(options: list[dict[str, Any]]) -> bool:
     return first == [["yes"], ["no"]]
 
 
+def _neutral_question(question: dict[str, Any]) -> dict[str, Any]:
+    """Rename card-shaped keys so the question never looks like a card."""
+    neutral = {
+        key: copy.deepcopy(value)
+        for key, value in question.items()
+        if key not in {"options", "allowFreeformInput", "replyOptions"}
+        and key != "freeformReply"
+    }
+    options = question.get("options")
+    if options is None:
+        options = question.get("replyOptions")
+    neutral["replyOptions"] = copy.deepcopy(options or [])
+    freeform = question.get("allowFreeformInput")
+    if freeform is None:
+        freeform = question.get("freeformReply")
+    neutral["freeformReply"] = bool(freeform)
+    return neutral
+
+
 def adapt_question_to_plain_text(
     question: dict[str, Any],
 ) -> dict[str, Any]:
     """Render one canonical question as ordinary chat text (no input card)."""
-    canonical = copy.deepcopy(question)
+    if isinstance(question.get("canonicalQuestion"), dict):
+        question = question["canonicalQuestion"]
+    canonical = _neutral_question(question)
     body = canonical.get("question")
-    options = canonical.get("options") or []
+    options = canonical.get("replyOptions") or []
     if not isinstance(body, str) or not body.strip():
         raise ServiceNowConnectError(
             "Canonical question body must be a non-empty string."
@@ -1033,6 +1054,29 @@ def match_question_reply(
         if len(contained) > 1:
             return {**base, "status": "ambiguous", "choices": contained}
     return {**base, "status": "unmatched", "choices": choices}
+
+
+def _is_card_question(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and isinstance(value.get("question"), str)
+        and ("options" in value or "allowFreeformInput" in value)
+    )
+
+
+def plain_text_output(value: Any) -> Any:
+    """Replace every card-shaped question in a command output with chat text.
+
+    Controllers build canonical questions internally; nothing that leaves the
+    CLI may look like an input or selection card.
+    """
+    if _is_card_question(value):
+        return adapt_question_to_plain_text(value)
+    if isinstance(value, dict):
+        return {key: plain_text_output(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [plain_text_output(item) for item in value]
+    return value
 
 
 def _identity_direct_questions(
@@ -6016,29 +6060,40 @@ def _preflight_instance_question(
             f"Which ServiceNow instance should {agent_label} use? Send its "
             "public HTTPS URL, not credentials.\n\n"
             "Example: `https://<your-instance>.service-now.com`\n\n"
-            "Use only the instance root. Don't include a portal or module "
-            "path such as `/sp`, `/esc`, or `/now/...`, and don't send a "
-            "username, password, token, secret, or certificate. If you "
-            "don't know the URL, ask your ServiceNow administrator for the "
-            f"public instance URL.{error_text}"
+            "Use only the instance address, without a portal path such as "
+            "`/sp` or `/esc`. If you don't know it, ask your ServiceNow "
+            f"administrator.{error_text}"
         ),
         "allowFreeformInput": True,
     }
     if candidates:
-        choices = {
-            f"Use https://{candidate}.service-now.com": (
-                f"https://{candidate}.service-now.com"
+        single = len(candidates) == 1
+        if single:
+            origin = f"https://{candidates[0]}.service-now.com"
+            choices = {
+                f"Yes, use {origin}": origin,
+                "No, use a different instance": "manual",
+            }
+            intro = (
+                f"Which ServiceNow instance should {agent_label} use? We "
+                f"found {origin} in your existing connections. Use this "
+                "one?"
             )
-            for candidate in candidates
-        }
-        choices["Provide another ServiceNow instance URL"] = "manual"
+        else:
+            choices = {
+                f"Use https://{candidate}.service-now.com": (
+                    f"https://{candidate}.service-now.com"
+                )
+                for candidate in candidates
+            }
+            choices["Provide another ServiceNow instance URL"] = "manual"
+            intro = (
+                f"Which ServiceNow instance should {agent_label} use? We "
+                "found these instances in your existing connections."
+            )
         question = {
             "header": "Confirm ServiceNow instance",
-            "question": (
-                f"Which ServiceNow instance should {agent_label} use? We "
-                f"found {'these instances' if len(candidates) != 1 else 'this instance'} "
-                f"in existing connection details.{error_text}"
-            ),
+            "question": f"{intro}{error_text}",
             "options": [
                 {"label": label}
                 for label in choices
@@ -10142,6 +10197,7 @@ def _build_phase_progress(
         )
 
     grouped = render_grouped()
+    snapshot_title = f"Here's your {display_name} connection setup:"
     final_message = (
         _dev_final_message(environment_display_name)
         if decision.get("decision") == "complete"
@@ -10151,6 +10207,19 @@ def _build_phase_progress(
     internal: dict[str, Any] = {
         "renderable": False,
         "groupedText": grouped,
+        "progressSnapshot": _render_progress_snapshot(
+            contract, items, title=snapshot_title
+        ),
+        "progressSnapshotBlocked": (
+            _render_progress_snapshot(
+                contract,
+                items,
+                title=snapshot_title,
+                blocked_phase_id=current_id,
+            )
+            if current_id is not None
+            else None
+        ),
         "groupedFinalText": (
             _join_visible(grouped, final_message)
             if final_message is not None
@@ -10738,12 +10807,23 @@ def _current_task_guidance(
     )
 
 
-SHOW_PHASE_CHECKLIST = False
-"""Maker-visible phase checklist switch.
+SHOW_PHASE_CHECKLIST = True
+"""Maker-visible phase progress snapshot switch.
 
-The grouped "Automatic setup / Phases" view is hidden from makers for now so
-they see only the conversational-flow text. Set this to True to restore it.
-Progress items, counts, evidence, and resume logic never depend on it.
+When True, every ``renderBlock`` also carries ``progressSnapshot``: a short
+ordinary-Markdown list with one status line per business phase, written the
+way /setup writes its progress. The agent posts it as its own chat message
+(re-posted at the start, after each phase change, on resume, on waiting or
+blocked, and at completion); nothing is pinned by the host. Set this to False
+to hide the snapshot. Progress items, counts, evidence, and resume logic never
+depend on it.
+"""
+
+SHOW_LEGACY_PHASE_VIEW = False
+"""Restores the old grouped "Automatic setup / Phases" view when True.
+
+It is the verbose view with responsible roles and a status legend. It is
+hidden because the compact ``progressSnapshot`` replaced it.
 """
 
 
@@ -10753,6 +10833,46 @@ def _join_visible(*parts: Any) -> str:
     )
 
 
+_SNAPSHOT_MARKERS = {"complete": "✅", "active": "🔄", "blocked": "⛔", "pending": "⬜"}
+
+
+def _render_progress_snapshot(
+    contract: dict[str, Any],
+    items: list[dict[str, Any]],
+    *,
+    title: str,
+    blocked_phase_id: str | None = None,
+) -> str:
+    """Compact status list, one ordinary bullet per business phase.
+
+    Always computed (it is agent-facing state); ``SHOW_PHASE_CHECKLIST``
+    only controls whether it is handed to the maker.
+    """
+    items_by_id = {str(item["id"]): item for item in items}
+
+    def marker(group: dict[str, Any]) -> str:
+        phases = [
+            items_by_id[phase_id]
+            for phase_id in group["phaseIds"]
+            if phase_id in items_by_id
+        ]
+        statuses = [str(phase["status"]) for phase in phases]
+        if blocked_phase_id in group["phaseIds"] or "needs-attention" in statuses:
+            return _SNAPSHOT_MARKERS["blocked"]
+        if statuses and all(status.startswith("complete-") for status in statuses):
+            return _SNAPSHOT_MARKERS["complete"]
+        if any(status != "pending" for status in statuses):
+            return _SNAPSHOT_MARKERS["active"]
+        return _SNAPSHOT_MARKERS["pending"]
+
+    lines = [title, ""]
+    lines.extend(
+        f"- {marker(group)} {group['label']}"
+        for group in _business_groups(contract)
+    )
+    return "\n".join(lines)
+
+
 def _render_grouped_phases(
     contract: dict[str, Any],
     items: list[dict[str, Any]],
@@ -10760,12 +10880,11 @@ def _render_grouped_phases(
     title: str,
     current_override: tuple[str, str, str] | None = None,
 ) -> str:
-    """Render the grouped phase view used by every Connect transition.
+    """Render the legacy grouped phase view.
 
-    ``current_override`` is ``(phase_id, icon, text)`` for the current step.
-    Returns an empty string while ``SHOW_PHASE_CHECKLIST`` is False.
+    Returns an empty string while ``SHOW_LEGACY_PHASE_VIEW`` is False.
     """
-    if not SHOW_PHASE_CHECKLIST:
+    if not SHOW_LEGACY_PHASE_VIEW:
         return ""
     visible_by_id = {
         str(item["id"]): item for item in items
@@ -11213,19 +11332,26 @@ def _shared_reuse_before_availability(
 _RENDER_INSTRUCTION = (
     "Emit `text` verbatim as your very next assistant message, before any "
     "other tool call. Terminal or tool output does not count as showing it. "
-    "This is the only renderable field; everything under `internal` is "
-    "never shown."
+    "Only `progressSnapshot` and `text` are renderable; everything under "
+    "`internal` is never shown."
 )
 
 _NO_RENDER_INSTRUCTION = (
     "`text` is empty: there is no maker-visible message for this step. Do "
-    "not write a checklist, status table, or progress list; continue with "
-    "the next instruction."
+    "not write a checklist, status table, or progress list of your own; "
+    "continue with the next instruction."
+)
+
+_SNAPSHOT_INSTRUCTION = (
+    "`progressSnapshot` is the maker's progress list. Send it verbatim as its "
+    "own short chat message first (before `text`), as plain Markdown. Never "
+    "edit, reorder, or rebuild it, and never use a card or input for it. "
 )
 
 
-def _render_instruction(text: str) -> str:
-    return _RENDER_INSTRUCTION if text else _NO_RENDER_INSTRUCTION
+def _render_instruction(text: str, snapshot: str = "") -> str:
+    base = _RENDER_INSTRUCTION if text else _NO_RENDER_INSTRUCTION
+    return f"{_SNAPSHOT_INSTRUCTION}{base}" if snapshot else base
 
 
 _WAITING_RESUME_NOTE = (
@@ -11281,13 +11407,18 @@ def _resume_render_block(
             )
         ]
         if isinstance(current, dict) and not availability["gateRequired"]:
-            if SHOW_PHASE_CHECKLIST:
+            if SHOW_LEGACY_PHASE_VIEW:
                 parts.append(str(current["startText"]))
     text = _join_visible(*parts)
+    snapshot = ""
+    if SHOW_PHASE_CHECKLIST:
+        key = "progressSnapshotBlocked" if kind == "error" else "progressSnapshot"
+        snapshot = str(internal.get(key) or internal.get("progressSnapshot") or "")
     return {
         "kind": kind,
+        "progressSnapshot": snapshot,
         "text": text,
-        "instruction": _render_instruction(text),
+        "instruction": _render_instruction(text, snapshot),
     }
 
 
@@ -11327,10 +11458,16 @@ def _checkpoint_render_block(
             _WAITING_RESUME_NOTE,
         ]
     text = _join_visible(*parts)
+    snapshot = ""
+    if SHOW_PHASE_CHECKLIST:
+        key = "progressSnapshotBlocked" if kind == "error" else "progressSnapshot"
+        internal = progress["internal"]
+        snapshot = str(internal.get(key) or internal.get("progressSnapshot") or "")
     return {
         "kind": kind,
+        "progressSnapshot": snapshot,
         "text": text,
-        "instruction": _render_instruction(text),
+        "instruction": _render_instruction(text, snapshot),
     }
 
 
@@ -13635,10 +13772,12 @@ def _command_error_recovery(
 AGENT_RULES = (
     "Run every command with the launcher resolved by /setup (py -3, "
     "python3, then python), never assuming bare `python`.",
-    "Emit renderBlock.text verbatim (conversation text only; the phase "
-    "checklist is hidden), or the ordinaryReply/recovery text a guide output "
-    "returns, as an assistant message before any other tool call, unless "
-    "renderBlock.text is empty; never write your own checklist or a "
+    "When renderBlock.progressSnapshot is non-empty, first send it verbatim as "
+    "its own short chat message (plain Markdown progress list, the same way "
+    "/setup posts its progress). Then emit renderBlock.text verbatim "
+    "(conversation text only), or the ordinaryReply/recovery text a guide "
+    "output returns, as an assistant message before any other tool call, "
+    "unless renderBlock.text is empty; never write your own checklist or a "
     "Check/Status table, and terminal output is not shown to the maker.",
     "Ask every question as ordinary chat text and read the maker's typed "
     "reply; never call ask_user or open an input or selection card.",
@@ -13972,9 +14111,19 @@ def main(argv: list[str] | None = None) -> int:
             )
         if details:
             error["details"] = details
-        print(json.dumps(_with_agent_rules(error), indent=2))
+        print(
+            json.dumps(
+                _with_agent_rules(plain_text_output(error)),
+                indent=2,
+            )
+        )
         return 1
-    print(json.dumps(_with_agent_rules(result, args.command), indent=2))
+    print(
+        json.dumps(
+            _with_agent_rules(plain_text_output(result), args.command),
+            indent=2,
+        )
+    )
     return 0
 
 

@@ -121,7 +121,7 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
     assert "`preActionHandoff`" in runner
     assert "Do not render\nor ask Entra availability in the same turn" in runner
     assert "After decline, the next\nresume may ask Entra availability" in runner
-    assert "only after the user explicitly selects **Yes, let's go**" in (
+    assert "only after the maker explicitly replies **Yes, let's go**" in (
         plan_normalized
     )
     assert "The `question` field itself must contain the complete" not in plan
@@ -156,7 +156,7 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
     assert "Do **not**\n   re-render the U.0 table" in resume
     assert "DA ServiceNow business-group availability" in runner
     assert "`renderBlock.text`" in runner
-    assert "hidden by\n   `SHOW_PHASE_CHECKLIST`" in runner
+    assert "`SHOW_PHASE_CHECKLIST = False`" in runner
     assert "`renderBlock.text`" in runner
     assert "`transport.businessGroupAvailability.question`" in runner
     assert "Preflight, chooser, and instance confirmation" in runner
@@ -254,7 +254,7 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert "they are not `Completed`/`Not yet` admin evidence" in (
         runner_normalized
     )
-    assert "options are label-only" in runner_normalized
+    assert "its choices are label-only" in runner_normalized
     assert "`identityRequirementChoices`" in runner
     assert "never add `value`" in runner_normalized
     assert "`Not sure` returns waiting, writes no receipt" in runner_normalized

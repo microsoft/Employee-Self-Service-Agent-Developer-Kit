@@ -47,13 +47,15 @@ portal URL, agent binding, Test, Publish, lifecycle plan, or consent.
 - `none`: continue the normal Entra direct-capture flow without a reuse question.
 - `already-recorded`: continue; the owning Entra and OIDC checkpoints still
   evaluate the current evidence.
-- `source-selection-required`: ask one label-only question from the returned
-  candidate labels, then rerun with the selected internal `sourceKey`. Do not
-  expose the key.
-- `question-required`: pass the returned `question` object unchanged through
-  the question tool. Its body contains the exact target, source agent, and
-  eligible identity items; its `options` are label-only. Translate the
-  selected label through `reuseDecisionChoices`.
+- `source-selection-required`: send one plain chat question listing the
+  returned candidate labels by number, then rerun with the selected internal
+  `sourceKey`. Do not expose the key.
+- `question-required`: the returned `question` is already plain chat text
+  (`servicenow.plain-question.v1`). Send its `plainText` verbatim as an
+  ordinary message, never through `ask_user` or any selection card, and map the
+  typed reply with `match-reply`. Its body contains the exact target, source
+  agent, and eligible identity items. Translate the matched label through
+  `reuseDecisionChoices`.
   - **Reuse shared identity**: run
     `record-shared-reuse --source-key <internal-source-key> --decision accept`.
     This rechecks only local source hash/scope/bindings and imports only the
@@ -66,8 +68,8 @@ portal URL, agent binding, Test, Publish, lifecycle plan, or consent.
 
 After an accepted reuse, rerun `identity-direct-handoff --stage entra`.
 If it returns `decision: no-action`, immediately return
-`ACTION_RESULT = "recorded"`. Do not render instructions, call the
-question tool, rerun `record-identity-direct`, or replace the reused admin
+`ACTION_RESULT = "recorded"`. Do not render instructions, send any question,
+rerun `record-identity-direct`, or replace the reused admin
 handoff with `record-admin-phase`; the runner-owned Entra checkpoints still
 run next. Only `decision: question-required` enters the missing administrator
 work below. Partial reuse continues with only the missing administrator work.
