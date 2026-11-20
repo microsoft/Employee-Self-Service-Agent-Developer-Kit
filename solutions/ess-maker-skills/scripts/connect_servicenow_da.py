@@ -881,100 +881,158 @@ def _native_question(
     return payload
 
 
-def adapt_question_to_ask_user(
+_YES_WORDS = frozenset({"yes", "y", "yeah", "yep", "sure", "ok", "okay"})
+_NO_WORDS = frozenset({"no", "n", "nope"})
+
+
+def _reply_words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9']+", text.lower())
+
+
+def _yes_no_options(options: list[dict[str, Any]]) -> bool:
+    if len(options) != 2:
+        return False
+    first = [_reply_words(str(option["label"]))[:1] for option in options]
+    return first == [["yes"], ["no"]]
+
+
+def adapt_question_to_plain_text(
     question: dict[str, Any],
 ) -> dict[str, Any]:
+    """Render one canonical question as ordinary chat text (no input card)."""
     canonical = copy.deepcopy(question)
-    header = canonical.get("header")
     body = canonical.get("question")
-    allow_freeform = canonical.get("allowFreeformInput")
-    options = canonical.get("options")
-    if not isinstance(header, str) or not header.strip():
-        raise ServiceNowConnectError(
-            "Canonical question header must be a non-empty string."
-        )
+    options = canonical.get("options") or []
     if not isinstance(body, str) or not body.strip():
         raise ServiceNowConnectError(
             "Canonical question body must be a non-empty string."
         )
-    if not isinstance(allow_freeform, bool):
-        raise ServiceNowConnectError(
-            "Canonical question allowFreeformInput must be boolean."
-        )
-    if options is None:
-        normalized_options: list[dict[str, str]] = []
-    elif isinstance(options, list):
-        normalized_options = []
-        seen_values: set[str] = set()
-        for option in options:
-            if not isinstance(option, dict):
-                raise ServiceNowConnectError(
-                    "Canonical question options must be objects."
-                )
-            label = option.get("label")
-            value = option.get("selectionKey", label)
-            if (
-                not isinstance(label, str)
-                or not label.strip()
-                or not isinstance(value, str)
-                or not value.strip()
-                or value in seen_values
-            ):
-                raise ServiceNowConnectError(
-                    "Canonical question options must have unique non-empty "
-                    "labels and values."
-                )
-            seen_values.add(value)
-            normalized_options.append(
-                {
-                    "const": value,
-                    "title": label,
-                }
-            )
-    else:
+    if not isinstance(options, list):
         raise ServiceNowConnectError(
             "Canonical question options must be a list when present."
         )
-    if normalized_options and allow_freeform:
-        raise ServiceNowConnectError(
-            "The active ask_user_2 contract cannot faithfully combine "
-            "bounded options with canonical freeform input."
-        )
-    if not normalized_options and not allow_freeform:
-        raise ServiceNowConnectError(
-            "A canonical question without options must allow freeform input."
-        )
-
-    field: dict[str, Any] = {
-        "type": "string",
-        "title": "Selection" if normalized_options else "Input",
-        "description": body,
-    }
-    if normalized_options:
-        field["oneOf"] = normalized_options
-    requested_schema = {
-        "properties": {
-            "response": field,
-        },
-        "required": ["response"],
-    }
-    return {
-        "schemaVersion": "servicenow.ask-user-arguments.v1",
-        "canonicalQuestion": canonical,
-        "answerField": "response",
-        "canonicalAllowFreeformInput": allow_freeform,
-        "askUserArguments": {
-            "message": header,
-            "requestedSchema": requested_schema,
-        },
-        "knownHostLimitation": (
-            "The active ask_user_2 schema has no freeform-control field. "
-            "Agent Host currently exposes and accepts custom enum answers "
-            "despite canonical allowFreeformInput=false."
-            if normalized_options and not allow_freeform
+    choices: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    for number, option in enumerate(options, start=1):
+        label = option.get("label") if isinstance(option, dict) else None
+        key = (
+            option.get("selectionKey", label)
+            if isinstance(option, dict)
             else None
+        )
+        if (
+            not isinstance(label, str)
+            or not label.strip()
+            or not isinstance(key, str)
+            or not key.strip()
+            or key in seen_keys
+        ):
+            raise ServiceNowConnectError(
+                "Canonical question options must have unique non-empty "
+                "labels and values."
+            )
+        seen_keys.add(key)
+        choices.append(
+            {"number": number, "label": label, "selectionKey": key}
+        )
+    if not choices:
+        reply_kind = "freeform"
+        text = body.strip()
+    elif _yes_no_options(choices):
+        reply_kind = "yes-no"
+        text = f"{body.strip()}\n\nReply **Yes** or **No**."
+    else:
+        reply_kind = "choice"
+        listing = "\n".join(
+            f"{choice['number']}. {choice['label']}" for choice in choices
+        )
+        text = (
+            f"{body.strip()}\n\n{listing}\n\n"
+            "Reply with the number or the wording of your choice."
+        )
+    return {
+        "schemaVersion": "servicenow.plain-question.v1",
+        "canonicalQuestion": canonical,
+        "replyKind": reply_kind,
+        "plainText": text,
+        "choices": choices,
+        "delivery": (
+            "Show plainText verbatim as an ordinary chat message and wait "
+            "for the maker's typed reply. Do not call ask_user or open any "
+            "input or selection component. Map the reply with match-reply."
         ),
     }
+
+
+def match_question_reply(
+    question: dict[str, Any],
+    reply: str,
+) -> dict[str, Any]:
+    """Map a maker's typed reply onto one canonical question option."""
+    rendered = adapt_question_to_plain_text(question)
+    choices = rendered["choices"]
+    text = str(reply or "").strip()
+    base = {
+        "schemaVersion": "servicenow.question-reply-match.v1",
+        "replyKind": rendered["replyKind"],
+    }
+    if not choices:
+        if not text:
+            return {**base, "status": "unmatched", "reply": ""}
+        return {**base, "status": "freeform", "reply": text}
+
+    def matched(choice: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **base,
+            "status": "matched",
+            "selectedOption": copy.deepcopy(choice),
+        }
+
+    number = re.fullmatch(r"\s*(\d{1,2})\s*[.)]?\s*", text)
+    if number is not None:
+        index = int(number.group(1))
+        for choice in choices:
+            if choice["number"] == index:
+                return matched(choice)
+        return {**base, "status": "unmatched", "choices": choices}
+    words = _reply_words(text)
+    normalized = " ".join(words)
+    if not normalized:
+        return {**base, "status": "unmatched", "choices": choices}
+    exact = [
+        choice
+        for choice in choices
+        if " ".join(_reply_words(choice["label"])) == normalized
+    ]
+    if len(exact) == 1:
+        return matched(exact[0])
+    lead = words[0]
+    leading = [
+        choice
+        for choice in choices
+        if (_reply_words(choice["label"]) or [""])[0] == lead
+    ]
+    if lead in _YES_WORDS | _NO_WORDS:
+        wanted = "yes" if lead in _YES_WORDS else "no"
+        leading = [
+            choice
+            for choice in choices
+            if (_reply_words(choice["label"]) or [""])[0] == wanted
+        ]
+    if len(leading) == 1:
+        return matched(leading[0])
+    if len(normalized) >= 3:
+        contained = [
+            choice
+            for choice in choices
+            if normalized in " ".join(_reply_words(choice["label"]))
+            or " ".join(_reply_words(choice["label"])) in normalized
+        ]
+        if len(contained) == 1:
+            return matched(contained[0])
+        if len(contained) > 1:
+            return {**base, "status": "ambiguous", "choices": contained}
+    return {**base, "status": "unmatched", "choices": choices}
 
 
 def _identity_direct_questions(
@@ -984,47 +1042,17 @@ def _identity_direct_questions(
     confirmed_claim_name: str | None = None,
     captured_user_field: str | None = None,
 ) -> list[dict[str, Any]]:
+    # Identity questions are asked as plain chat text in ordinaryReply, so no
+    # input card is ever returned.
     if stage == "entra":
-        canonical = [
-            _native_question(
-                header="Application client ID",
-                question=(
-                    "Paste your Entra administrator's non-sensitive reply, or "
-                    "enter the Application (client) ID GUID they confirmed "
-                    "from the app registration Overview page for this exact "
-                    "target. If their reply names the claim ServiceNow should "
-                    "use, or says the standard email claim applies, we'll "
-                    "use that; otherwise we'll ask for the claim name next."
-                ),
-                allow_freeform_input=True,
-            ),
-        ]
         if captured_client_id is not None:
-            recorded_client_id = normalize_client_id(captured_client_id)
-            canonical = [
-                _native_question(
-                    header="Entra claim name",
-                    question=(
-                        f"We have the Client ID `{recorded_client_id}`. "
-                        "Next, we need the **exact claim name** your Entra "
-                        "administrator configured for ServiceNow to use "
-                        "(`email`, `upn`, or a custom claim name).\n\n"
-                        "Ask your Entra administrator for that name, or paste "
-                        "the rest of their non-sensitive reply. You don't "
-                        "need to resend the Client ID. Enter a claim name "
-                        "only; do not enter `aud` or a personal claim value."
-                    ),
-                    allow_freeform_input=True,
-                )
-            ]
+            normalize_client_id(captured_client_id)
     elif stage == "servicenow":
         if not confirmed_claim_name:
             raise ServiceNowConnectError(
                 "ServiceNow direct questions require the locked "
                 "Entra-confirmed User Claim name."
             )
-        # The User Field is asked as plain chat text in ordinaryReply, so no
-        # input card is returned for this stage.
         if captured_user_field is not None:
             user_field = str(captured_user_field).strip()
             if not _SAFE_USER_FIELD.fullmatch(user_field):
@@ -1032,20 +1060,19 @@ def _identity_direct_questions(
                     "servicenow_user_field must be an explicit safe "
                     "ServiceNow internal field name."
                 )
-        canonical = []
     else:
         raise ServiceNowConnectError(
             "Identity direct handoff stage must be entra or servicenow."
         )
-    return [
-        {
-            "canonicalQuestion": question,
-            "askUserArguments": adapt_question_to_ask_user(question)[
-                "askUserArguments"
-            ],
-        }
-        for question in canonical
-    ]
+    return []
+
+
+ENTRA_CLAIM_FOLLOW_UP_TEXT = (
+    "We have the Client ID. Ask your Entra administrator which claim "
+    "ServiceNow should use to match employees (`email`, `upn`, or a custom "
+    "claim name).\n\nPaste the rest of their reply or send that value on "
+    "its own. Don't include secrets or employee values."
+)
 
 
 def _identity_direct_group(
@@ -1241,7 +1268,7 @@ def identity_direct_handoff(
                 "acknowledged": False,
                 "reason": "current-completed-or-reused-evidence",
                 "question": None,
-                "askUserArguments": None,
+                "plainText": None,
             },
             "questions": [],
             "secretsAccepted": False,
@@ -1273,8 +1300,8 @@ def identity_direct_handoff(
                 "contextIdentitySha256": context_sha256,
                 "question": question,
                 "questionSha256": _canonical_json_hash(question),
-                "askUserArguments": adapt_question_to_ask_user(question)[
-                    "askUserArguments"
+                "plainText": adapt_question_to_plain_text(question)[
+                    "plainText"
                 ],
                 "unavailableReply": (
                     f"Please involve your {group['role']} for "
@@ -1357,7 +1384,10 @@ def identity_direct_handoff(
         "runtimeInstructionSha256": instruction_sha256,
         "runtimeInstructionContentSha256": _canonical_json_hash(source_text),
         "ordinaryReply": (
-            None
+            {
+                "kind": "ordinary-agent-response",
+                "text": ENTRA_CLAIM_FOLLOW_UP_TEXT,
+            }
             if captured_client_id is not None
             else {
                 "kind": "ordinary-agent-response",
@@ -1391,7 +1421,7 @@ def identity_direct_handoff(
             "contextIdentity": group_context,
             "contextIdentitySha256": context_sha256,
             "question": None,
-            "askUserArguments": None,
+            "plainText": None,
         },
         "target": target_text,
         "contractBoundary": contract_boundary,
@@ -5971,11 +6001,7 @@ def _preflight_instance_question(
     dict[str, str],
     dict[str, Any],
 ]:
-    agent_label = (
-        f"{ACTIVE_PROFILE.agent_display_name} (`{_agent_slug(context)}`)"
-    )
-    environment_id = context["environment"]["id"]
-    realm = str(context["agent"].get("realm") or "dev").title()
+    agent_label = ACTIVE_PROFILE.agent_display_name
     error_text = ""
     if discovery_error is not None:
         error_text = (
@@ -5987,15 +6013,14 @@ def _preflight_instance_question(
     manual_question = {
         "header": "ServiceNow instance URL",
         "question": (
-            f"For {agent_label} in environment `{environment_id}` and "
-            f"{realm} realm, which ServiceNow instance should Employee "
-            "Self-Service use? Send its public HTTPS root URL, not "
-            "credentials.\n\nExample: `https://<your-instance>.service-now.com`\n\n"
-            "Use only the instance root (`https://<instance>.service-now.com`). "
-            "Do not enter a portal or module path such as `/sp`, `/esc`, or "
-            "`/now/...`. Do not enter a username, password, credential, token, "
-            "secret, or certificate. If you do not know the URL, ask your "
-            f"ServiceNow administrator for the public instance root.{error_text}"
+            f"Which ServiceNow instance should {agent_label} use? Send its "
+            "public HTTPS URL, not credentials.\n\n"
+            "Example: `https://<your-instance>.service-now.com`\n\n"
+            "Use only the instance root. Don't include a portal or module "
+            "path such as `/sp`, `/esc`, or `/now/...`, and don't send a "
+            "username, password, token, secret, or certificate. If you "
+            "don't know the URL, ask your ServiceNow administrator for the "
+            f"public instance URL.{error_text}"
         ),
         "allowFreeformInput": True,
     }
@@ -6010,14 +6035,9 @@ def _preflight_instance_question(
         question = {
             "header": "Confirm ServiceNow instance",
             "question": (
-                f"We found ServiceNow instance candidate"
-                f"{'s' if len(candidates) != 1 else ''} in existing connection "
-                f"metadata for {agent_label} in environment "
-                f"`{environment_id}` and {realm} realm. Which instance should "
-                "this agent use for the current connection setup?\n\n"
-                "Choose one discovered public root URL below, or choose "
-                "**Provide another ServiceNow instance URL** to enter a "
-                f"different public HTTPS root URL.{error_text}"
+                f"Which ServiceNow instance should {agent_label} use? We "
+                f"found {'these instances' if len(candidates) != 1 else 'this instance'} "
+                f"in existing connection details.{error_text}"
             ),
             "options": [
                 {"label": label}
@@ -6508,7 +6528,7 @@ def portal_value_reuse_handoff(
             "question": (
                 "An administrator-confirmed employee portal URL is already "
                 f"saved for another agent in this workspace: "
-                f"`{selected['portalUrl']}` "
+                f"{selected['portalUrl']} "
                 f"(from {', '.join(selected['sourceLabels'])}).\n\n"
                 "Do you want to reuse it for this agent? We'll still check "
                 "and update this agent's own portal setting if needed."
@@ -7062,13 +7082,13 @@ def shared_reuse_handoff(
         "question": {
             "header": "Reuse shared identity",
             "question": (
-                f"The {candidate['sourceProfile'].upper()} agent "
-                f"`{candidate['sourceAgentSlug']}` in this workspace already "
-                "has compatible administrator setup for ServiceNow instance "
-                f"`{candidate['instanceName']}`. You can reuse these "
-                f"items:\n\n{item_lines}\n\n"
+                f"The {'HR' if candidate['sourceProfile'] == 'hrsd' else 'IT'} "
+                "agent in this "
+                "workspace already has compatible administrator setup for "
+                f"ServiceNow instance {candidate['instanceName']}. You can "
+                f"reuse these items:\n\n{item_lines}\n\n"
                 "Reuse avoids repeating compatible administrator setup, but "
-                "each owning readiness check still runs for this agent.\n\n"
+                "we'll still check this agent's own setup.\n\n"
                 "What would you like to do?"
             ),
             "options": [
@@ -9250,7 +9270,11 @@ def portal_url_confirmation(
             {"label": "No, use a different URL"},
         ],
         "allowFreeformInput": False,
-        "savedMessage": "We'll save that portal URL.",
+        "savedMessage": (
+            "We'll save that portal URL and turn on the built-in ServiceNow "
+            f"{'HR' if ACTIVE_PROFILE.key == 'hrsd' else 'IT'} topics, "
+            "including system topics. Unrelated topics will stay unchanged."
+        ),
     }
 
 
@@ -10128,7 +10152,7 @@ def _build_phase_progress(
         "renderable": False,
         "groupedText": grouped,
         "groupedFinalText": (
-            f"{grouped}\n\n{final_message}"
+            _join_visible(grouped, final_message)
             if final_message is not None
             else None
         ),
@@ -10714,6 +10738,21 @@ def _current_task_guidance(
     )
 
 
+SHOW_PHASE_CHECKLIST = False
+"""Maker-visible phase checklist switch.
+
+The grouped "Automatic setup / Phases" view is hidden from makers for now so
+they see only the conversational-flow text. Set this to True to restore it.
+Progress items, counts, evidence, and resume logic never depend on it.
+"""
+
+
+def _join_visible(*parts: Any) -> str:
+    return "\n\n".join(
+        str(part) for part in parts if isinstance(part, str) and part.strip()
+    )
+
+
 def _render_grouped_phases(
     contract: dict[str, Any],
     items: list[dict[str, Any]],
@@ -10724,7 +10763,10 @@ def _render_grouped_phases(
     """Render the grouped phase view used by every Connect transition.
 
     ``current_override`` is ``(phase_id, icon, text)`` for the current step.
+    Returns an empty string while ``SHOW_PHASE_CHECKLIST`` is False.
     """
+    if not SHOW_PHASE_CHECKLIST:
+        return ""
     visible_by_id = {
         str(item["id"]): item for item in items
     }
@@ -10831,7 +10873,7 @@ def _business_group_transport(
             role=current_group["role"],
         )
         if guidance:
-            ordinary_text += "\n\n" + guidance
+            ordinary_text = _join_visible(ordinary_text, guidance)
     question = (
         _business_group_availability_question(current_group)
         if gate_required
@@ -11175,6 +11217,16 @@ _RENDER_INSTRUCTION = (
     "never shown."
 )
 
+_NO_RENDER_INSTRUCTION = (
+    "`text` is empty: there is no maker-visible message for this step. Do "
+    "not write a checklist, status table, or progress list; continue with "
+    "the next instruction."
+)
+
+
+def _render_instruction(text: str) -> str:
+    return _RENDER_INSTRUCTION if text else _NO_RENDER_INSTRUCTION
+
 
 _WAITING_RESUME_NOTE = (
     "Progress is saved. Run `/connect servicenow` again when you are ready "
@@ -11229,11 +11281,13 @@ def _resume_render_block(
             )
         ]
         if isinstance(current, dict) and not availability["gateRequired"]:
-            parts.append(str(current["startText"]))
+            if SHOW_PHASE_CHECKLIST:
+                parts.append(str(current["startText"]))
+    text = _join_visible(*parts)
     return {
         "kind": kind,
-        "text": "\n\n".join(parts),
-        "instruction": _RENDER_INSTRUCTION,
+        "text": text,
+        "instruction": _render_instruction(text),
     }
 
 
@@ -11272,10 +11326,11 @@ def _checkpoint_render_block(
             current["waitingText"],
             _WAITING_RESUME_NOTE,
         ]
+    text = _join_visible(*parts)
     return {
         "kind": kind,
-        "text": "\n\n".join(parts),
-        "instruction": _RENDER_INSTRUCTION,
+        "text": text,
+        "instruction": _render_instruction(text),
     }
 
 
@@ -12749,8 +12804,20 @@ def build_parser() -> argparse.ArgumentParser:
         "adapt-question",
         help=(
             "Read one canonical ServiceNow question object from stdin and "
-            "return the active ask_user message/requestedSchema arguments."
+            "return its plain chat text (no input card)."
         ),
+    )
+    match_parser = subparsers.add_parser(
+        "match-reply",
+        help=(
+            "Read one canonical question object from stdin and map the "
+            "maker's typed reply onto one of its options."
+        ),
+    )
+    match_parser.add_argument(
+        "--reply",
+        required=True,
+        help="The maker's typed reply, such as Yes, 2, or an option wording.",
     )
     subparsers.add_parser(
         "list-agents",
@@ -13568,14 +13635,16 @@ def _command_error_recovery(
 AGENT_RULES = (
     "Run every command with the launcher resolved by /setup (py -3, "
     "python3, then python), never assuming bare `python`.",
-    "Emit renderBlock.text verbatim (the grouped phases view), or the "
-    "ordinaryReply/recovery text a guide output returns, as an assistant "
-    "message before any other tool call; never write your own checklist or "
-    "a Check/Status table, and terminal output is not shown to the maker.",
+    "Emit renderBlock.text verbatim (conversation text only; the phase "
+    "checklist is hidden), or the ordinaryReply/recovery text a guide output "
+    "returns, as an assistant message before any other tool call, unless "
+    "renderBlock.text is empty; never write your own checklist or a "
+    "Check/Status table, and terminal output is not shown to the maker.",
+    "Ask every question as ordinary chat text and read the maker's typed "
+    "reply; never call ask_user or open an input or selection card.",
     "Never edit lifecycle.json by hand; record results with "
-    "record-checkpoint-results or the matching record-* command.",
-    "Never hide command output (no `*> $null`, no `| Out-Null`); read the "
-    "full JSON.",
+    "record-checkpoint-results or the matching record-* command. Never hide "
+    "command output (no `*> $null`, no `| Out-Null`); read the full JSON.",
     "If you have not read src/skills/connect/shared/lifecycle-runner.md in "
     "this chat, read it now.",
 )
@@ -13585,8 +13654,11 @@ def _with_agent_rules(
     result: Any,
     command: str | None = None,
 ) -> Any:
-    """Prepend rules to every command output; `adapt-question` output stays unchanged."""
-    if not isinstance(result, dict) or command == "adapt-question":
+    """Prepend rules to every command output; question helpers stay unchanged."""
+    if not isinstance(result, dict) or command in {
+        "adapt-question",
+        "match-reply",
+    }:
         return result
     ordered: dict[str, Any] = {}
     if "renderBlock" in result:
@@ -13606,19 +13678,23 @@ def main(argv: list[str] | None = None) -> int:
         if profile is None:  # pragma: no cover
             raise ServiceNowConnectError("Unsupported ServiceNow provider.")
         configure_product_profile(profile.key)
-        if args.command == "adapt-question":
+        if args.command in {"adapt-question", "match-reply"}:
             raw_question = sys.stdin.read()
             if not raw_question.strip():
                 raise ServiceNowConnectError(
-                    "adapt-question requires one canonical question JSON "
+                    f"{args.command} requires one canonical question JSON "
                     "object on stdin."
                 )
             parsed_question = json.loads(raw_question)
             if not isinstance(parsed_question, dict):
                 raise ServiceNowConnectError(
-                    "adapt-question stdin must be one JSON object."
+                    f"{args.command} stdin must be one JSON object."
                 )
-            result = adapt_question_to_ask_user(parsed_question)
+            result = (
+                match_question_reply(parsed_question, args.reply)
+                if args.command == "match-reply"
+                else adapt_question_to_plain_text(parsed_question)
+            )
         elif args.command == "list-agents":
             result = (
                 list_agent_choices(maker_username=args.maker_username)
@@ -13842,6 +13918,7 @@ def main(argv: list[str] | None = None) -> int:
             result = run_realm_command(context, args)
         elif args.command not in {
             "adapt-question",
+            "match-reply",
             "list-agents",
             "agent-chooser",
         }:  # pragma: no cover

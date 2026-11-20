@@ -161,6 +161,13 @@ def _environments(*ids: str) -> list[dict[str, Any]]:
     ]
 
 
+@pytest.fixture(autouse=True)
+def _checklist_visible(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rendering tests exercise the restorable checklist; default-hidden
+    tests set the flag back to False inside the test."""
+    monkeypatch.setattr(realms, "SHOW_REALM_CHECKLIST", True)
+
+
 @pytest.fixture
 def no_dns(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
@@ -1054,11 +1061,10 @@ def test_case_one_reuses_the_dev_setup_without_any_administrator_handoff(
     text = _block(result)
     assert result["renderBlock"]["case"] == "dev-reuse"
     assert (
-        "We'll reuse the administrator-confirmed sign-in setup and employee "
-        "mapping from Dev for this ServiceNow instance. You don't need to ask "
-        "your administrators again. We'll only check the Test connection, "
-        "topics, portal URL, and a real-data test."
+        "We'll retain the administrator-confirmed sign-in setup and employee "
+        "mapping that still applies to this ServiceNow instance."
     ) in text
+    assert "We won't repeat completed administrator work." in text
     assert _icons(text) == ["✅", "✅", "✅", "✅", "⏳"]
     assert "Microsoft Entra administrator" not in text
     assert "ServiceNow administrator" not in text
@@ -1624,6 +1630,25 @@ def test_realm_block_untested_and_ready_footers() -> None:
 
 def test_realm_status_without_render_context_has_no_block() -> None:
     assert "renderBlock" not in realms.realm_status(_registry())
+
+
+def test_realm_checklist_is_hidden_by_default_and_state_is_intact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(realms, "SHOW_REALM_CHECKLIST", False)
+    registry = _registry()
+    result = realms.realm_status(registry, render=_render_context(footer="Footer."))
+    block = result["renderBlock"]
+    assert block["kind"] == "realm-step"
+    assert not _icons(block["text"])
+    assert block["text"].endswith("Footer.")
+    assert "✅" not in block["text"] and "⬜" not in block["text"]
+    assert result["realmIntro"]
+
+    monkeypatch.setattr(realms, "SHOW_REALM_CHECKLIST", True)
+    shown = realms.realm_status(registry, render=_render_context(footer="Footer."))
+    assert shown["renderBlock"]["kind"] == "realm-checklist"
+    assert _icons(shown["renderBlock"]["text"])
 
 
 def test_realm_block_has_no_technical_headers() -> None:

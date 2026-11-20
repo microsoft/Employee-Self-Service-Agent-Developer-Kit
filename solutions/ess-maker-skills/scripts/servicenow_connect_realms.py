@@ -884,14 +884,23 @@ def foundation_reused(expected: Mapping[str, Any]) -> bool:
     return all(sources.get(key) == "dev-record" for key in EXPECTED_KEYS)
 
 
+SHOW_REALM_CHECKLIST = False
+"""Maker-visible Test/Prod checklist switch (True restores the old rows).
+
+While False, ``renderBlock.text`` carries only the current conversational
+step and the intro is returned separately as ``realmIntro``. Recorded
+stages, statuses, and resume logic never depend on this switch.
+"""
+
 ADMIN_CASE_REUSE = "dev-reuse"
 ADMIN_CASE_INDEPENDENT = "independent"
 ADMIN_EXPLANATIONS = {
     ADMIN_CASE_REUSE: (
-        "We'll reuse the administrator-confirmed sign-in setup and employee "
-        "mapping from Dev for this ServiceNow instance. You don't need to ask "
-        "your administrators again. We'll only check the {label} connection, "
-        "topics, portal URL, and a real-data test."
+        "We'll retain the administrator-confirmed sign-in setup and employee "
+        "mapping that still applies to this ServiceNow instance. We won't "
+        "repeat completed administrator work. You don't need to resend "
+        "earlier replies unless a specific confirmation is missing or no "
+        "longer applies."
     ),
     ADMIN_CASE_INDEPENDENT: (
         "We couldn't find a completed Dev setup for this agent, so we'll run "
@@ -1784,6 +1793,9 @@ def render_realm_block(
         ("Portal URL", portal),
         ("Real-data test in the Test pane", real_data),
     ]
+    footer = instruction or context.get("footer")
+    if not SHOW_REALM_CHECKLIST:
+        return str(footer) if footer else None
     lines = [
         f"**ServiceNow validation: {agent} in {label}**",
         "",
@@ -1791,7 +1803,6 @@ def render_realm_block(
         "",
     ]
     lines += [f"{icon} {name} — {text}" for name, (icon, text) in rows]
-    footer = instruction or context.get("footer")
     if footer:
         lines += ["", str(footer)]
     return "\n".join(lines)
@@ -1850,10 +1861,15 @@ def realm_status(
     }
     if render is not None:
         text = render_realm_block(registry, active, render)
+        case = admin_case(registry["targets"][active])
         if text is not None:
             result["renderBlock"] = {
-                "kind": "realm-checklist",
-                "case": admin_case(registry["targets"][active]),
+                "kind": "realm-checklist" if SHOW_REALM_CHECKLIST else "realm-step",
+                "case": case,
                 "text": text,
             }
+        if not SHOW_REALM_CHECKLIST:
+            result["realmIntro"] = ADMIN_EXPLANATIONS[case].format(
+                label=active.title()
+            )
     return result

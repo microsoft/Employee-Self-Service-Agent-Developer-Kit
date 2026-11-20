@@ -93,6 +93,13 @@ def _disable_tamper_check_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(snow, "state_integrity_mismatch", lambda _state: False)
 
 
+@pytest.fixture(autouse=True)
+def _checklist_visible(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rendering tests exercise the restorable checklist; default-hidden
+    tests set the flag back to False inside the test."""
+    monkeypatch.setattr(snow, "SHOW_PHASE_CHECKLIST", True)
+
+
 @pytest.fixture
 def tamper_check_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
@@ -2622,34 +2629,31 @@ def test_generated_question_families_have_distinct_headers_and_bodies() -> None:
             ), family
         else:
             assert question["allowFreeformInput"] is True, family
-        adapted = snow.adapt_question_to_ask_user(question)
+        adapted = snow.adapt_question_to_plain_text(question)
+        assert adapted["schemaVersion"] == "servicenow.plain-question.v1", family
         assert adapted["canonicalQuestion"] == question, family
-        assert adapted["askUserArguments"]["message"] == (
-            question["header"]
-        ), family
-        field = adapted["askUserArguments"]["requestedSchema"][
-            "properties"
-        ]["response"]
-        assert field["description"] == question["question"], family
-        assert adapted["askUserArguments"]["requestedSchema"]["required"] == [
-            "response"
-        ], family
+        text = adapted["plainText"]
+        assert text.startswith(question["question"].strip()), family
+        assert "askUserArguments" not in adapted, family
+        assert "requestedSchema" not in adapted, family
         if options:
-            assert field["title"] == "Selection", family
-            assert [item["title"] for item in field["oneOf"]] == [
+            assert [item["label"] for item in adapted["choices"]] == [
                 option["label"] for option in options
             ], family
-            assert adapted["knownHostLimitation"], family
+            assert adapted["replyKind"] in {"choice", "yes-no"}, family
+            assert all(option["label"] in text for option in options) or (
+                adapted["replyKind"] == "yes-no"
+            ), family
         else:
-            assert field["title"] == "Input", family
-            assert "oneOf" not in field, family
-            assert adapted["knownHostLimitation"] is None, family
+            assert adapted["replyKind"] == "freeform", family
+            assert adapted["choices"] == [], family
+            assert text == question["question"].strip(), family
 
 
-def test_ask_user_adapter_preserves_selection_values_and_freeform() -> None:
+def test_plain_text_adapter_renders_choices_and_tolerates_typed_replies() -> None:
     selection = {
         "header": "Choose agent",
-        "question": "Which prepared agent should be used?",
+        "question": "Which agent should be used?",
         "options": [
             {
                 "label": "Employee Self-Service (HR)",
@@ -2663,55 +2667,96 @@ def test_ask_user_adapter_preserves_selection_values_and_freeform() -> None:
         "allowFreeformInput": False,
     }
     original = copy.deepcopy(selection)
-    adapted = snow.adapt_question_to_ask_user(selection)
-    field = adapted["askUserArguments"]["requestedSchema"]["properties"][
-        "response"
-    ]
+    adapted = snow.adapt_question_to_plain_text(selection)
     assert selection == original
-    assert adapted["askUserArguments"]["message"] == "Choose agent"
-    assert field == {
-        "type": "string",
-        "title": "Selection",
-        "description": "Which prepared agent should be used?",
-        "oneOf": [
-            {
-                "const": "prepared:hr",
-                "title": "Employee Self-Service (HR)",
-            },
-            {
-                "const": "another-agent",
-                "title": "Use another agent",
-            },
+    assert adapted["replyKind"] == "choice"
+    assert adapted["plainText"] == (
+        "Which agent should be used?\n\n"
+        "1. Employee Self-Service (HR)\n"
+        "2. Use another agent\n\n"
+        "Reply with the number or the wording of your choice."
+    )
+    assert "prepared:hr" not in adapted["plainText"]
+
+    def selected(reply: str) -> str | None:
+        match = snow.match_question_reply(selection, reply)
+        if match["status"] != "matched":
+            return None
+        return match["selectedOption"]["selectionKey"]
+
+    assert selected("1") == "prepared:hr"
+    assert selected(" 2. ") == "another-agent"
+    assert selected("employee self-service (hr)") == "prepared:hr"
+    assert selected("another agent") == "another-agent"
+    assert selected("3") is None
+    assert snow.match_question_reply(selection, "banana")["status"] == (
+        "unmatched"
+    )
+
+
+def test_plain_text_adapter_yes_no_and_freeform() -> None:
+    yes_no = snow._native_question(
+        header="Admin",
+        question="Is your ServiceNow administrator available?",
+        option_labels=[
+            "Yes, the ServiceNow admin is available now",
+            "No, I need to bring the ServiceNow admin in",
         ],
-    }
-    assert adapted["canonicalAllowFreeformInput"] is False
-    assert "no freeform-control field" in adapted["knownHostLimitation"]
+    )
+    adapted = snow.adapt_question_to_plain_text(yes_no)
+    assert adapted["replyKind"] == "yes-no"
+    assert adapted["plainText"] == (
+        "Is your ServiceNow administrator available?\n\n"
+        "Reply **Yes** or **No**."
+    )
+    for reply, index in (
+        ("yes", 0),
+        ("Yeah", 0),
+        ("1", 0),
+        ("No, not yet", 1),
+        ("nope", 1),
+    ):
+        match = snow.match_question_reply(yes_no, reply)
+        assert match["status"] == "matched", reply
+        assert match["selectedOption"]["label"] == (
+            yes_no["options"][index]["label"]
+        ), reply
+    assert snow.match_question_reply(yes_no, "maybe later")["status"] == (
+        "unmatched"
+    )
 
     freeform = {
         "header": "ServiceNow instance URL",
         "question": "Enter the public ServiceNow HTTPS root URL.",
         "allowFreeformInput": True,
     }
-    adapted = snow.adapt_question_to_ask_user(freeform)
-    assert adapted["askUserArguments"] == {
-        "message": "ServiceNow instance URL",
-        "requestedSchema": {
-            "properties": {
-                "response": {
-                    "type": "string",
-                    "title": "Input",
-                    "description": (
-                        "Enter the public ServiceNow HTTPS root URL."
-                    ),
-                }
-            },
-            "required": ["response"],
-        },
+    adapted = snow.adapt_question_to_plain_text(freeform)
+    assert adapted["replyKind"] == "freeform"
+    assert adapted["plainText"] == (
+        "Enter the public ServiceNow HTTPS root URL."
+    )
+    typed = snow.match_question_reply(freeform, " https://dev1.service-now.com ")
+    assert typed == {
+        "schemaVersion": "servicenow.question-reply-match.v1",
+        "replyKind": "freeform",
+        "status": "freeform",
+        "reply": "https://dev1.service-now.com",
     }
-    assert adapted["knownHostLimitation"] is None
+    assert snow.match_question_reply(freeform, "  ")["status"] == "unmatched"
 
 
-def test_adapt_question_cli_reads_canonical_json_from_stdin(
+def test_plain_text_adapter_reports_ambiguous_replies() -> None:
+    question = snow._native_question(
+        header="Choose",
+        question="Which connection should be used?",
+        option_labels=["Use the shared connection", "Use the shared service"],
+    )
+    match = snow.match_question_reply(question, "shared")
+    assert match["status"] == "ambiguous"
+    assert len(match["choices"]) == 2
+
+
+def test_adapt_question_cli_returns_plain_text_from_stdin(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -2735,17 +2780,41 @@ def test_adapt_question_cli_reads_canonical_json_from_stdin(
     assert snow.main(["adapt-question"]) == 0
 
     result = json.loads(capsys.readouterr().out)
-    assert result["schemaVersion"] == "servicenow.ask-user-arguments.v1"
+    assert result["schemaVersion"] == "servicenow.plain-question.v1"
     assert result["canonicalQuestion"] == question
-    assert result["askUserArguments"]["message"] == "HR prerequisite"
-    field = result["askUserArguments"]["requestedSchema"]["properties"][
-        "response"
-    ]
-    assert field["title"] == "Selection"
-    assert field["description"] == question["question"]
-    assert [item["title"] for item in field["oneOf"]] == [
-        option["label"] for option in question["options"]
-    ]
+    assert result["replyKind"] == "yes-no"
+    assert result["plainText"].endswith("Reply **Yes** or **No**.")
+    assert "askUserArguments" not in result
+
+
+def test_match_reply_cli_maps_typed_reply_from_stdin(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    question = snow._native_question(
+        header="Admin",
+        question="Is your ServiceNow administrator available?",
+        option_labels=[
+            "Yes, the ServiceNow admin is available now",
+            "No, I need to bring the ServiceNow admin in",
+        ],
+    )
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(question)))
+    monkeypatch.setattr(
+        snow,
+        "load_context",
+        lambda **_kwargs: pytest.fail(
+            "match-reply must not load lifecycle context"
+        ),
+    )
+
+    assert snow.main(["match-reply", "--reply", "yes"]) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["schemaVersion"] == "servicenow.question-reply-match.v1"
+    assert result["status"] == "matched"
+    assert result["selectedOption"]["number"] == 1
+    assert "agentRules" not in result
 
 
 @pytest.mark.parametrize("legacy_status", ("pending", "done"))
@@ -4430,19 +4499,17 @@ def test_preflight_requires_maker_confirmation_for_single_candidate(
         {"label": "Provide another ServiceNow instance URL"},
     ]
     candidate_body = discovery["instanceQuestion"]["question"]
-    assert "We found ServiceNow instance candidate" in candidate_body
-    assert "Employee Self-Service (HR)" in candidate_body
-    assert "employee-self-service-hr" in candidate_body
-    assert ENVIRONMENT_ID in candidate_body
-    assert "Dev realm" in candidate_body
-    assert "Which instance should this agent use" in candidate_body
-    assert "**Problem**" not in candidate_body
-    assert "**Category**" not in candidate_body
-    assert "**Check again and resume**" not in candidate_body
+    assert candidate_body == (
+        "Which ServiceNow instance should Employee Self-Service (HR) use? "
+        "We found this instance in existing connection details."
+    )
+    assert "employee-self-service-hr" not in candidate_body
+    assert ENVIRONMENT_ID not in candidate_body
+    assert "Dev realm" not in candidate_body
     manual = discovery["manualInstanceQuestion"]
     assert manual["allowFreeformInput"] is True
     assert "Employee Self-Service (HR)" in manual["question"]
-    assert ENVIRONMENT_ID in manual["question"]
+    assert ENVIRONMENT_ID not in manual["question"]
     assert "`https://<your-instance>.service-now.com`" in manual["question"]
     assert "ask your ServiceNow administrator" in manual["question"]
     assert "/sp" in manual["question"]
@@ -4518,13 +4585,13 @@ def test_preflight_requests_only_missing_instance_url(
         discovery["manualInstanceQuestion"]
     )
     manual_body = discovery["instanceQuestion"]["question"]
-    assert "employee-self-service-hr" in manual_body
-    assert ENVIRONMENT_ID in manual_body
-    assert "Dev realm" in manual_body
+    assert "employee-self-service-hr" not in manual_body
+    assert ENVIRONMENT_ID not in manual_body
+    assert "Dev realm" not in manual_body
     assert "`https://<your-instance>.service-now.com`" in manual_body
     assert (
-        "which ServiceNow instance should Employee Self-Service use? Send its "
-        "public HTTPS root URL, not credentials."
+        "Which ServiceNow instance should Employee Self-Service (HR) use? "
+        "Send its public HTTPS URL, not credentials."
     ) in manual_body
     assert "portal or module path" in manual_body
     assert "credential" in manual_body
@@ -4576,7 +4643,7 @@ def test_preflight_multiple_candidates_are_independent_normal_choices(
         "Provide another ServiceNow instance URL": "manual",
     }
     assert display_name in question["question"]
-    assert slug in question["question"]
+    assert slug not in question["question"]
     assert "**Problem**" not in question["question"]
     assert manual["header"] == "ServiceNow instance URL"
     assert "`https://<your-instance>.service-now.com`" in manual["question"]
@@ -5029,16 +5096,20 @@ def test_shared_reuse_partial_hr_to_it_requires_one_maker_acceptance(
             {"label": "Not now", "decision": "not-now"},
         ]
         body = handoff["question"]["question"]
-        assert "ServiceNow instance `dev123`" in body
+        assert "ServiceNow instance dev123" in body
+        assert "`" not in body
         for technical in ("Current target:", "Environment:", "Realm:", "Agent:"):
             assert technical not in body
         assert ENVIRONMENT_ID not in body
-        assert "HRSD agent `employee-self-service-hr`" in body
+        assert "HR agent in this workspace" in body
+        assert "employee-self-service-hr" not in body
+        assert "we'll still check this agent's own setup" in body
         assert "Entra administrator-confirmed application" in body
         assert "Current target-bound ServiceNow user-field mapping" in body
         assert "Physical ServiceNow" not in body
         assert "fresh read of that exact connection" not in body
-        assert "each owning readiness check still runs" in body
+        assert "we'll still check this agent's own setup" in body
+        assert "each owning readiness check still runs" not in body
 
         result = snow.apply_shared_configuration_reuse(
             context,
@@ -7430,16 +7501,12 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     assert gated["availability"]["question"]["question"] == (
         "Is your Microsoft Entra administrator available to complete this step?"
     )
-    gated_arguments = gated["availability"]["askUserArguments"]
-    gated_field = gated_arguments["requestedSchema"]["properties"]["response"]
-    assert gated_arguments["message"] == "Entra identity"
-    assert gated_field["title"] == "Selection"
-    assert gated_field["description"] == "Is your Microsoft Entra administrator available to complete this step?"
-    assert [option["title"] for option in gated_field["oneOf"]] == [
-        "Yes, the Entra admin is available now",
-        "No, I need to bring the Entra admin in",
-    ]
-    assert gated_arguments["requestedSchema"]["required"] == ["response"]
+    gated_plain = gated["availability"]["plainText"]
+    assert gated_plain == (
+        "Is your Microsoft Entra administrator available to complete this step?"
+        "\n\nReply **Yes** or **No**."
+    )
+    assert "askUserArguments" not in gated["availability"]
     assert entra["decision"] == "instructions-required"
     assert entra["availability"]["acknowledged"] is True
     assert entra["runtimeInstructionPath"].replace("\\", "/").endswith(
@@ -7457,25 +7524,8 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     )
     assert source_text == canonical_entra
     assert "The Entra administrator should:" not in ordinary
-    assert len(entra["questions"]) == 1
-    assert [
-        item["canonicalQuestion"]["header"]
-        for item in entra["questions"]
-    ] == [
-        "Application client ID",
-    ]
-    assert "Selected User Claim" not in json.dumps(entra["questions"])
-    assert "non-sensitive reply" in entra["questions"][0]["canonicalQuestion"][
-        "question"
-    ]
-    for item in entra["questions"]:
-        canonical = item["canonicalQuestion"]
-        arguments = item["askUserArguments"]
-        field = arguments["requestedSchema"]["properties"]["response"]
-        assert arguments["message"] == canonical["header"]
-        assert field["description"] == canonical["question"]
-        assert field["title"] in {"Selection", "Input"}
-        assert arguments["requestedSchema"]["required"] == ["response"]
+    assert entra["questions"] == []
+    assert "askUserArguments" not in json.dumps(entra)
 
     with snow.product_profile_context(profile_key):
         captured = snow.record_identity_direct(
@@ -7796,40 +7846,19 @@ def test_direct_identity_handoff_pauses_before_instructions_until_ack(
     assert acknowledgement["businessGroupId"] == "entra-identity"
     assert after_yes["decision"] == "instructions-required"
     assert after_yes["ordinaryReply"]["text"]
-    assert after_yes["questions"][0]["canonicalQuestion"]["header"] == (
-        "Application client ID"
-    )
-    assert [
-        item["canonicalQuestion"]["header"]
-        for item in after_client["questions"]
-    ] == [
-        "Entra claim name",
-    ]
+    assert after_yes["questions"] == []
+    assert after_client["questions"] == []
     assert after_client["retainedDirectInput"] == {
         "applicationClientId": APP_CLIENT_ID,
     }
-    assert after_client["ordinaryReply"] is None
-    claim_followup = after_client["questions"][0]["canonicalQuestion"][
-        "question"
-    ]
-    assert claim_followup.startswith(
-        f"We have the Client ID `{APP_CLIENT_ID}`. Next, we need the "
-        "**exact claim name** your Entra administrator configured for "
-        "ServiceNow to use (`email`, `upn`, or a custom claim name).\n\n"
-        "Ask your Entra administrator for that name, or paste the rest of "
-        "their non-sensitive reply. You don't need to resend the Client ID."
+    assert after_client["ordinaryReply"]["text"] == (
+        snow.ENTRA_CLAIM_FOLLOW_UP_TEXT
     )
-    assert "do not enter `aud`" in claim_followup
-    assert all(
-        item["canonicalQuestion"]["header"]
-        != "Entra administrator availability"
-        for item in after_yes["questions"]
-    )
+    assert "do not enter `aud`" not in after_client["ordinaryReply"]["text"]
+    assert APP_CLIENT_ID not in after_client["ordinaryReply"]["text"]
     assert same_group_resume["availability"]["acknowledged"] is True
-    assert same_group_resume["questions"][0]["canonicalQuestion"][
-        "header"
-    ] == "Application client ID"
     assert same_group_resume["questions"] == after_yes["questions"]
+    assert same_group_resume["ordinaryReply"] == after_yes["ordinaryReply"]
     assert path.read_bytes() == acknowledged_bytes
 
 
@@ -8326,9 +8355,8 @@ def test_direct_identity_cli_roundtrips_both_admin_stages(
     _ack_identity_availability(context, stage="entra")
     assert snow.main(["identity-direct-handoff", "--stage", "entra"]) == 0
     entra_handoff = json.loads(capsys.readouterr().out)
-    assert entra_handoff["questions"][0]["askUserArguments"][
-        "message"
-    ] == "Application client ID"
+    assert entra_handoff["questions"] == []
+    assert entra_handoff["ordinaryReply"]["text"]
     assert snow.main(
         [
             "identity-direct-handoff",
@@ -8339,9 +8367,10 @@ def test_direct_identity_cli_roundtrips_both_admin_stages(
         ]
     ) == 0
     after_client = json.loads(capsys.readouterr().out)
-    assert after_client["questions"][0]["askUserArguments"][
-        "message"
-    ] == "Entra claim name"
+    assert after_client["questions"] == []
+    assert after_client["ordinaryReply"]["text"] == (
+        snow.ENTRA_CLAIM_FOLLOW_UP_TEXT
+    )
     assert snow.main(
         [
             "record-identity-direct",
@@ -10329,7 +10358,12 @@ def test_portal_url_confirmation_shows_normalized_url_and_saves_nothing(
     assert result["question"] == f"Is **{shown}** the employee portal URL?"
     assert result["options"] == PORTAL_CONFIRMATION_OPTIONS
     assert result["allowFreeformInput"] is False
-    assert result["savedMessage"] == "We'll save that portal URL."
+    topic_family = "HR" if profile == "hrsd" else "IT"
+    assert result["savedMessage"] == (
+        f"We'll save that portal URL and turn on the built-in ServiceNow "
+        f"{topic_family} topics, including system topics. Unrelated topics "
+        "will stay unchanged."
+    )
     assert path.read_bytes() == before
 
 
@@ -10414,7 +10448,13 @@ def test_portal_url_confirmation_hr_and_it_are_identical() -> None:
             results[profile] = snow.portal_url_confirmation(
                 context, "https://dev123.service-now.com/esc"
             )
-    assert results["hrsd"] == results["itsm"]
+    for profile in results:
+        topic_family = "HR" if profile == "hrsd" else "IT"
+        saved = results[profile]["savedMessage"]
+        assert f"built-in ServiceNow {topic_family} topics" in saved
+    assert {k: v for k, v in results["hrsd"].items() if k != "savedMessage"} == {
+        k: v for k, v in results["itsm"].items() if k != "savedMessage"
+    }
 
 
 def test_portal_url_docs_require_confirmation_before_save_hr_and_it() -> None:
@@ -13094,7 +13134,7 @@ def test_resume_handoff_withholds_preflight_checkpoint_for_pending_instance(
     assert pending["manualQuestion"] == manual_question
     assert pending["choiceValues"] == choices
     body = pending["question"]["question"]
-    assert "Which instance should this agent use" in body
+    assert body.startswith("Which ServiceNow instance should Employee Self-Service")
     assert "Progress" not in body
     assert "Connection progress" not in body
     assert "**Phases**" not in body
@@ -16846,6 +16886,32 @@ def test_dev_opening_includes_instance_and_omits_unrecorded_environment(
     assert "**ServiceNow instance:** https://dev184242.service-now.com" in text
     assert "can configure this agent before setup begins." in text
     assert context["environment"]["id"] not in text
+
+
+def test_phase_checklist_is_hidden_by_default_but_progress_is_kept(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, _, profile = _recording_setup(monkeypatch, tmp_path, "hrsd")
+    context["environment"]["display_name"] = "Contoso Dev"
+    with snow.product_profile_context(profile):
+        monkeypatch.setattr(snow, "SHOW_PHASE_CHECKLIST", True)
+        shown = snow.resume_handoff(context, executed_actions=frozenset())
+    context, _, profile = _recording_setup(monkeypatch, tmp_path / "hidden", "hrsd")
+    context["environment"]["display_name"] = "Contoso Dev"
+    with snow.product_profile_context(profile):
+        monkeypatch.setattr(snow, "SHOW_PHASE_CHECKLIST", False)
+        hidden = snow.resume_handoff(context, executed_actions=frozenset())
+
+    for marker in ("Automatic setup", "Phases", "Complete — admin confirmed"):
+        assert marker in shown["renderBlock"]["text"]
+        assert marker not in hidden["renderBlock"]["text"]
+    assert "✅" not in hidden["renderBlock"]["text"]
+    assert hidden["renderBlock"]["text"].startswith("We'll connect")
+    assert hidden["progress"]["items"] == shown["progress"]["items"]
+    assert {k: v for k, v in hidden["progress"].items() if k != "renderedAt"} == {
+        k: v for k, v in shown["progress"].items() if k != "renderedAt"
+    }
 
 
 def test_dev_opening_is_not_shown_on_resume(
