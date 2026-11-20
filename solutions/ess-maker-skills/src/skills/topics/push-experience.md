@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD001 -->
 
-Apply the [shared foundation](experience-contract.md). Use this reference for inventory, scoped Push consent and composed results. Every approved save owner uses [Push telemetry](#push-telemetry). Read [Authoring experience](authoring-experience.md) for topic wording review and [Testing experience](testing-experience.md) only when reaching a testing continuation.
+Apply the [shared foundation](experience-contract.md). Use this reference for inventory, scoped Push consent and composed results. Every approved save owner uses [Push telemetry](#push-telemetry). Read [Authoring experience](authoring-experience.md) for topic wording review, [Deletion experience](deletion-experience.md) before destructive consent, and [Testing experience](testing-experience.md) only when reaching a testing continuation.
 
 ## Contents
 
@@ -31,7 +31,7 @@ Apply [Status update markers](experience-contract.md#status-update-markers). Bin
 
 For `push-inventory`, use [Inventory outcomes](#inventory-outcomes) for an empty or failed inspection. For excluded-only changes, name the actual exclusions and leave them pending. Inventory discovery is not remote validation or save approval.
 
-For each dispatched topic save, reuse the performing owner's update without a second caller update. Before an instruction save performed here without an emitting authoring owner, load [Authoring status updates](authoring-experience.md#authoring-status-updates) and use its `instruction-save` definition. The Push caller owns `evaluation-save` after the selected deployment flow returns; preserve its native new-copy/reuse and review-state facts without changing evaluation internals.
+For each dispatched topic save or deletion, reuse the performing owner's update without a second caller update. Before an instruction save performed here without an emitting authoring owner, load [Authoring status updates](authoring-experience.md#authoring-status-updates) and use its `instruction-save` definition. The Push caller owns `evaluation-save` after the selected deployment flow returns; preserve its native new-copy/reuse and review-state facts without changing evaluation internals.
 
 Use [Push statuses](#push-statuses-push_statuses) for already-current, failed, unconfirmed or partially completed saves. Preserve confirmed remote effects when local recording fails. Pause dependent work after a failed or uncertain prerequisite; continue only independently safe approved operations. Finish with the existing composed report or standalone outcome, not a checklist. Testing uses [Testing status updates](testing-experience.md#testing-status-updates) only after its own authorization.
 
@@ -111,7 +111,7 @@ Render applicable entries from `{component_inventory}`:
 >
 > - {Exclusion sentence}
 
-Disclose material consequences, including actual evaluation new-copy/reuse and local-replacement effects, before the maker selects a Push action. For topic creation or update, apply Supported authoring scope and show unaccepted or acceptance-unknown response wording using the labels and quotations in [Response wording and local drafts](authoring-experience.md#response-wording-and-local-drafts) before any batch Push approval. Explain that Push accepts the displayed wording for the approved topics as well as authorizing their saves. Topic deletion is not available in this release; retain each pending deletion under Not included with its name and reason. Do not require a separate wording approval or repeat owner gates for unchanged reviewed content. Then use:
+Disclose material consequences, including actual evaluation new-copy/reuse and local-replacement effects, before the maker selects a Push action. For topic creation or update, apply Supported authoring scope and show unaccepted or acceptance-unknown response wording using the labels and quotations in [Response wording and local drafts](authoring-experience.md#response-wording-and-local-drafts) before any batch Push approval. Explain that Push accepts the displayed wording for the approved topics as well as authorizing their saves. For topic deletion, show the [deletion summary](deletion-experience.md#deletion-summary-delete_summary) `{delete_summary}`, including contained content and reference effects, rather than requesting response-wording acceptance. For a deletion routing conflict not already covered by an unchanged reviewed approval or explicit exclusion, use the [routing-conflict decision](deletion-experience.md#routing-conflict-decision) and carry its selected scope back into this inventory. Do not require a separate wording approval or repeat owner gates for unchanged reviewed content. Then use:
 
 ```json
 {
@@ -265,16 +265,16 @@ Before the decision control, populate Not included from the current inventory an
 
 Use at least these applicable result labels:
 
-- **Pushed:** remote save confirmed.
+- **Pushed:** remote save or deletion confirmed.
 - **Kept pending:** deliberately left unpushed.
 - **Cancelled:** left unattempted because the user stopped the remaining push.
 - **Failed:** the push could not be completed and the cause is established; distinguish a pre-write prerequisite problem from an attempted-write failure in Details.
 - **Unconfirmed:** the remote outcome cannot yet be established.
-- **Pushed with local issue:** remote save confirmed, but subsequent local recording or bookkeeping failed.
+- **Pushed with local issue:** remote save or deletion confirmed, but subsequent local recording or bookkeeping failed.
 
 Use Pushed with local issue rather than plain Pushed when that local failure remains. Choose the resulting status after appropriate recovery. Preserve causal details and remaining uncertainty in the Details cell or flexible trailer.
 
-For an authoritatively verified already-satisfied topic, use Pushed with explicit Details that the requested content already existed and no new remote write was needed. Retain the same no-write disclosure with Pushed with local issue if local tracking failed. Do not attribute the existing change to this operation.
+For an authoritatively verified already-satisfied topic, use Pushed with explicit Details that the requested content already existed, or the deletion target was already absent, and no new remote write was needed. Retain the same no-write disclosure with Pushed with local issue if local tracking failed. Do not attribute the existing change to this operation.
 
 The report displays the applicable labels, not this whole explanatory catalog. Not included describes scope, not an additional result status. Do not introduce Blocked as a separate Push status.
 
@@ -306,7 +306,7 @@ Preserve material owner facts, including known remote success, local recording i
 
 Observe the result and attempt appropriate in-scope recovery. Continue with independently safe, already-approved changes. Pause dependent work when an unresolved result could affect its correctness or safety. Judge independence from the requested outcome, not merely different component types or files. User cancellation stops remaining work and preserves completed pushes.
 
-After `{composed_push_report}`, continue already-requested next steps within their authorization rather than asking again. For confirmed created or updated topics, read [Topic testing continuation](testing-experience.md#topic-testing-continuation). Carry the selected topic, actual save/state, existing authorization and declined corrections; use selection only when the target remains ambiguous.
+After `{composed_push_report}`, continue already-requested next steps within their authorization rather than asking again. Deleted topics use [Deletion outcomes](deletion-experience.md#deletion-outcomes-delete_outcome_heads), not activation or conversation testing. For confirmed created or updated topics, read [Topic testing continuation](testing-experience.md#topic-testing-continuation). Carry the selected topic, actual save/state, existing authorization and declined corrections; use selection only when the target remains ambiguous.
 
 Preserve required owner links/reminders once in the composed response, without duplicate owner reports or menus. For each confirmed new topic, put [the MCS topic link](authoring-experience.md#topic-navigation) in that topic's Details cell, including confirmed creation followed by a local recording issue. If no follow-up applies, finish without a generic What next form. Pushing evaluations does not itself authorize running them. No publication or expanded scope is implied.
 
@@ -315,6 +315,8 @@ Preserve required owner links/reminders once in the composed response, without d
 Status updates and telemetry have separate ownership. Reporting a result does not create another batch or change the lifecycle below.
 
 The session owns one lifecycle for each approved save batch. **Push all listed changes** and **Push selected changes** each define one batch; **Push this change** defines a one-component batch. A standalone approved topic or instruction save is also one batch. A topic and instruction correction approved together share a batch. Keep the approved scope, lifecycle ownership, observed times and emitted calls in session context. Nested component owners reuse that context and must not emit their own lifecycle. Separate later approvals start separate batches; recovery of the same approved operation does not.
+
+An approved topic deletion pushed to the agent uses this same lifecycle. Local-only deletion and draft discard emit no Push lifecycle.
 
 Apply this section to explicit evaluation Push, including selected evaluations inside a mixed batch. Do not add it to evaluation Run, Request Review or reviewer completion. Preserve their existing deployment and usage owners.
 
@@ -339,6 +341,8 @@ Dispatch the approved save through its owner. Do not add an initial `push` usage
 ### Interpret the terminal result
 
 Use observed owner results, not exit code alone. Maker-facing Pushed / Failed / Unconfirmed / Pushed with local issue remain separate from the coarse telemetry outcomes.
+
+For deletion, the owner's HTTP-success result confirms the remote change without a post-write read. Required local reconciliation must still complete.
 
 | Observed execution result                                                                                                  | BuildOutcome | DeployOutcome  | BuildErrorCode         | DeployErrorCode          | ErrorCategory |
 | -------------------------------------------------------------------------------------------------------------------------- | ------------ | -------------- | ---------------------- | ------------------------ | ------------- |

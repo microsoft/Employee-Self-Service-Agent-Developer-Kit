@@ -93,6 +93,49 @@ def test_manage_topics_companion_catalog_matches_pinned_git_content():
     Draft202012Validator(schema).validate(primary)
 
 
+def test_topic_routes_share_policy_and_inventory_protection_is_deletion_only():
+    contract = _read("src/skills/topics/experience-contract.md")
+    policy = contract.split("## Authoring policy for this release\n", 1)[1].split(
+        "## Authorization and recovery\n", 1
+    )[0]
+    authoring, deletion = policy.split("### Template protection for deletion\n", 1)
+    assert "catalog.*.json" not in authoring
+    assert "src/reference/manage-topics/catalog.*.json" in deletion
+    assert "excluding `catalog.schema.json`" in deletion
+    assert "sources/dev/AgentTemplates" in deletion
+    assert "Do not include those rows in DA-GA coverage" in deletion
+    assert "Before deleting a local topic or dispatching its remote deletion" in deletion
+    assert "Do not delete template-provided topics" in deletion
+    assert "protected from deletion, including examples, helpers and integration topics" in deletion
+    assert "A nonmatch is not proof of customer ownership." in policy
+    assert "Preserve an existing draft unchanged." in policy
+    for relative in (
+        ".github/copilot-instructions.md",
+        ".github/prompts/push.prompt.md",
+        "src/skills/topics/create/SKILL.md",
+        "src/skills/topics/update/SKILL.md",
+        "src/skills/topics/delete/SKILL.md",
+        "src/skills/topics/test/SKILL.md",
+        "src/skills/cleanup/SKILL.md",
+    ):
+        guidance = _read(relative)
+        assert "Authoring policy for this release" in guidance, relative
+        assert "catalog.*.json" not in guidance, relative
+
+
+def test_discard_reconciles_exact_inventory_identity_and_prior_write_evidence():
+    skill = _read("src/skills/topics/delete/SKILL.md")
+    experience = _read("src/skills/topics/deletion-experience.md")
+    assert "current `topic_authoring.py list` inventory" in skill
+    for guidance in (skill, experience):
+        assert "exact full schema identity and any known component ID" in guidance
+        assert "create results" in guidance
+        assert "absence" in guidance and "never pushed" in guidance
+        assert "preserve the draft" in guidance.lower()
+    assert "A matching live component rules out the never-pushed variation" in skill
+    assert "uncertain-write evidence and local registration errors" in skill
+
+
 def test_retained_drafts_are_reconciled_before_using_fresh_expected_state():
     update = _read("src/skills/topics/update/SKILL.md")
     push = _read("src/skills/topics/push-experience.md")
@@ -147,6 +190,26 @@ def test_missing_topic_origin_does_not_gate_mutation_or_claim_customer_ownership
     assert "no independent origin evidence settles it" not in policy
     assert "For a template-protected deletion" in policy
     assert "unavailable required reads and conflicting edits" in policy
+
+
+def test_deletion_and_cleanup_do_not_reintroduce_the_topic_origin_gate():
+    for relative in (
+        ".github/copilot-instructions.md",
+        ".github/prompts/push.prompt.md",
+        "src/skills/topics/deletion-experience.md",
+        "src/skills/topics/delete/SKILL.md",
+        "src/skills/cleanup/SKILL.md",
+    ):
+        guidance = _read(relative)
+        assert "Authoring policy for this release" in guidance, relative
+        assert "unresolved ownership" not in guidance, relative
+        assert "protected or unresolved" not in guidance, relative
+        assert "customer-authored topic" not in guidance, relative
+    deletion = _read("src/skills/topics/deletion-experience.md")
+    assert "If its remote status is unknown, resolve that uncertainty first." in deletion
+    assert "Selection is not deletion approval." in deletion
+    cleanup = _read("src/skills/cleanup/SKILL.md")
+    assert "template-protected deletions" in cleanup
 
 
 def test_create_and_update_prompts_route_to_normal_topic_owners():
@@ -482,6 +545,46 @@ def test_testing_handoff_checks_runtime_availability_not_legacy_skill_presence()
         assert "`src/skills/topics/test/SKILL.md` exists" not in guidance
 
 
+def test_authoring_and_push_entry_points_consume_the_shared_experience():
+    for owner, references in {
+        "create": ("authoring", "push", "testing"),
+        "update": ("authoring", "push", "testing"),
+        "delete": ("deletion", "push"),
+        "test": ("testing",),
+    }.items():
+        guidance = _read(f"src/skills/topics/{owner}/SKILL.md")
+        assert "../experience-contract.md" in guidance
+        for reference in references:
+            assert f"../{reference}-experience.md" in guidance
+    push = _read(".github/prompts/push.prompt.md")
+    for reference in ("experience-contract", "authoring-experience", "deletion-experience",
+                      "push-experience", "testing-experience"):
+        assert f"src/skills/topics/{reference}.md" in push
+    assert "src/skills/topics/testing-experience.md" in _read(".github/prompts/test.prompt.md")
+    assert "src/skills/topics/experience-contract.md" in _read(".github/copilot-instructions.md")
+
+
+def test_focused_experience_and_review_links_resolve():
+    topics = SOLUTION / "src" / "skills" / "topics"
+    documents = [topics / "experience-contract.md", *topics.glob("*-experience.md")]
+    documents += [topics / owner / "SKILL.md" for owner in ("create", "update", "delete", "test", "review")]
+    for document in documents:
+        text = document.read_text(encoding="utf-8")
+        for destination in re.findall(r"\[[^\]]+\]\(([^)]+)\)", text):
+            if "://" in destination or destination.startswith("{"):
+                continue
+            path, _, anchor = destination.partition("#")
+            target = document.parent / path if path else document
+            assert target.is_file(), (document, destination)
+            if anchor:
+                headings = re.findall(r"^#{1,6} (.+)$", target.read_text(encoding="utf-8"), re.MULTILINE)
+                anchors = {
+                    re.sub(r"[^\w -]", "", heading.lower()).replace(" ", "-")
+                    for heading in headings
+                }
+                assert anchor in anchors, (document, destination)
+
+
 def test_native_progress_preserves_other_operations_and_setup():
     foundation = _read("src/skills/topics/experience-contract.md")
     assert "not native todo lists or Markdown progress checklists" in foundation
@@ -737,6 +840,322 @@ def test_push_and_testing_statuses_preserve_evidence_and_consent_boundaries():
     assert "Stop sending immediately; do not finish more work to reach a marker." in testing
 
 
+def test_rollout_markers_resolve_owned_definitions_without_duplicate_caller_updates():
+    for owner, reference, heading in (
+        ("topics/update", "topics/authoring-experience.md", "Authoring"),
+        ("topics/delete", "topics/deletion-experience.md", "Deletion"),
+        ("topics/test", "topics/testing-experience.md", "Testing"),
+        ("cleanup", "cleanup/SKILL.md", "Cleanup"),
+    ):
+        guidance = _read(f"src/skills/{owner}/SKILL.md")
+        experience = _read(f"src/skills/{reference}")
+        status = experience.split(f"## {heading} status updates\n", 1)[1].split(
+            "\n## ", 1
+        )[0]
+        definitions = {
+            point: (condition.strip(), message.strip())
+            for point, condition, message in re.findall(
+                r"^\|\s*`([^`]+)`\s*\|([^|]+)\|([^|]+)\|", status, re.MULTILINE
+            )
+        }
+        if owner == "topics/delete":
+            assert "../authoring-experience.md#authoring-status-updates" in guidance
+            shared_status = _read("src/skills/topics/authoring-experience.md").split(
+                "## Authoring status updates\n", 1
+            )[1].split("## Authoring summaries\n", 1)[0]
+            definitions.update({
+                point: (condition.strip(), message.strip())
+                for point, condition, message in re.findall(
+                    r"^\|\s*`([^`]+)`\s*\|([^|]+)\|([^|]+)\|", shared_status, re.MULTILINE
+                )
+                if point in {"instruction-preparation", "instruction-save"}
+            })
+        points = re.findall(r"\{EMIT_STATUS_UPDATE: ([^}]+)\}", guidance)
+        assert definitions and set(points) == set(definitions), owner
+        for condition, message in definitions.values():
+            assert condition and message, owner
+            if owner != "cleanup":
+                assert message not in guidance, owner
+
+    push = _read(".github/prompts/push.prompt.md")
+    assert set(re.findall(r"\{EMIT_STATUS_UPDATE: ([^}]+)\}", push)) == {
+        "push-inventory", "instruction-save", "evaluation-save",
+    }
+    assert "do not echo a delegated owner's update" in push
+    assert "before execution" in push.split("without an emitting authoring owner", 1)[1]
+    for relative in (
+        ".github/prompts/create.prompt.md",
+        ".github/prompts/update.prompt.md",
+        ".github/prompts/delete.prompt.md",
+        ".github/prompts/test.prompt.md",
+        ".github/prompts/scan.prompt.md",
+        "src/skills/topics/create-eval-driven/SKILL.md",
+        "src/skills/topics/update-eval-driven/SKILL.md",
+    ):
+        assert "{EMIT_STATUS_UPDATE:" not in _read(relative), relative
+
+
+def test_routing_recommendations_are_nested_across_authoring_reviews_and_outcomes():
+    authoring = _read("src/skills/topics/authoring-experience.md")
+    for heading in (
+        "Routing Conflicts",
+        "Update summary",
+        "Combined routing-conflict and testing follow-up",
+    ):
+        section = authoring.split(f"### {heading}\n", 1)[1].split("\n### ", 1)[0]
+        assert (
+            "> - {Routing conflict}. This routing conflict will likely block topic execution.\n"
+            ">   - I recommend we {Concrete next action} to resolve this."
+        ) in section
+        assert "###### SUGGESTED ACTIONS" not in section
+    routing = authoring.split("### Routing Conflicts\n", 1)[1].split("\n### ", 1)[0]
+    assert "Repeat the parent bullet for each applicable conflict" in routing
+    assert "a specific verb phrase for the targeted instruction correction" in routing
+    foundation = _read("src/skills/topics/experience-contract.md")
+    assert "Put its recommendation in a nested sub-bullet" in foundation
+    assert "Do not add a Suggested actions subheading" in foundation
+    assert "Notes' SUGGESTED ACTION headings remain level five" in foundation
+
+
+def test_deletion_routing_conflict_matches_authoring_wording_and_control_position():
+    authoring = _read("src/skills/topics/authoring-experience.md")
+    initial = authoring.split("### Initial routing-conflict decision\n", 1)[1].split(
+        "### Topic outcomes\n", 1
+    )[0]
+    resolution = re.findall(r"\*\*(Resolve[^*]+)\*\*", initial)[0]
+    deletion = _read("src/skills/topics/deletion-experience.md")
+    summary = deletion.split("### Deletion summary:", 1)[1].split(
+        "### Deletion decision\n", 1
+    )[0]
+    assert summary.index("> ##### REFERENCES NEEDING ATTENTION") < summary.index(
+        "> ##### ROUTING CONFLICTS"
+    )
+    assert "###### SUGGESTED ACTIONS" not in summary
+    assert (
+        "> - {Routing conflict}. {Deletion routing impact}.\n"
+        ">   - I recommend we {Concrete next action} to resolve this."
+    ) in summary
+    assert "authoring-experience.md#routing-conflicts" in summary
+    assert "same recommendation sub-bullet beneath each conflict" in deletion
+    assert "{Deletion routing impact}" in summary
+    assert "This routing conflict will likely block topic execution." not in summary
+    for heading, following, choices in (
+        ("Deletion decision", "Routing-conflict decision",
+         ["Push deletion to agent", "Keep deletion locally", "Not now"]),
+        ("Routing-conflict decision", "Deletion-related instruction correction",
+         [resolution, "Push deletion anyway", "Keep deletion locally", "Not now"]),
+    ):
+        section = deletion.split(f"### {heading}\n", 1)[1].split(
+            f"### {following}\n", 1
+        )[0]
+        question = json.loads(re.search(r"```json\n(.*?)\n```", section, re.DOTALL)[1])
+        assert question["message"] == ""
+        field = question["requestedSchema"]["properties"]["action"]
+        assert field["title"] == "Topic deletion"
+        assert field["description"] == "How would you like to continue?"
+        assert field["enum"] == choices
+        assert "> ##### YOUR CHOICES" not in section
+    assert "not deleting local files, deleting the saved topic or pushing instructions" in section
+    assert "Do not immediately offer the same resolution decision again" in section
+
+
+def test_deletion_instruction_correction_preserves_scope_states_and_owner_boundaries():
+    deletion = _read("src/skills/topics/deletion-experience.md")
+    correction = deletion.split("### Deletion-related instruction correction\n", 1)[1].split(
+        "### Routing cleanup after deletion\n", 1
+    )[0]
+    assert "authoring-experience.md#targeted-instruction-change-preview-and-approval" in correction
+    assert "Preserve other topics in shared routing rules" in correction
+    assert "Do not present a runnable instruction Push choice." in correction
+    assert "without removing working files merely to populate the inventory" in correction
+    assert "selection of a type or resolution option alone is not write consent" in correction
+    assert "Pause dependent work after a failed or uncertain prerequisite." in correction
+    assert "do not replay, roll back or recreate the topic automatically" in correction
+    assert "do not offer activation or testing of the deleted topic" in correction
+    assert "A successful instruction save does not establish successful deletion." in correction
+    cleanup = deletion.split("### Routing cleanup after deletion\n", 1)[1].split(
+        "### Local-only variations\n", 1
+    )[0]
+    question = json.loads(re.search(r"```json\n(.*?)\n```", cleanup, re.DOTALL)[1])
+    assert question["requestedSchema"]["properties"]["action"]["enum"] == [
+        "Resolve the routing conflict in the Agent Instructions", "Not now",
+    ]
+    assert "Do not re-offer a correction already declined" in cleanup
+    assert "without requiring a current local topic file or issuing another deletion" in cleanup
+    owner = _read("src/skills/topics/delete/SKILL.md")
+    assert "--draft" in owner and '--expected ".local\\topic-authoring\\instructions-before.json"' in owner
+    assert owner.index("instructions-preview.json") < owner.index(
+        "{EMIT_STATUS_UPDATE: instruction-preparation}"
+    )
+    assert owner.index("instructions-result.json") < owner.index(
+        "{EMIT_STATUS_UPDATE: instruction-save}"
+    )
+    assert "Instruction-only cleanup skips this deletion checkpoint and capability event" in owner
+    push = _read("src/skills/topics/push-experience.md")
+    assert "deletion-experience.md#routing-conflict-decision" in push
+
+
+def test_rollout_reviews_and_native_choices_keep_the_shared_presentation_contract():
+    for relative in (
+        "topics/experience-contract.md",
+        "topics/authoring-experience.md",
+        "topics/deletion-experience.md",
+        "topics/push-experience.md",
+        "topics/testing-experience.md",
+        "cleanup/SKILL.md",
+    ):
+        guidance = _read(f"src/skills/{relative}")
+        headings = re.findall(r"^>\s*(#{1,6}) (.+)$", guidance, re.MULTILINE)
+        if relative != "topics/experience-contract.md":
+            assert headings, relative
+        for level, label in headings:
+            assert level in {"#####", "######"}, (relative, label)
+            literal_label = re.sub(r"\{[^}]+\}", "", label)
+            assert literal_label == literal_label.upper(), (relative, label)
+            assert not label.endswith(":"), (relative, label)
+
+        controls = list(re.finditer(r"```json\n(.*?)\n```", guidance, re.DOTALL))
+        assert controls, relative
+        assert "> ##### YOUR CHOICES" not in guidance, relative
+        assert not re.search(r"^> \|\s*Choice\s*\|", guidance, re.MULTILINE), relative
+        for control in controls:
+            question = json.loads(control[1])
+            assert question["message"] == "", relative
+            for field in question["requestedSchema"]["properties"].values():
+                assert field["title"], relative
+                assert field["description"] == "How would you like to continue?", relative
+                if field["type"] == "array":
+                    assert field["default"] == [], relative
+                    choices = field["items"]["enum"]
+                else:
+                    choices = field["enum"]
+                assert choices, relative
+                assert len(choices) == len(set(choices)), relative
+                assert all(isinstance(choice, str) and choice.strip() for choice in choices)
+
+
+def test_mixed_operation_results_preserve_owner_outcomes_unless_composition_is_defined():
+    foundation = _read("src/skills/topics/experience-contract.md")
+    mixed = foundation.split("For mixed-operation results,", 1)[1].split("\n\n", 1)[0]
+    assert "use a consolidated report only where the owning experience explicitly defines one" in mixed
+    assert "push-experience.md#composed-push-report-composed_push_report" in mixed
+    assert "Otherwise retain each operation's required outcome heading and facts" in mixed
+    assert "showing shared [Target context](#target-context) once" in mixed
+
+
+def test_target_context_uses_realm_and_retains_uncertain_and_local_outcomes():
+    foundation = _read("src/skills/topics/experience-contract.md")
+    target = foundation.split("### Target context\n", 1)[1].split(
+        "## Topic selection", 1
+    )[0]
+    assert "> {Agent name}\\\n> {Environment name} - {ALM realm}" in target
+    assert "`target.agent.realm`" in target
+    assert "Do not infer ALM realm from service ring" in target
+    assert "same environment ID" in target
+    assert "use the known environment ID" in target
+    assert "say Not established" in target
+    assert "Retrieved results use their recorded target" in target
+    assert "Local-only outcomes identify the intended destination" in target
+    assert "once per complete review or report, not once per component row" in target
+    assert "without adding Environment or ALM Realm headings" in target
+    assert "immediate pause/stop acknowledgement" in target
+    for outcome in (
+        "local drafts", "no-change", "cancellation", "deferred testing",
+        "failed", "uncertain", "partial", "zero-error cleanup",
+    ):
+        assert outcome in target
+    for relative in (
+        "topics/authoring-experience.md", "topics/push-experience.md",
+        "topics/deletion-experience.md", "topics/testing-experience.md",
+        "cleanup/SKILL.md",
+    ):
+        guidance = _read(f"src/skills/{relative}")
+        assert "#target-context)" in guidance, relative
+        assert "> {Target context}" in guidance, relative
+    push = _read("src/skills/topics/push-experience.md")
+    for heading in ("NO CHANGES TO PUSH", "COULD NOT INSPECT LOCAL CHANGES", "PUSH RESULTS"):
+        assert f"> ##### {heading}\n>\n> {{Target context}}" in push
+
+
+def test_new_topic_link_requires_verified_creation_and_topic_editor_identity():
+    authoring = _read("src/skills/topics/authoring-experience.md")
+    navigation = authoring.split("### Topic navigation\n", 1)[1].split("\n### ", 1)[0]
+    assert "[View your new Topic in MCS]({Topic MCS URL})" in navigation
+    assert (
+        "{MCS origin}/environments/{Environment ID}/copilots/{Agent ID}"
+        "/adaptive/{Topic component ID}?agentBackend=cosmos"
+    ) in navigation
+    assert "verified environment, agent and topic component IDs" in navigation
+    assert "STUDIO_RING_BY_HOST" in navigation
+    assert "target's service ring" in navigation
+    assert "previously retained draft pushed later" in navigation
+    assert "local bookkeeping remains incomplete" in navigation
+    assert "local-only draft, an unconfirmed creation or a deleted topic" in navigation
+    assert "topic link could not be established" in navigation
+    assert "do not invent a URL or retry creation" in navigation
+    assert "Link generation does not open a browser, activate, test or publish" in navigation
+    create = _read("src/skills/topics/create/SKILL.md")
+    assert "authoring-experience.md#topic-navigation" in create
+    push = _read("src/skills/topics/push-experience.md")
+    composed = push.split("### Composed Push report:", 1)[1].split("## Push telemetry", 1)[0]
+    assert "authoring-experience.md#topic-navigation" in composed
+    assert "in that topic's Details cell" in composed
+
+
+def test_shared_experience_preserves_approved_copy_and_template_boundary():
+    foundation = _read("src/skills/topics/experience-contract.md")
+    assert "../../reference/ui-formatting-guidelines.md#authoring-pattern" in foundation
+    assert "These baselines govern coverage; the template's fixed copy remains verbatim." in foundation
+    assert "Place any additional relevant context separately from the literal block" not in foundation
+    contract = "\n".join(
+        _read(f"src/skills/topics/{reference}.md")
+        for reference in (
+            "experience-contract", "authoring-experience", "deletion-experience",
+            "push-experience", "testing-experience",
+        )
+    )
+    for literal in (
+        '"enum": ["Push topic to agent", "Keep as draft"]',
+        "> ##### TOPIC PUSHED TO AGENT",
+        "**DRAFT KEPT LOCALLY AGENT UNCHANGED**",
+        "**TOPIC WAS NOT PUSHED**",
+        "**TOPIC PUSH COULD NOT BE CONFIRMED**",
+        "**TOPIC PUSHED WORKSPACE UPDATE INCOMPLETE**",
+        "Cancel remaining push",
+        "> | Item | Current | Proposed |",
+        "> - {Verified preservation fact summary}",
+        "> | Component | Outcome | Details |",
+        '["Test topic now", "Not now"]',
+        '"enum": ["Activate and test", "Not now"]',
+        "> After you confirm readiness, I will test {Topic title} against its "
+        "intended behavior, investigate and fix issues observed during execution, "
+        "and retest the affected behavior.",
+        "> I will summarize the outcome and recommend any next action needed.",
+        "> ##### GOAL\n>\n> {Latest authoring goal}",
+        "> ##### OUTCOME\n>\n> {Observed runtime outcome}",
+        "> ##### RECOMMENDATION\n>\n> {Concrete tweak or next action}",
+        "> ##### TESTING PAUSED\n>\n> Let me know when the test browser is ready.",
+        "> ##### TESTING STOPPED",
+    ):
+        if literal.startswith("> |"):
+            assert " ".join(literal.split()) in " ".join(contract.split())
+        else:
+            assert literal in contract
+    quoted = "\n".join(line for line in contract.splitlines() if line.startswith(">"))
+    for instruction in (
+        "Read and apply [Authoring pattern]",
+        "These baselines govern coverage",
+        "Use the freshly read saved state",
+        "Describe behavior and its limits rather than attempts or iterations",
+        "not whatever reply happens to be saved",
+    ):
+        assert instruction in contract
+        assert instruction not in quoted
+    assert "Test {Topic title} now?" not in contract
+    assert "Review note" not in contract
+    assert "W06" not in contract
+
+
 def test_push_uses_one_inventory_scoped_consent_and_composed_results():
     push = " ".join(_read(".github/prompts/push.prompt.md").split())
     contract = _read("src/skills/topics/push-experience.md")
@@ -799,6 +1218,30 @@ def test_push_cancellation_paths_use_the_composed_report():
     assert "even when no save was attempted" in report
     assert "every entry in the retained inventory exactly once" in report
     assert "Do not replace the report with a cancellation sentence" in report
+
+
+def test_push_handoffs_and_selections_retain_named_exclusions():
+    push = " ".join(_read(".github/prompts/push.prompt.md").split())
+    contract = _read("src/skills/topics/push-experience.md")
+    assert "Create/Update/Delete routing-correction handoff" in push
+    assert "Narrowing save scope does not narrow the inventory" in push
+    assert "Repeat the reason on each component's bullet" in contract
+    subset = contract.split("### Type-level subset", 1)[1].split(
+        "### Component-level review", 1
+    )[0]
+    assert "every unselected component and existing exclusion" in subset
+    component = contract.split("### Component-level review", 1)[1].split(
+        "### Compact change comparison", 1
+    )[0]
+    assert "> ##### NOT INCLUDED\n>\n> - {Exclusion sentence}" in component
+    for relative in (
+        "src/skills/topics/authoring-experience.md",
+        "src/skills/topics/deletion-experience.md",
+    ):
+        assert "retain them in the inventory as named Not included entries" in _read(relative)
+    assert "including any changed Display name" in _read(
+        "src/skills/topics/deletion-experience.md"
+    )
 
 
 def test_push_owners_share_batch_telemetry_without_changing_other_evaluation_actions():
@@ -1114,93 +1557,3 @@ def test_authoring_carries_context_and_honors_scoped_debugging():
         in _read("src/skills/topics/testing-experience.md")
     )
     assert "Honor explicit no-activation requests" in _read("src/skills/topics/testing-experience.md")
-
-
-def test_routing_recommendations_are_nested_across_authoring_reviews_and_outcomes():
-    authoring = _read("src/skills/topics/authoring-experience.md")
-    for heading in (
-        "Routing Conflicts",
-        "Update summary",
-        "Combined routing-conflict and testing follow-up",
-    ):
-        section = authoring.split(f"### {heading}\n", 1)[1].split("\n### ", 1)[0]
-        assert (
-            "> - {Routing conflict}. This routing conflict will likely block topic execution.\n"
-            ">   - I recommend we {Concrete next action} to resolve this."
-        ) in section
-        assert "###### SUGGESTED ACTIONS" not in section
-    routing = authoring.split("### Routing Conflicts\n", 1)[1].split("\n### ", 1)[0]
-    assert "Repeat the parent bullet for each applicable conflict" in routing
-    assert "a specific verb phrase for the targeted instruction correction" in routing
-    foundation = _read("src/skills/topics/experience-contract.md")
-    assert "Put its recommendation in a nested sub-bullet" in foundation
-    assert "Do not add a Suggested actions subheading" in foundation
-    assert "Notes' SUGGESTED ACTION headings remain level five" in foundation
-
-
-def test_mixed_operation_results_preserve_owner_outcomes_unless_composition_is_defined():
-    foundation = _read("src/skills/topics/experience-contract.md")
-    mixed = foundation.split("For mixed-operation results,", 1)[1].split("\n\n", 1)[0]
-    assert "use a consolidated report only where the owning experience explicitly defines one" in mixed
-    assert "push-experience.md#composed-push-report-composed_push_report" in mixed
-    assert "Otherwise retain each operation's required outcome heading and facts" in mixed
-    assert "showing shared [Target context](#target-context) once" in mixed
-
-
-def test_target_context_uses_realm_and_retains_uncertain_and_local_outcomes():
-    foundation = _read("src/skills/topics/experience-contract.md")
-    target = foundation.split("### Target context\n", 1)[1].split(
-        "## Topic selection", 1
-    )[0]
-    assert "> {Agent name}\\\n> {Environment name} - {ALM realm}" in target
-    assert "`target.agent.realm`" in target
-    assert "Do not infer ALM realm from service ring" in target
-    assert "same environment ID" in target
-    assert "use the known environment ID" in target
-    assert "say Not established" in target
-    assert "Retrieved results use their recorded target" in target
-    assert "Local-only outcomes identify the intended destination" in target
-    assert "once per complete review or report, not once per component row" in target
-    assert "without adding Environment or ALM Realm headings" in target
-    assert "immediate pause/stop acknowledgement" in target
-    for outcome in (
-        "local drafts", "no-change", "cancellation", "deferred testing",
-        "failed", "uncertain", "partial", "zero-error cleanup",
-    ):
-        assert outcome in target
-    for relative in (
-        "topics/authoring-experience.md", "topics/push-experience.md",
-        "topics/testing-experience.md",
-        "cleanup/SKILL.md",
-    ):
-        guidance = _read(f"src/skills/{relative}")
-        assert "#target-context)" in guidance, relative
-        assert "> {Target context}" in guidance, relative
-    push = _read("src/skills/topics/push-experience.md")
-    for heading in ("NO CHANGES TO PUSH", "COULD NOT INSPECT LOCAL CHANGES", "PUSH RESULTS"):
-        assert f"> ##### {heading}\n>\n> {{Target context}}" in push
-
-
-def test_new_topic_link_requires_verified_creation_and_topic_editor_identity():
-    authoring = _read("src/skills/topics/authoring-experience.md")
-    navigation = authoring.split("### Topic navigation\n", 1)[1].split("\n### ", 1)[0]
-    assert "[View your new Topic in MCS]({Topic MCS URL})" in navigation
-    assert (
-        "{MCS origin}/environments/{Environment ID}/copilots/{Agent ID}"
-        "/adaptive/{Topic component ID}?agentBackend=cosmos"
-    ) in navigation
-    assert "verified environment, agent and topic component IDs" in navigation
-    assert "STUDIO_RING_BY_HOST" in navigation
-    assert "target's service ring" in navigation
-    assert "previously retained draft pushed later" in navigation
-    assert "local bookkeeping remains incomplete" in navigation
-    assert "local-only draft, an unconfirmed creation or a deleted topic" in navigation
-    assert "topic link could not be established" in navigation
-    assert "do not invent a URL or retry creation" in navigation
-    assert "Link generation does not open a browser, activate, test or publish" in navigation
-    create = _read("src/skills/topics/create/SKILL.md")
-    assert "authoring-experience.md#topic-navigation" in create
-    push = _read("src/skills/topics/push-experience.md")
-    composed = push.split("### Composed Push report:", 1)[1].split("## Push telemetry", 1)[0]
-    assert "authoring-experience.md#topic-navigation" in composed
-    assert "in that topic's Details cell" in composed

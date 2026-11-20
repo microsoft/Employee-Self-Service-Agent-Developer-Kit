@@ -949,9 +949,555 @@ def test_native_create_allows_same_name_and_verifies_readback(topic_cli, monkeyp
     request.assert_called_once()
 
 
-def test_unavailable_deletion_stops_before_connection(topic_cli):
-    with pytest.raises(SystemExit) as error:
+def _delete_client(topic_cli, monkeypatch):
+    client = native.MinimalBotEvaluationClient(
+        topic_cli.target["environment"]["id"], topic_cli.target["agent"]["id"],
+        topic_cli.target["environment"]["tenantId"],
+    )
+    before = topic_cli.client.fetch_components(topic_cli.target["agent"]["id"])
+    after = {**before, "changeToken": "after", "botComponentChanges": []}
+    client.read_components = Mock(side_effect=[before])
+    client._request = Mock(return_value=(
+        SimpleNamespace(status_code=200, headers={"x-ms-request-id": "deletion-id"}),
+        {"serviceDetail": {"keep": True}},
+    ))
+    monkeypatch.setattr(authoring, "_native_client", lambda *_args: client)
+    return client, before, after
+
+
+def _deletion_preview(topic_cli):
+    preview = topic_cli.root / "delete-preview.json"
+    args = ["delete", "--topic", str(topic_cli.draft)]
+    authoring.main([*args, "--output", str(preview)])
+    return [*args, "--expected", str(preview), "--yes"]
+
+
+@pytest.mark.parametrize("family,topic_name,catalog", [
+    ("core", "ConversationStart", "catalog.authoring-additions.json"),
+    ("hr", "WorkdayEmployeeID", "catalog.provisional.json"),
+    ("it", "Example-CraftedResponse", "catalog.authoring-additions.json"),
+    ("hr", "System-RecordSearchResults", "catalog.provisional.json"),
+    ("hr", "System-DiagnoseReport", "catalog.provisional.json"),
+    ("it", "System-RecordSearchResults", "catalog.provisional.json"),
+    ("it", "System-DiagnoseReport", "catalog.provisional.json"),
+])
+@pytest.mark.parametrize("contained", [False, True])
+@pytest.mark.parametrize("operation", ["preview", "apply"])
+def test_delete_protects_template_root_and_contained_topic_before_write(
+    topic_cli, monkeypatch, tmp_path, family, topic_name, catalog, contained, operation,
+):
+    root = _register_existing(topic_cli)
+    agent_schema = f"gptagent_copilotforemployeeselfservice{family}"
+    topic_cli.target["agent"]["schemaName"] = agent_schema.upper()
+    protected = root
+    if contained:
+        protected = {
+            **copy.deepcopy(root), "id": "00000000-0000-0000-0000-000000003334",
+            "parentBotComponentId": root["id"],
+        }
+        topic_cli.components.append(protected)
+    protected["schemaName"] = f"{agent_schema}.topic.{topic_name}".upper()
+    if not contained:
+        mapping = _map(topic_cli)
+        mapping["topics/CaseSensitiveName.mcs.yml"]["schemaName"] = protected["schemaName"]
+        (topic_cli.agent_folder / ".component-map.json").write_text(json.dumps(mapping))
+    client, _, _ = _delete_client(topic_cli, monkeypatch)
+    args = ["delete", "--topic", str(topic_cli.draft)]
+    if operation == "apply":
+        # A retained preview cannot bypass a protection match available at apply.
+        with monkeypatch.context() as earlier:
+            earlier.setattr(authoring, "_TEMPLATE_CATALOG_DIRECTORY", tmp_path / "unavailable")
+            args = _deletion_preview(topic_cli)
+    original = topic_cli.draft.read_bytes()
+    mapping = _map(topic_cli)
+
+    with pytest.raises(native.ComponentEditError, match="protected DA-GA") as raised:
+        authoring.main(args)
+
+    facts = raised.value.evidence
+    assert facts["writeAttempted"] is facts["deleted"] is False
+    match, = facts["templateProtection"]["protectedTopics"]
+    assert match["componentId"] == protected["id"]
+    assert match["schemaName"] == protected["schemaName"]
+    assert match["catalog"] == catalog
+    assert match["sourcePath"].startswith("/sources/dev/AgentTemplates/")
+    assert match["sourceRevision"] and match["packageVersion"] and match["source"]
+    assert topic_cli.draft.read_bytes() == original and _map(topic_cli) == mapping
+    client.read_components.assert_not_called()
+    client._request.assert_not_called()
+
+
+@pytest.mark.parametrize("scope", ["custom-system-trigger", "translated-prefix", "solution-backed"])
+def test_delete_does_not_infer_template_origin_from_trigger_or_short_name(
+    topic_cli, monkeypatch, tmp_path, capsys, scope,
+):
+    component = _register_existing(topic_cli)
+    family = "gptagent_copilotforemployeeselfservicehr"
+    topic_cli.target["agent"]["schemaName"] = family
+    component["displayName"] = "Conversation Start"
+    component["dialog"]["beginDialog"] = {"$kind": "OnError"}
+    if scope == "translated-prefix":
+        component["schemaName"] = "custom_agent.topic.ConversationStart"
+    elif scope == "solution-backed":
+        reference = tmp_path / "catalogs"
+        reference.mkdir()
+        (reference / "catalog.extra.json").write_text(json.dumps({
+            "schemaVersion": 1,
+            "packages": [{
+                "key": f"source-family:{family}", "agentSchemaNames": [family],
+                "sourcePath": "/sources/dev/solutions/Example/Solution/bots/agent",
+                "topics": [{"schemaName": component["schemaName"]}],
+            }],
+        }), encoding="utf-8")
+        monkeypatch.setattr(authoring, "_TEMPLATE_CATALOG_DIRECTORY", reference)
+    mapping = _map(topic_cli)
+    mapping["topics/CaseSensitiveName.mcs.yml"]["schemaName"] = component["schemaName"]
+    (topic_cli.agent_folder / ".component-map.json").write_text(json.dumps(mapping))
+    client, _, _ = _delete_client(topic_cli, monkeypatch)
+    args = _deletion_preview(topic_cli)
+    capsys.readouterr()
+
+    authoring.main(args)
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["deleted"] is True
+    assert result["templateProtection"]["protectedTopics"] == []
+    assert result["templateProtection"]["coverageVerified"] is False
+    client._request.assert_called_once()
+
+
+@pytest.mark.parametrize("failure", ["missing", "malformed"])
+def test_delete_reports_catalog_errors_without_a_universal_coverage_gate(
+    topic_cli, monkeypatch, tmp_path, capsys, failure,
+):
+    _register_existing(topic_cli)
+    topic_cli.target["agent"]["schemaName"] = "gptagent_copilotforemployeeselfservicehr"
+    reference = tmp_path / "catalogs"
+    reference.mkdir()
+    if failure == "malformed":
+        (reference / "catalog.provisional.json").write_text("{", encoding="utf-8")
+    monkeypatch.setattr(authoring, "_TEMPLATE_CATALOG_DIRECTORY", reference)
+    client, _, _ = _delete_client(topic_cli, monkeypatch)
+    args = _deletion_preview(topic_cli)
+    preview = json.loads(capsys.readouterr().out)
+    assert len(preview["templateProtection"]["catalogErrors"]) == 2
+
+    authoring.main(args)
+
+    result = json.loads(capsys.readouterr().out)
+    errors = result["templateProtection"]["catalogErrors"]
+    assert result["deleted"] is True and len(errors) == 2
+    assert all(error["file"].startswith(str(reference)) and error["errors"] for error in errors)
+    client._request.assert_called_once()
+
+
+def test_delete_retains_positive_template_match_with_missing_companion(
+    topic_cli, monkeypatch, tmp_path,
+):
+    component = _register_existing(topic_cli)
+    family = "gptagent_copilotforemployeeselfservicehr"
+    # Full template identity remains protected in an agent with a custom schema.
+    topic_cli.target["agent"]["schemaName"] = "custom_agent"
+    component["schemaName"] = f"{family}.topic.WorkdayEmployeeID"
+    mapping = _map(topic_cli)
+    mapping["topics/CaseSensitiveName.mcs.yml"]["schemaName"] = component["schemaName"]
+    (topic_cli.agent_folder / ".component-map.json").write_text(json.dumps(mapping))
+    reference = tmp_path / "catalogs"
+    reference.mkdir()
+    (reference / "catalog.provisional.json").write_text(
+        (authoring._TEMPLATE_CATALOG_DIRECTORY / "catalog.provisional.json").read_text(
+            encoding="utf-8",
+        ), encoding="utf-8",
+    )
+    monkeypatch.setattr(authoring, "_TEMPLATE_CATALOG_DIRECTORY", reference)
+    client, _, _ = _delete_client(topic_cli, monkeypatch)
+
+    with pytest.raises(native.ComponentEditError) as raised:
+        _deletion_preview(topic_cli)
+
+    protection = raised.value.evidence["templateProtection"]
+    assert protection["protectedTopics"][0]["componentId"] == component["id"]
+    assert len(protection["catalogErrors"]) == 1
+    client._request.assert_not_called()
+    assert topic_cli.draft.exists() and _map(topic_cli) == mapping
+
+
+@pytest.mark.parametrize("failure", [
+    "topic-row", "topic-schema", "package-row", "package-identities", "package-topics",
+])
+def test_deletion_template_protection_keeps_later_matches_after_malformed_entries(
+    monkeypatch, tmp_path, failure,
+):
+    filename = "catalog.authoring-additions.json"
+    catalog = json.loads(
+        (authoring._TEMPLATE_CATALOG_DIRECTORY / filename).read_text(encoding="utf-8")
+    )
+    components = [
+        {
+            "$kind": "DialogComponent", "id": f"protected-{index}",
+            "schemaName": package["topics"][0]["schemaName"],
+        }
+        for index, package in enumerate(catalog["packages"])
+    ]
+    first_package = catalog["packages"][0]
+    if failure in {"topic-row", "topic-schema"}:
+        first_package["topics"].insert(
+            0, None if failure == "topic-row" else {"schemaName": 42},
+        )
+    else:
+        invalid_package = copy.deepcopy(first_package)
+        if failure == "package-row":
+            invalid_package = None
+        elif failure == "package-identities":
+            invalid_package["agentSchemaNames"] = None
+        else:
+            invalid_package["topics"] = None
+        catalog["packages"].insert(0, invalid_package)
+    reference = tmp_path / "catalogs"
+    reference.mkdir()
+    (reference / filename).write_text(json.dumps(catalog), encoding="utf-8")
+    (reference / "catalog.provisional.json").write_text(
+        json.dumps({"schemaVersion": 1, "packages": []}), encoding="utf-8",
+    )
+    monkeypatch.setattr(authoring, "_TEMPLATE_CATALOG_DIRECTORY", reference)
+
+    with pytest.raises(native.ComponentEditError, match="protected DA-GA") as raised:
+        authoring._deletion_template_protection(components)
+
+    facts = raised.value.evidence
+    assert facts["writeAttempted"] is facts["deleted"] is False
+    protection = facts["templateProtection"]
+    assert {match["componentId"] for match in protection["protectedTopics"]} == {
+        component["id"] for component in components
+    }
+    error, = protection["catalogErrors"]
+    assert error["file"] == str(reference / filename)
+    assert error["packageIndex"] == 0 and error["errors"]
+    if failure in {"topic-row", "topic-schema"}:
+        assert error["topicIndex"] == 0
+    else:
+        assert "topicIndex" not in error
+
+
+def test_deletion_template_protection_reports_each_invalid_row_without_a_match(
+    monkeypatch, tmp_path,
+):
+    filename = "catalog.authoring-additions.json"
+    catalog = json.loads(
+        (authoring._TEMPLATE_CATALOG_DIRECTORY / filename).read_text(encoding="utf-8")
+    )
+    catalog["packages"][0]["topics"] = [None, {"schemaName": 42}]
+    reference = tmp_path / "catalogs"
+    reference.mkdir()
+    (reference / filename).write_text(json.dumps(catalog), encoding="utf-8")
+    (reference / "catalog.provisional.json").write_text(
+        json.dumps({"schemaVersion": 1, "packages": []}), encoding="utf-8",
+    )
+    monkeypatch.setattr(authoring, "_TEMPLATE_CATALOG_DIRECTORY", reference)
+
+    protection = authoring._deletion_template_protection([{
+        "$kind": "DialogComponent", "id": "custom", "schemaName": "custom.topic.Unmatched",
+    }])
+
+    assert protection["protectedTopics"] == []
+    assert protection["coverageVerified"] is False
+    errors = protection["catalogErrors"]
+    assert len(errors) == 2
+    assert [error["topicIndex"] for error in errors] == [0, 1]
+    assert all(
+        error["file"] == str(reference / filename)
+        and error["packageIndex"] == 0 and error["errors"]
+        for error in errors
+    )
+
+
+def test_delete_accepts_case_only_schema_mapping_difference(topic_cli, monkeypatch, capsys):
+    component = _register_existing(topic_cli)
+    mapping = _map(topic_cli)
+    mapping["topics/CaseSensitiveName.mcs.yml"]["schemaName"] = component["schemaName"].upper()
+    (topic_cli.agent_folder / ".component-map.json").write_text(json.dumps(mapping))
+    client, _, _ = _delete_client(topic_cli, monkeypatch)
+    args = _deletion_preview(topic_cli)
+    capsys.readouterr()
+
+    authoring.main(args)
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["writeAccepted"] is True and result["bookkeepingComplete"] is True
+    client._request.assert_called_once()
+
+
+@pytest.mark.parametrize("failure", ["non-dialog", "wrong-parent", "mapping"])
+@pytest.mark.parametrize("operation", ["preview", "apply"])
+def test_delete_invalid_root_or_mapping_never_sends_write(
+    topic_cli, monkeypatch, failure, operation,
+):
+    component = _register_existing(topic_cli)
+    client, _, _ = _delete_client(topic_cli, monkeypatch)
+    args = ["delete", "--topic", str(topic_cli.draft)]
+    if operation == "apply":
+        args = _deletion_preview(topic_cli)
+        path = topic_cli.root / "delete-preview.json"
+        preview = json.loads(path.read_text())
+        component = preview["components"][0]
+    if failure == "non-dialog":
+        component["$kind"] = "OtherComponent"
+    elif failure == "wrong-parent":
+        component["parentBotId"] = "another-agent"
+    else:
+        mapping = _map(topic_cli)
+        mapping["topics/CaseSensitiveName.mcs.yml"]["schemaName"] = "different.topic.Identity"
+        (topic_cli.agent_folder / ".component-map.json").write_text(json.dumps(mapping))
+    if operation == "apply":
+        path.write_text(json.dumps(preview), encoding="utf-8")
+    original = topic_cli.draft.read_bytes()
+    mapping = _map(topic_cli)
+
+    with pytest.raises((native.MinimalBotEvaluationError, ValueError)):
+        authoring.main(args)
+
+    client._request.assert_not_called()
+    assert topic_cli.draft.read_bytes() == original and _map(topic_cli) == mapping
+
+
+@pytest.mark.parametrize("staged", [False, True])
+def test_delete_http_success_reconciles_reviewed_scope_without_readback(
+    topic_cli, monkeypatch, capsys, staged,
+):
+    root = _register_existing(topic_cli)
+    child = {
+        **copy.deepcopy(root), "id": "00000000-0000-0000-0000-000000003334",
+        "schemaName": "contoso_agent.topic.Child", "parentBotComponentId": root["id"],
+    }
+    grandchild = {
+        **copy.deepcopy(child), "id": "00000000-0000-0000-0000-000000003335",
+        "schemaName": "contoso_agent.topic.Grandchild", "parentBotComponentId": child["id"],
+    }
+    topic_cli.components.extend([grandchild, child])
+    mapping = _map(topic_cli)
+    for component in (child, grandchild):
+        relative = f"topics/{component['schemaName'].split('.')[-1]}.mcs.yml"
+        mapping[relative] = {
+            "componentId": component["id"], "componentKind": "DialogComponent",
+            "schemaName": component["schemaName"],
+        }
+        for directory in (topic_cli.agent_folder, topic_cli.agent_folder / ".baseline"):
+            (directory / relative).write_text("child content", encoding="utf-8")
+    mapping["topics/untouched.mcs.yml"] = {"componentId": "unrelated"}
+    (topic_cli.agent_folder / ".component-map.json").write_text(json.dumps(mapping))
+    if staged:
+        topic_cli.draft.unlink()
+    client, _, _ = _delete_client(topic_cli, monkeypatch)
+    args = _deletion_preview(topic_cli)
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["deleted"] is False
+    assert {component["id"] for component in preview["components"]} == {
+        root["id"], child["id"], grandchild["id"],
+    }
+    assert _map(topic_cli) == mapping
+    assert topic_cli.draft.exists() is not staged
+    client._request.assert_not_called()
+
+    authoring.main(args)
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["deleted"] is True and result["bookkeepingComplete"] is True
+    assert result["writeAccepted"] is True and result["httpStatus"] == 200
+    assert result["verified"] is False and "readback" not in result
+    assert result["requestId"] == "deletion-id"
+    assert result["response"] == {"serviceDetail": {"keep": True}}
+    client.read_components.assert_called_once()
+    assert _map(topic_cli) == {"topics/untouched.mcs.yml": {"componentId": "unrelated"}}
+    for relative in preview["workspace"]:
+        assert not (topic_cli.agent_folder / relative).exists()
+        assert not (topic_cli.agent_folder / ".baseline" / relative).exists()
+    client._request.assert_called_once()
+    call = client._request.call_args
+    assert call.args == ("PUT", client._components_url)
+    # Wire fields verified with Microsoft.Agents.ObjectModel's ElementSerializer.
+    assert call.kwargs["body"]["botComponentChanges"] == [
+        {"$kind": "BotComponentDelete", "botComponentId": component["id"], "versionNumber": 7}
+        for component in preview["components"]
+    ]
+    assert call.kwargs["body"]["changeToken"] == "fresh-token"
+    assert all(
+        value == [] for key, value in call.kwargs["body"].items()
+        if key not in {"changeToken", "botComponentChanges"}
+    )
+
+
+@pytest.mark.parametrize("drift", ["topic", "child", "local", "target", "mapping-case"])
+def test_deletion_rejects_changed_approval_scope_before_write(
+    topic_cli, monkeypatch, drift,
+):
+    component = _register_existing(topic_cli)
+    client, before, _ = _delete_client(topic_cli, monkeypatch)
+    args = _deletion_preview(topic_cli)
+    if drift == "topic":
+        before["botComponentChanges"][0]["component"]["displayName"] = "New name"
+    elif drift == "child":
+        before["botComponentChanges"].append({"component": {
+            **component, "id": "new-child", "parentBotComponentId": component["id"],
+        }})
+    elif drift == "local":
+        topic_cli.draft.write_text("Newer local edit", encoding="utf-8")
+    elif drift == "mapping-case":
+        mapping = _map(topic_cli)
+        mapping["topics/CaseSensitiveName.mcs.yml"]["schemaName"] = component["schemaName"].upper()
+        (topic_cli.agent_folder / ".component-map.json").write_text(json.dumps(mapping))
+    else:
+        topic_cli.target["agent"]["id"] = "different-agent"
+    mapping = _map(topic_cli)
+    local = topic_cli.draft.read_bytes()
+
+    with pytest.raises((native.ComponentEditError, ValueError)):
+        authoring.main(args)
+
+    client._request.assert_not_called()
+    assert topic_cli.draft.read_bytes() == local and _map(topic_cli) == mapping
+
+
+@pytest.mark.parametrize("failure", [403, 409, 503, "transport"])
+def test_deletion_failure_keeps_files_and_exposes_uncertainty_without_replay(
+    topic_cli, monkeypatch, failure,
+):
+    _register_existing(topic_cli)
+    client, _, _ = _delete_client(topic_cli, monkeypatch)
+    args = _deletion_preview(topic_cli)
+    mapping = _map(topic_cli)
+    content = topic_cli.draft.read_bytes()
+    if isinstance(failure, int):
+        client._request.return_value = (
+            SimpleNamespace(status_code=failure, headers={"x-ms-request-id": "failure-id"}),
+            {"unexpected": {"keep": True}, "access_token": "do-not-emit"},
+        )
+    else:
+        cause = native.MinimalBotEvaluationError("Transport failed")
+        client._request.side_effect = cause
+
+    with pytest.raises(native.ComponentEditError) as error:
+        authoring.main(args)
+
+    assert error.value.evidence["writeAttempted"] is True
+    assert error.value.evidence["verified"] is False
+    assert topic_cli.draft.read_bytes() == content and _map(topic_cli) == mapping
+    client._request.assert_called_once()
+    client.read_components.assert_called_once()
+    if isinstance(failure, int):
+        assert error.value.evidence["httpStatus"] == failure
+        assert error.value.evidence["response"]["unexpected"] == {"keep": True}
+        assert "do-not-emit" not in json.dumps(error.value.evidence)
+    else:
+        assert error.value.__cause__ is cause
+
+
+@pytest.mark.parametrize("local_failure", ["later-edit", "map-write", "output"])
+def test_deletion_preserves_remote_success_when_local_work_fails(
+    topic_cli, monkeypatch, local_failure,
+):
+    _register_existing(topic_cli)
+    client, _, _ = _delete_client(topic_cli, monkeypatch)
+    args = _deletion_preview(topic_cli)
+    if local_failure == "later-edit":
+        response = client._request.return_value
+
+        def write(*_args, **_kwargs):
+            topic_cli.draft.write_text("Newer edit", encoding="utf-8")
+            return response
+
+        client._request.side_effect = write
+    elif local_failure == "map-write":
+        monkeypatch.setattr(authoring, "save_component_map", Mock(
+            side_effect=PermissionError("Map unavailable"),
+        ))
+    else:
+        monkeypatch.setattr(authoring, "_emit_result", Mock(
+            side_effect=PermissionError("Output unavailable"),
+        ))
+
+    with pytest.raises(authoring.TopicBookkeepingError) as error:
+        authoring.main(args)
+
+    remote = error.value.evidence["remoteResult"]
+    assert remote["deleted"] is True and remote["writeAccepted"] is True
+    assert remote["verified"] is False and "readback" not in remote
+    assert remote["bookkeepingComplete"] is (local_failure == "output")
+    client._request.assert_called_once()
+    client.read_components.assert_called_once()
+    if local_failure == "later-edit":
+        assert topic_cli.draft.read_text(encoding="utf-8") == "Newer edit"
+        assert "topics/CaseSensitiveName.mcs.yml" in _map(topic_cli)
+
+
+def test_already_absent_deletion_reconciles_without_a_new_remote_write(
+    topic_cli, monkeypatch, capsys,
+):
+    _register_existing(topic_cli)
+    client, _, after = _delete_client(topic_cli, monkeypatch)
+    args = _deletion_preview(topic_cli)
+    capsys.readouterr()
+    client.read_components.side_effect = [after]
+
+    authoring.main(args)
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["alreadyAbsent"] is True and result["writeAttempted"] is False
+    assert result["deletedComponents"] == 0 and result["bookkeepingComplete"] is True
+    assert result["verified"] is True and "readback" not in result
+    assert not topic_cli.draft.exists() and not _map(topic_cli)
+    client._request.assert_not_called()
+    client.read_components.assert_called_once()
+
+
+def test_absent_topic_with_replacement_is_not_reconciled(topic_cli, monkeypatch):
+    component = _register_existing(topic_cli)
+    client, _, after = _delete_client(topic_cli, monkeypatch)
+    args = _deletion_preview(topic_cli)
+    after["botComponentChanges"] = [{"component": {**component, "id": "replacement"}}]
+    client.read_components.side_effect = [after]
+
+    with pytest.raises(native.ComponentEditError, match="replacement"):
+        authoring.main(args)
+
+    client._request.assert_not_called()
+    assert topic_cli.draft.exists() and _map(topic_cli)
+
+
+def test_deletion_without_preview_is_rejected_before_connection(topic_cli):
+    with pytest.raises(SystemExit):
         authoring.main(["delete", "--topic", str(topic_cli.draft), "--yes"])
-    assert error.value.code == 2
     topic_cli.connect.assert_not_called()
-    assert topic_cli.draft.exists()
+
+
+@pytest.mark.parametrize("failure", ["wrong-agent", "version", "read", "path", "snapshot"])
+def test_invalid_deletion_inputs_stop_before_write(topic_cli, monkeypatch, failure):
+    _register_existing(topic_cli)
+    client, before, _ = _delete_client(topic_cli, monkeypatch)
+    if failure == "version":
+        del topic_cli.components[0]["version"]
+        del before["botComponentChanges"][0]["component"]["version"]
+    args = _deletion_preview(topic_cli)
+    cause = RuntimeError("Cannot read current state")
+    if failure == "wrong-agent":
+        before["bot"]["cdsBotId"] = "other-agent"
+    elif failure == "read":
+        client.read_components.side_effect = cause
+    elif failure == "path":
+        mapping = _map(topic_cli)
+        mapping["../outside.mcs.yml"] = next(iter(mapping.values()))
+        (topic_cli.agent_folder / ".component-map.json").write_text(json.dumps(mapping))
+    elif failure == "snapshot":
+        preview = topic_cli.root / "delete-preview.json"
+        data = json.loads(preview.read_text())
+        data["components"] = [None]
+        preview.write_text(json.dumps(data))
+
+    with pytest.raises((native.ComponentEditError, ValueError)) as error:
+        authoring.main(args)
+
+    client._request.assert_not_called()
+    assert topic_cli.draft.exists() and _map(topic_cli)
+    if failure in {"wrong-agent", "version", "read"}:
+        assert error.value.evidence["writeAttempted"] is False
+    if failure == "read":
+        assert error.value.__cause__ is cause

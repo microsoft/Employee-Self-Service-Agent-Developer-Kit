@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Preview and save topics for the selected editable Dev agent."""
+"""Preview, save and delete topics for the selected editable Dev agent."""
 
 from __future__ import annotations
 
@@ -45,6 +45,110 @@ from workspace_state import (
 
 class TopicBookkeepingError(ComponentEditError):
     """A local tracking failure after a verified remote topic result."""
+
+
+_TEMPLATE_CATALOG_DIRECTORY = (
+    Path(__file__).resolve().parents[1] / "src" / "reference" / "manage-topics"
+)
+_DELETION_TEMPLATE_FAMILIES = {
+    f"gptagent_copilotforemployeeselfservice{persona}"
+    for persona in ("core", "hr", "it")
+}
+
+
+def _deletion_template_protection(
+    components: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Match known DA-GA template identities without asserting inventory coverage."""
+    protection: dict[str, Any] = {
+        "protectedTopics": [], "catalogErrors": [], "coverageVerified": False,
+    }
+    by_schema: dict[str, list[dict[str, Any]]] = {}
+    for component in components:
+        if component.get("$kind") == "DialogComponent":
+            by_schema.setdefault(
+                str(component.get("schemaName") or "").casefold(), [],
+            ).append(component)
+    paths = sorted(
+        set(_TEMPLATE_CATALOG_DIRECTORY.glob("catalog.*.json"))
+        | {
+            _TEMPLATE_CATALOG_DIRECTORY / "catalog.provisional.json",
+            _TEMPLATE_CATALOG_DIRECTORY / "catalog.authoring-additions.json",
+        }
+    )
+    for path in paths:
+        if path.name == "catalog.schema.json":
+            continue
+        try:
+            catalog = json.loads(path.read_text(encoding="utf-8"))
+            if (
+                not isinstance(catalog, dict) or catalog.get("schemaVersion") != 1
+                or not isinstance(catalog.get("packages"), list)
+            ):
+                raise ValueError(f"{path.name}: expected schemaVersion 1 and packages.")
+        except (OSError, ValueError) as exc:
+            protection["catalogErrors"].append({
+                "file": str(path), "errors": _exception_chain(exc),
+            })
+            continue
+        for package_index, package in enumerate(catalog["packages"]):
+            try:
+                if not isinstance(package, dict):
+                    raise ValueError(f"{path.name}: package must be an object.")
+                key = str(package.get("key") or "")
+                family = key.removeprefix("source-family:").casefold()
+                source_path = package.get("sourcePath")
+                if (
+                    key != f"source-family:{family}"
+                    or family not in _DELETION_TEMPLATE_FAMILIES
+                    or not isinstance(source_path, str)
+                    or not source_path.startswith("/sources/dev/AgentTemplates/")
+                ):
+                    continue
+                names = package.get("agentSchemaNames")
+                if (
+                    not isinstance(names, list)
+                    or any(not isinstance(name, str) for name in names)
+                    or family not in {name.casefold() for name in names}
+                ):
+                    raise ValueError(f"{path.name}: agentSchemaNames does not identify {family}.")
+                topics = package.get("topics")
+                if not isinstance(topics, list):
+                    raise ValueError(f"{path.name}: topics must be a list.")
+            except ValueError as exc:
+                protection["catalogErrors"].append({
+                    "file": str(path), "packageIndex": package_index,
+                    "errors": _exception_chain(exc),
+                })
+                continue
+            for topic_index, topic in enumerate(topics):
+                try:
+                    if not isinstance(topic, dict) or not isinstance(topic.get("schemaName"), str):
+                        raise ValueError(f"{path.name}: topic.schemaName must be a string.")
+                except ValueError as exc:
+                    protection["catalogErrors"].append({
+                        "file": str(path), "packageIndex": package_index,
+                        "topicIndex": topic_index, "errors": _exception_chain(exc),
+                    })
+                    continue
+                for component in by_schema.get(topic["schemaName"].casefold(), []):
+                    protection["protectedTopics"].append({
+                        "componentId": component["id"],
+                        "schemaName": component["schemaName"],
+                        "catalog": path.name,
+                        "source": catalog.get("source"),
+                        "packageKey": package["key"],
+                        "packageVersion": package.get("packageVersion"),
+                        "sourcePath": source_path,
+                        "sourceRevision": package.get("sourceRevision"),
+                    })
+    if protection["protectedTopics"]:
+        raise ComponentEditError(
+            "The deletion scope includes protected DA-GA agent-template topics. "
+            "Deletion was not started; inspect the matched identities and source evidence.",
+            {"writeAttempted": False, "deleted": False, "templateProtection": protection},
+        )
+    return protection
 
 
 def _active_agent_folder(root: Path) -> Path:
@@ -260,13 +364,119 @@ def _emit_mutation_result(result: dict[str, Any], output: Path | None) -> None:
     try:
         _emit_result(result, output)
     except OSError as exc:
-        if result.get("saved") is True:
+        if result.get("saved") is True or result.get("deleted") is True:
             result["outputComplete"] = False
             raise TopicBookkeepingError(
                 "The topic operation completed, but reusable output writing failed.",
                 {"remoteResult": result, "localError": _exception_chain(exc)},
             ) from exc
         raise
+
+
+def _deletion_paths(agent_folder: Path, relative: str) -> tuple[Path, Path]:
+    path = Path(relative)
+    working = agent_folder / path
+    baseline = agent_folder / ".baseline" / path
+    if (
+        path.is_absolute() or path.drive or not path.parts
+        or any(part.startswith(".") or ":" in part for part in path.parts)
+        or working.is_symlink() or baseline.is_symlink()
+        or not working.resolve().is_relative_to(agent_folder.resolve())
+        or not baseline.resolve().is_relative_to(agent_folder.resolve())
+        or not baseline.resolve().is_relative_to((agent_folder / ".baseline").resolve())
+    ):
+        raise ValueError(f"Invalid deletion workspace path: {relative}")
+    return working, baseline
+
+
+def _deletion_workspace(
+    agent_folder: Path, components: list[dict[str, Any]],
+) -> dict[str, Any]:
+    identities = {str(component["id"]).casefold() for component in components}
+    captured = {}
+    for relative, entry in _load_component_map(agent_folder).items():
+        if str(entry.get("componentId") or "").casefold() not in identities:
+            continue
+        working, baseline = _deletion_paths(agent_folder, relative)
+        captured[relative] = {
+            "mapping": entry,
+            "working": working.read_text(encoding="utf-8") if working.exists() else None,
+            "baseline": baseline.read_text(encoding="utf-8") if baseline.exists() else None,
+        }
+    return captured
+
+
+def _delete_topic(
+    client: MinimalBotEvaluationClient,
+    target: dict[str, Any],
+    agent_folder: Path,
+    topic: Path,
+    payload: dict[str, Any],
+    expected: dict[str, Any] | None,
+) -> dict[str, Any]:
+    _, relative = _topic_path(agent_folder, topic)
+    mapping = _load_component_map(agent_folder)
+    if expected is None:
+        entry, component = _mapped_component(mapping, relative, _components(payload))
+        scope = client.dialog_deletion_scope(payload, entry["componentId"])
+        protection = _deletion_template_protection(scope)
+        return {
+            "operation": "delete", "target": target, "path": relative,
+            "component": component, "components": scope,
+            "templateProtection": protection,
+            "workspace": _deletion_workspace(agent_folder, scope),
+            "writeAttempted": False, "deleted": False,
+        }
+    if (
+        expected.get("operation") != "delete"
+        or not _target_matches(expected.get("target", {}), target)
+        or expected.get("path") != relative
+    ):
+        raise ValueError("The deletion preview belongs to a different operation, target or path.")
+    scope = expected.get("components")
+    workspace = expected.get("workspace")
+    if (
+        not isinstance(scope, list) or not scope
+        or any(not isinstance(component, dict) or not component.get("id") for component in scope)
+        or not isinstance(workspace, dict) or relative not in workspace
+        or not isinstance(mapping.get(relative), dict)
+        or mapping[relative].get("componentKind") != "DialogComponent"
+        or str(mapping[relative].get("componentId") or "").casefold()
+        != str(scope[0].get("id") or "").casefold()
+        or str(mapping[relative].get("schemaName") or "").casefold()
+        != str(scope[0].get("schemaName") or "").casefold()
+    ):
+        raise ValueError("The deletion preview no longer identifies the mapped topic.")
+    if _deletion_workspace(agent_folder, scope) != workspace:
+        raise ValueError("Local deletion scope changed since preview. No write was sent.")
+    protection = _deletion_template_protection(scope)
+    remote = client.delete_dialog_component(scope)
+    result = {
+        "operation": "delete", "target": target, "path": relative,
+        "templateProtection": protection,
+        **remote, "deleted": True, "bookkeepingComplete": False,
+    }
+    try:
+        if _deletion_workspace(agent_folder, scope) != workspace:
+            raise ValueError("Newer local changes were preserved after the remote deletion.")
+        current_map = _load_component_map(agent_folder)
+        for path, captured in workspace.items():
+            if current_map.get(path) != captured["mapping"]:
+                raise ValueError("Component mapping changed during deletion.")
+        for path in workspace:
+            working, baseline = _deletion_paths(agent_folder, path)
+            working.unlink(missing_ok=True)
+            baseline.unlink(missing_ok=True)
+            del current_map[path]
+        save_component_map(agent_folder, current_map)
+    except (OSError, ValueError) as exc:
+        raise TopicBookkeepingError(
+            "The deletion outcome is confirmed, but local cleanup is incomplete. "
+            "Do not repeat the remote deletion to repair local tracking.",
+            {"remoteResult": result, "workspace": workspace, "localError": _exception_chain(exc)},
+        ) from exc
+    result["bookkeepingComplete"] = True
+    return result
 
 
 def plan_workspace_topic_updates(
@@ -479,14 +689,14 @@ def save_workspace_topic_updates(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("list", "read", "create", "update"))
+    parser.add_argument("operation", choices=("list", "read", "create", "update", "delete"))
     parser.add_argument("--kit-root", type=Path, default=Path.cwd())
     parser.add_argument("--account")
-    parser.add_argument("--topic", type=Path, help="Mapped topic path for read.")
+    parser.add_argument("--topic", type=Path, help="Mapped topic path for read or delete.")
     parser.add_argument("--draft", type=Path, help="Submitted .mcs.yml draft.")
     parser.add_argument("--display-name", help="Creation-only display name.")
     parser.add_argument("--description", help="Creation-only component description.")
-    parser.add_argument("--expected", type=Path, help="Read snapshot for update.")
+    parser.add_argument("--expected", type=Path, help="Read snapshot for update; preview for delete.")
     parser.add_argument(
         "--acknowledge-remote-changes", action="store_true",
         help="Save a reviewed reconciliation against the unchanged --expected snapshot.",
@@ -496,7 +706,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--yes", action="store_true", help="Apply the separately approved change.")
     args = parser.parse_args(argv)
 
-    if args.operation == "read" and args.topic is None:
+    if args.operation in {"read", "delete"} and args.topic is None:
         parser.error(f"{args.operation} requires --topic.")
     if args.operation in {"create", "update"} and args.draft is None:
         parser.error(f"{args.operation} requires --draft.")
@@ -506,8 +716,12 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("update requires --expected from a fresh read.")
     if args.acknowledge_remote_changes and args.operation != "update":
         parser.error("--acknowledge-remote-changes is valid only for update.")
-    if args.operation not in {"create", "update"} and args.yes:
-        parser.error("--yes is valid only for create or update.")
+    if args.operation == "delete" and args.yes and args.expected is None:
+        parser.error("delete --yes requires --expected from a reviewed deletion preview.")
+    if args.operation == "delete" and args.expected is not None and not args.yes:
+        parser.error("Preview deletion without --expected; apply the reviewed preview with --yes.")
+    if args.operation not in {"create", "update", "delete"} and args.yes:
+        parser.error("--yes is valid only for create, update or delete.")
     if args.yaml_output and args.operation != "read":
         parser.error("--yaml-output is valid only for read.")
 
@@ -550,6 +764,14 @@ def main(argv: list[str] | None = None) -> int:
                 encoding="utf-8",
                 newline="",
             )
+        return 0
+
+    if args.operation == "delete":
+        result = _delete_topic(
+            _native_client(client, target), target, agent_folder, args.topic,
+            component_payload, read_json(args.expected) if args.expected else None,
+        )
+        _emit_mutation_result(result, args.output)
         return 0
 
     assert args.draft is not None

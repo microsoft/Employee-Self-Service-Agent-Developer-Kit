@@ -248,12 +248,13 @@ not configure ISV connections. See the
 [Manage topics walkthrough](src/skills/manage-topics/SKILL.md) for the detailed
 flow.
 
-### ✏️ Create and Update Topics
+### ✏️ Create, Update and Delete Topics
 
 Describe the intended conversation or supply relevant evaluation cases. Copilot reads current topics, drafts ordinary `.mcs.yml` content, and previews the proposed behavior for approval.
 
 - **Create** (`/create`): save one new inactive topic to the selected editable Dev agent after approval.
 - **Update** (`/update`): read and save the selected mapped topic while preserving its identity, active state, and unrelated behavior.
+- **Delete** (`/delete`): review and approve deletion of a selected editable Dev topic, keep its deletion local for a later Push, or discard a never-pushed local draft. Review any routing-instruction correction separately before approving its save.
 - **Instructions**: preview and approve matching instruction-section changes separately from topic changes.
 
 Save/readback verification is not activation, publication, or conversation acceptance. Supported conversation testing is offered when installed and the saved topic meets its conditions; otherwise acceptance remains pending.
@@ -334,7 +335,7 @@ General `/push` first shows local pending changes, then delegates selected topic
 
 This release supports DA authoring and Push operations. General Push no longer deploys Dataverse-based agent components. Connect Workday's Dataverse-backed runtime setup and topic wiring and activation remain supported through its separate lifecycle. For legacy/custom-engine guidance, see [`main-ca`](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/tree/main-ca).
 
-Explicit evaluation push retains its selected-set flow and AgentBuilder new-copy behavior. Topic deletion is not available in this release. Workflow and template-config deployment, activation, and publication are not part of general Push. Publication remains separately approved.
+Explicit evaluation push retains its selected-set flow and AgentBuilder new-copy behavior. Topic deletion uses its owning operation with an impact preview and explicit destructive approval, including when selected in a Push batch. Workflow and template-config deployment, activation, and publication are not part of general Push. Publication remains separately approved.
 
 ### ✈️ FlightCheck — Agent Setup Diagnostics
 
@@ -665,7 +666,7 @@ first** when setup offers it, or run **`/planner`** directly.
 | `/topic-actions`            | Compatibility alias for `/manage-topics`                                                                      |
 | `/create`                   | Draft and approve a topic save, or separately author evaluation sets; flow authoring is outside ADK           |
 | `/update`                   | Read and approve a mapped topic save, or separately edit evaluation sets                                      |
-| `/delete`                   | Deletion is not available for DA-GA agents in this release                                                    |
+| `/delete`                   | Review and approve a selected Dev topic deletion, stage it locally, or discard a never-pushed local draft     |
 | `/scan`                     | Scan your agent for compile errors and fix them                                                               |
 | `/review`                   | Review local topics or evaluation test sets tagged for review                                                 |
 | `/evaluate`                 | Generate evaluation test sets for your agent                                                                  |

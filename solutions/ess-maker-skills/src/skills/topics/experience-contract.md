@@ -11,6 +11,7 @@ Read only the reference needed for the current operation or next step. Load its 
 | When                                                                                      | Reference                                                                                                                    |
 | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | Drafting or reviewing a topic or related instruction correction; reporting their outcomes | [Authoring experience](authoring-experience.md)                                                                              |
+| Reviewing or applying topic deletion, local-only deletion or draft discard                | [Deletion experience](deletion-experience.md)                                                                                |
 | Reviewing a Push inventory or composed result; executing any approved save batch          | [Push experience](push-experience.md); standalone owners use its [Push telemetry](push-experience.md#push-telemetry) section |
 | Offering or conducting topic testing; readiness, outcomes, pause or stop                  | [Testing experience](testing-experience.md)                                                                                  |
 
@@ -115,8 +116,6 @@ Unclear target identity, denied access, unavailable required reads and conflicti
 
 ### Template protection for deletion
 
-Topic deletion is not available in this release. Preserve local files, baselines and mappings. The protection rules below also apply when assessing pending deletions; they do not enable a deletion operation.
-
 Do not delete template-provided topics through topic deletion, Push or cleanup, including local-only deletion. Apply this section before deletion; inventory classifications do not override it.
 
 The inventory target is DA-GA: the Core, HR and IT families from `sources/dev/AgentTemplates` declared in `catalog.authoring-additions.json`. The companion catalog also includes solution-backed DA families outside this target. Do not include those rows in DA-GA coverage, substitute DA-Preview inventories or translate their schema prefixes into DA-GA identities.
@@ -129,6 +128,8 @@ Before deleting a local topic or dispatching its remote deletion, apply the foll
 4. An applicable inventory match or other established template origin means the topic is protected from deletion, including examples, helpers and integration topics. A nonmatch is not proof of customer ownership. When no template origin is established, continue with ordinary scope, preview, authorization and concurrency checks.
 
 For a template-protected deletion, name the topic, explain its deletion protection, and identify the next safe action. Say that the deletion was not started. Preserve an existing draft unchanged. In a Push inventory, keep the deletion pending with its specific reason under Not included; do not offer a runnable deletion for it. If the restriction is discovered after approval, report the actual no-write outcome using the existing outcome contract. Preserve earlier successful operations and pause any dependent routing correction.
+
+The topic deletion helper also matches full topic schema identities across the reviewed root and contained topics against catalog rows for the DA-GA Core, HR and IT agent-template source families. It does not translate topic prefixes to the selected agent's schema; an unchanged full template identity remains protected in an agent with a different schema name. An established match stops preview or apply before any removal. Its `templateProtection` evidence retains matches and catalog-read errors; `coverageVerified: false` is not a claim of complete installed-version coverage or customer ownership. An unavailable catalog or nonmatch alone adds no blanket deletion prohibition. Inspect reported gaps and retain the session's policy checks, including other established template origin and local-only deletion protection.
 
 Approval, a debugging objective or a request to fix compile errors does not authorize template-topic deletion. Read-only inspection and reporting remain available.
 

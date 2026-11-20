@@ -5,12 +5,12 @@
 This skill scans a cloned ESS agent for compile errors and walks the user through fixing them.
 
 Distinguish local fixes from changes pushed to the agent. Use the normal topic
-update owner for approved changes and the general Push prompt for
+update or delete owner for approved changes and the general Push prompt for
 a selected batch. Carry scoped approval forward without repeating it.
 
 ## Rules
 
-- Before proposing or applying topic-file fixes, read and apply **Authoring policy for this release** in [the shared topic contract](../topics/experience-contract.md). Topic deletion is not available in this release. Preserve local files, baselines and mappings; report blocked operations as unchanged with their specific reason, not as fixed, and continue read-only scanning and independently eligible work.
+- Before proposing or applying topic-file fixes or deletions, read and apply **Authoring policy for this release** in [the shared topic contract](../topics/experience-contract.md). Carry template-protected deletions and independently blocked operations into the report as unchanged with their specific reason, not as fixed; continue read-only scanning and independently eligible work.
 - Do NOT run terminal commands or scripts EXCEPT the kit's own helper scripts under `scripts/`, including the selected topic owner's preview and approved execution commands. For everything else - file edits, validation, lookups - use your built-in file reading, writing, and editing tools only. Do NOT use Python, PowerShell, Node.js, or any other scripting language to do work the editing tools can do.
 - Do NOT fix errors automatically without user confirmation. Present each group of errors and ask the user before making changes.
 - Do NOT modify the source template files in `src/`. Only modify files inside the agent folder (the cloned agent at the workspace root).
@@ -20,7 +20,7 @@ a selected batch. Carry scoped approval forward without repeating it.
 
 ## Cleanup status updates
 
-Read the [shared foundation](../topics/experience-contract.md), including Status update markers and Presentation and scope, before scanning. Use the local definitions below, not a native todo list or progress checklist. Bind counts to the current deduplicated local scan. Delegated topic edits emit through their performing owners; cleanup does not repeat their updates.
+Read the [shared foundation](../topics/experience-contract.md), including Status update markers and Presentation and scope, before scanning. Use the local definitions below, not a native todo list or progress checklist. Bind counts to the current deduplicated local scan. Delegated topic edits and deletions emit through their performing owners; cleanup does not repeat their updates.
 
 | Reporting point        | Completion condition                                                                                              | Completion message                                                       |
 | ---------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
@@ -120,7 +120,8 @@ After scanning, group the errors into these categories:
 **What it means**: The topic references a Power Automate workflow (via `InvokeFlowAction` with a `flowId`) that wasn't included in the clone. This usually happens with add-on workflows (ADP, D365, password reset, catalog) that aren't part of the core ESS package.
 **Fix options**:
 
-- Leave the reference unchanged and report the unresolved error and any known impact. A missing workflow in local extraction does not establish its absence at runtime. Topic deletion is not available in this release.
+- **Review topic deletion**: Use the delete owner to assess eligibility, effects and local-only versus pushed deletion. A missing workflow in local extraction does not establish its absence at runtime.
+- **Skip**: Leave it unchanged and report the unresolved error and any known impact.
 
 ### Category 3: Missing Dialog Reference
 
@@ -145,7 +146,7 @@ Show the user a summary table:
 > | Error Type                | Files Affected | Fix                             |
 > | ------------------------- | -------------- | ------------------------------- |
 > | ModelDescription too long | {count} topics | Truncate to fit 1024-char limit |
-> | Missing CloudFlow         | {count} topics | Report the unresolved reference |
+> | Missing CloudFlow         | {count} topics | Review topic deletion or skip   |
 > | Missing Dialog reference  | {count} topics | Correct the schema name         |
 
 Then say: "Let's walk through each file. I'll explain what's wrong and propose fixes for your approval before making any changes."
@@ -178,7 +179,24 @@ For each file with errors:
 ### Missing CloudFlow
 
 - Tell the user the topic references a workflow that wasn't included in the clone. Include the topic's `componentName` and what it appears to do.
-- Leave this reference unresolved without deleting the topic. Report the limitation and continue to other independently fixable errors.
+- Offer to review deletion or skip. A choice to review enters `src/skills/topics/delete/SKILL.md`; it is not destructive approval. Use that owner's policy, impact review, choices and scoped execution.
+- If the file also has other fixable errors, use this review/skip decision first. Skip the other fixes only after the delete owner confirms removal; selecting a deletion review alone does not remove anything.
+
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "action": {
+        "type": "string",
+        "title": "Missing workflow reference",
+        "description": "How would you like to continue?",
+        "enum": ["Review topic deletion", "Skip"]
+      }
+    }
+  }
+}
+```
 
 After presenting all remaining proposed fixes for the file, call `ask_user`:
 
@@ -201,6 +219,7 @@ After presenting all remaining proposed fixes for the file, call `ask_user`:
 If confirmed:
 
 - Use the normal topic update owner for the approved fixes. Carry the local-only edit scope and existing checkpoint; do not infer remote-save approval. If no checkpoint has been saved for these files, return to Step 2b before editing.
+- For deletions, follow the delete owner and preserve its actual local or remote outcome.
 - Reuse the owner's update for what changed and where. Count a diagnostic as fixed only after the relevant re-scan confirms it.
 
 Move to the next file with errors.
