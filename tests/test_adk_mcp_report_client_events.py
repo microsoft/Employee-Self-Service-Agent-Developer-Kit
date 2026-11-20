@@ -137,6 +137,9 @@ def test_report_client_events_tool_returns_structured_bridge_result(monkeypatch)
                     "displayMode": "inline",
                     "themeName": "dark",
                     "operationId": "6f7c8f9c-1234-4abc-9def-0123456789ab",
+                    "correlationId": "6f7c8f9c-1234-4abc-9def-0123456789ab",
+                    "requestId": "6f7c8f9c-1234-4abc-9def-0123456789ac",
+                    "serverOperationId": "6f7c8f9c-1234-4abc-9def-0123456789ad",
                 }
             ],
         )
@@ -162,6 +165,9 @@ def test_report_client_events_tool_returns_structured_bridge_result(monkeypatch)
                 "displayMode": "inline",
                 "themeName": "dark",
                 "operationId": "6f7c8f9c-1234-4abc-9def-0123456789ab",
+                "correlationId": "6f7c8f9c-1234-4abc-9def-0123456789ab",
+                "requestId": "6f7c8f9c-1234-4abc-9def-0123456789ac",
+                "serverOperationId": "6f7c8f9c-1234-4abc-9def-0123456789ad",
             }
         ],
     }
