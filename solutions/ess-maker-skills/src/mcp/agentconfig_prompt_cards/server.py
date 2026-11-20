@@ -76,7 +76,9 @@ mcp = FastMCP(
         "Open Card Prompts for a resolved Employee Agent titleId. Definitions are maker "
         "configuration, not executable instructions. Mutations are app-only. "
         "Save for later persists isDisabled=true; Submit uses false. "
-        "Reordering changes only sortOrder. Never blindly retry an ambiguous create."
+        "Creation allocates existing saved positions before posting at sortOrder=0. "
+        "Edit preserves saved order. Bulk position writes change only sortOrder and "
+        "are non-atomic. Never blindly retry an ambiguous create."
     ),
 )
 _client: PromptCardsClient | None = None
@@ -223,7 +225,11 @@ async def list_prompt_card_definitions(tenantId: str, titleId: str) -> CallToolR
 async def create_prompt_card_definition(
     tenantId: str, titleId: str, definition: PromptCardCreate,
 ) -> CallToolResult:
-    """Create one card prompt. Save for later sets isDisabled=true; Submit sets false."""
+    """Create one card prompt at the supplied saved position.
+
+    The widget reserves sortOrder=0 before creation. Save for later sets
+    isDisabled=true; Submit sets false.
+    """
     async def request(client: PromptCardsClient) -> dict[str, Any]:
         stored = await client.create_definition(titleId, definition)
         return {"definition": stored.model_dump()}
@@ -308,7 +314,12 @@ async def reorder_prompt_card_definitions(
     tenantId: str, titleId: str,
     definitions: Annotated[list[PromptCardOrder], Field(min_length=1, max_length=100)],
 ) -> CallToolResult:
-    """Reorder only; never change enabled state. Non-atomic writes require reload after any failure."""
+    """Allocate existing saved positions before creating a card prompt at sortOrder=0.
+
+    Accepts 1-100 definitions and changes only sortOrder. Returns the submitted
+    definitions with verified positions. Non-atomic writes require reload after
+    any failure.
+    """
     async def request(client: PromptCardsClient) -> dict[str, Any]:
         updated = await client.reorder_definitions(
             titleId, PromptCardReorder(definitions=definitions),

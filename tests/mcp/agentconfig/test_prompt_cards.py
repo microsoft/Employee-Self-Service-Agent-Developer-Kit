@@ -556,6 +556,86 @@ def test_save_for_later_and_submit_persist_disabled_state(monkeypatch):
         assert client.update_definition.await_args.args[2].model_dump(exclude_unset=True) == {"isDisabled": disabled}
 
 
+@pytest.mark.parametrize("populated", [False, True])
+@pytest.mark.parametrize("disabled", [False, True])
+def test_sdk_creation_position_allocation_keeps_saved_prompts_in_order(monkeypatch, populated, disabled):
+    second_id = "00000000-0000-0000-0000-000000004444"
+    created_id = "00000000-0000-0000-0000-000000005555"
+    definitions = [
+        {**API_DEFINITION, "SortOrder": 4},
+        {
+            **API_DEFINITION, "DefinitionId": second_id, "DefinitionName": "Second prompt",
+            "DataPrompt": "Another employee question", "IsDisabled": False, "SortOrder": 9,
+        },
+    ] if populated else []
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json={"value": list(reversed(definitions))})
+        body = json.loads(request.content)
+        if request.method == "PATCH":
+            positions = {item["DefinitionId"]: item["SortOrder"] for item in body["Definitions"]}
+            for item in definitions:
+                item["SortOrder"] = positions[item["DefinitionId"]]
+            return httpx.Response(200, json={"value": list(reversed(definitions))})
+        assert request.method == "POST"
+        stored = {**body, "DefinitionId": created_id}
+        definitions.append(stored)
+        return httpx.Response(201, json=stored)
+
+    client = PromptCardsClient(transport=httpx.MockTransport(handle))
+    monkeypatch.setattr(server, "get_client", lambda: client)
+
+    async def scenario():
+        try:
+            baseline = await server.mcp.call_tool("list_prompt_card_definitions", {
+                "tenantId": TENANT, "titleId": TITLE,
+            })
+            assert not baseline.isError
+            existing = baseline.structuredContent["definitions"]
+            shifted = [{**item, "sortOrder": index + 1} for index, item in enumerate(existing)]
+            if existing:
+                result = await server.mcp.call_tool("reorder_prompt_card_definitions", {
+                    "tenantId": TENANT, "titleId": TITLE,
+                    "definitions": [
+                        {"definitionId": item["definitionId"], "sortOrder": item["sortOrder"]}
+                        for item in shifted
+                    ],
+                })
+                assert not result.isError
+                assert result.structuredContent == {
+                    "tenantId": TENANT, "titleId": TITLE, "definitions": shifted,
+                }
+                assert json.loads(requests[-1].content) == {"Definitions": [
+                    {"DefinitionId": item["definitionId"], "SortOrder": item["sortOrder"]}
+                    for item in shifted
+                ]}
+
+            created = await server.mcp.call_tool("create_prompt_card_definition", {
+                "tenantId": TENANT, "titleId": TITLE,
+                "definition": {
+                    "definitionName": "New card prompt", "dataPrompt": "New employee question",
+                    "presentationGuidance": None, "audience": [], "isDisabled": disabled, "sortOrder": 0,
+                },
+            })
+            assert not created.isError
+            assert created.structuredContent["definition"]["definitionId"] == created_id
+            assert created.structuredContent["definition"]["isDisabled"] is disabled
+            saved = await server.mcp.call_tool("list_prompt_card_definitions", {
+                "tenantId": TENANT, "titleId": TITLE,
+            })
+            assert not saved.isError
+            assert saved.structuredContent["definitions"] == [created.structuredContent["definition"], *shifted]
+        finally:
+            await client.aclose()
+
+    run(scenario())
+    assert [request.method for request in requests] == ["GET", *(["PATCH"] if populated else []), "POST", "GET"]
+    assert all(request.url.path == COLLECTION for request in requests if request.method in {"PATCH", "POST"})
+
+
 @pytest.mark.parametrize("operation", ["create", "reorder", "delete"])
 def test_failures_preserve_scope_and_require_reconciliation_without_leaking_content(monkeypatch, operation):
     error = AgentConfigApiError("secret prompt and group-id", http_status=503)

@@ -34,7 +34,7 @@ run only the intended widget server on that port.
 Use **MCP: List Servers** in VS Code to start or restart `ess-prompt-cards`,
 then ask chat to call `open_prompt_cards` with the target Employee Agent's
 `titleId`. Use the verified landing-page title ID, not the Dataverse bot ID.
-The opener reads real saved definitions. Row mutations and Save order
+The opener reads real saved definitions. Row mutations and compose saves
 write to the authenticated tenant's backend, so use a test agent.
 
 Authoring sign-in runs on a worker thread. API tools, audience search, and
@@ -53,6 +53,11 @@ with "Copy of ". The localized name is truncated to 80 UTF-16 code units at a
 complete Unicode code point. Edit preserves the definition ID and saved order.
 Saved audience tags resolve their directory names while retaining the targeting IDs.
 
+The Card Prompts list displays saved API order in a vertically scrolling region
+with a 25rem maximum height. The heading and Create card prompt button stay
+outside that region. The named list supports keyboard focus and scrolling.
+Creation and duplication place the new prompt first. Edit preserves saved order.
+
 ## Wire contract
 
 Server: `ess-prompt-cards`. Resource:
@@ -68,7 +73,7 @@ Server: `ess-prompt-cards`. Resource:
 | `search_audience_groups` | `query` |
 | `resolve_audience_groups` | `groupIds` (1–15 nonempty UUIDs) |
 | `update_prompt_card_definition` | scope, `definitionId`, `patch` |
-| `reorder_prompt_card_definitions` | scope, `definitions: [{definitionId, sortOrder}]` |
+| `reorder_prompt_card_definitions` (creation position allocation) | scope, `definitions: [{definitionId, sortOrder}]` (1–100) |
 | `delete_prompt_card_definition` | scope, `definitionId` |
 
 Scope means `tenantId` and `titleId`. The opener derives tenant scope from the
@@ -91,9 +96,10 @@ batches are rejected. There are no action, follow-up, or scheduling properties.
 Successful `structuredContent`:
 - Open/list: `{tenantId, titleId, definitions}` — complete maker baseline,
   including disabled definitions and every audience.
-- Reorder: `{tenantId, titleId, definitions}` — **updated definitions only**,
-  sorted by order then ID, not necessarily the complete collection. Merge by
-  ID or reload. Response identities and orders must match the requested batch.
+- Creation position allocation: `{tenantId, titleId, definitions}` — the submitted
+  definitions, sorted by order then ID. The widget submits the complete saved
+  collection for creation and verifies its membership, relative order, and
+  allocated positions. Response identities and orders must match the requested batch.
 - Create/update: `{tenantId, titleId, definition}`.
 - Delete: `{tenantId, titleId, definitionId, deleted: true}`.
 - Audience search: `{status: "success", groups: [{id, displayName, mail, isValid}],
@@ -108,8 +114,28 @@ the Card Prompts widget resource. The opener reads the saved card prompt collect
 Save for later is a real create/update with `isDisabled: true`; Submit uses
 `false`. Creation accepts a name of at most 80 UTF-16 code units, a data prompt
 of at most 2,000, optional presentation guidance of at most 1,000, and at most
-15 audience group IDs. Required text fields must be nonblank. A sort-only save
-must not alter disabled state.
+15 audience group IDs. Required text fields must be nonblank. Position allocation
+changes only `sortOrder`, preserving authored fields and disabled state.
+
+## Creation and saved positions
+
+Before creation or duplication, the widget reads the authoritative collection,
+checks the 50-definition limit, and compares its membership and order with the
+opening baseline. For a populated collection it calls
+`reorder_prompt_card_definitions` with every existing definition, assigning
+sequential `sortOrder` values starting at 1 while preserving relative order.
+The adapter validates the batch before PATCH and verifies the returned IDs and
+positions. The widget then posts the new definition with `sortOrder: 0`.
+An empty collection posts directly at 0. Submit and Save for later use this
+same position-allocation flow.
+
+Position allocation and creation are separate, non-atomic writes. A failed or
+mismatched allocation stops the widget before POST and triggers an authoritative
+reload. A failed POST can leave existing positions shifted while preserving
+their relative order. The widget retains compose fields during reconciliation
+and checks the saved collection before retrying an uncertain creation.
+Concurrent writes after preflight remain possible under ordinary PATCH semantics.
+Edit patches authored fields and availability while preserving the saved position.
 
 ## Audience discovery
 
