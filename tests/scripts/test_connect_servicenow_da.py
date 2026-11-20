@@ -10508,7 +10508,11 @@ def test_portal_url_docs_require_confirmation_before_save_hr_and_it() -> None:
     def confirmation_block(text: str) -> str:
         start = text.index("portal-url-confirmation --portal-url")
         end = text.index("Nothing is saved before the Maker replies **Yes**.")
-        return text[start:end].replace("itsm", "hrsd")
+        return (
+            text[start:end]
+            .replace("itsm", "hrsd")
+            .replace("ServiceNow IT topics", "ServiceNow HR topics")
+        )
 
     assert confirmation_block(docs["itsm"]) == confirmation_block(docs["hrsd"])
     skill_root = root / "servicenow"

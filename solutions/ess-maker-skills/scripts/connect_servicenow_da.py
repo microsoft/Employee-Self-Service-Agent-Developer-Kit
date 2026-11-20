@@ -13997,6 +13997,75 @@ def _with_agent_rules(
     return ordered
 
 
+PORTAL_URL_QUESTION_TEXT = (
+    "What is the full HTTPS base URL of your ServiceNow employee portal? It "
+    "may differ from the instance URL, so we won't assume `/sp` or `/esc`."
+    "\n\nReply here in chat with the URL."
+)
+_PORTAL_ASK_NEXT_STEP = (
+    "Send chatMessage (the portal URL question) as ordinary chat text and "
+    "end your turn. Never ask this yourself or open an input component. "
+    "When the maker replies with a URL, run portal-url-confirmation "
+    "--portal-url <typed URL> and send its chatMessage."
+)
+
+
+def portal_inspect_output(result: dict[str, Any]) -> dict[str, Any]:
+    """Point an unresolved portal inspection at the reuse check, not a card."""
+    if result.get("status") != "input-required":
+        return result
+    output = dict(result)
+    output["nextStep"] = (
+        "Do not ask the maker anything yet. Run portal-reuse-handoff next "
+        "and send its chatMessage; the controller owns the portal URL "
+        "question wording."
+    )
+    return output
+
+
+def portal_reuse_output(result: dict[str, Any]) -> dict[str, Any]:
+    """Attach the manual portal URL question when no saved value applies."""
+    decision = result.get("decision")
+    record = result.get("record")
+    declined = (
+        decision == "already-recorded"
+        and isinstance(record, dict)
+        and record.get("decision") == "declined"
+    )
+    if decision != "none" and not declined:
+        return result
+    output = dict(result)
+    output["portalQuestion"] = {
+        "header": "Employee portal URL",
+        "question": PORTAL_URL_QUESTION_TEXT,
+        "allowFreeformInput": True,
+    }
+    output["nextStep"] = _PORTAL_ASK_NEXT_STEP
+    return output
+
+
+def portal_confirmation_output(confirmation: dict[str, Any]) -> dict[str, Any]:
+    """Wrap the portal URL confirmation so the Yes/No question is chat text."""
+    question = {
+        key: confirmation[key]
+        for key in ("header", "question", "options", "allowFreeformInput")
+        if key in confirmation
+    }
+    return {
+        "schemaVersion": confirmation["schemaVersion"],
+        "portalUrl": confirmation["portalUrl"],
+        "savedMessage": confirmation["savedMessage"],
+        "confirmationQuestion": question,
+        "nextStep": (
+            "Send chatMessage (the confirmation question) as ordinary chat "
+            "text and end your turn. On Yes, send savedMessage verbatim and "
+            "run set-portal-url with portalUrl. On No, or when the maker "
+            "pastes a different URL, save nothing and ask the portal URL "
+            "question again."
+        ),
+    }
+
+
 ACTIVE_LIFECYCLE_MARKER = Path(".local/connect/servicenow-active.json")
 
 
@@ -14079,10 +14148,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "inspect":
             result = inspect(context, offline=args.offline)
         elif args.command == "inspect-portal-url":
-            result = inspect_portal_configuration(
-                context,
-                offline=args.offline,
-                expected_portal_url=args.expected_portal_url,
+            result = portal_inspect_output(
+                inspect_portal_configuration(
+                    context,
+                    offline=args.offline,
+                    expected_portal_url=args.expected_portal_url,
+                )
             )
         elif args.command == "inspect-admin-setup":
             print(
@@ -14110,9 +14181,11 @@ def main(argv: list[str] | None = None) -> int:
                 decision=args.decision,
             )
         elif args.command == "portal-reuse-handoff":
-            result = portal_value_reuse_handoff(
-                context,
-                source_key=args.source_key,
+            result = portal_reuse_output(
+                portal_value_reuse_handoff(
+                    context,
+                    source_key=args.source_key,
+                )
             )
         elif args.command == "record-portal-reuse":
             result = record_portal_value_reuse(
@@ -14241,7 +14314,9 @@ def main(argv: list[str] | None = None) -> int:
                 maker_acknowledged=list(args.maker_acknowledged),
             )
         elif args.command == "portal-url-confirmation":
-            result = portal_url_confirmation(context, args.portal_url)
+            result = portal_confirmation_output(
+                portal_url_confirmation(context, args.portal_url)
+            )
         elif args.command == "set-portal-url":
             result = set_portal_url(
                 context,

@@ -434,7 +434,124 @@ def test_hook_covers_every_card_tool_and_runs_the_guard() -> None:
         assert re.search(entry["matcher"], tool)
     assert "servicenow_connect_card_guard.py" in entry["powershell"]
     assert "servicenow_connect_card_guard.py" in entry["bash"]
-    assert entry["cwd"] == "solutions/ess-maker-skills"
+    # The hook must find the guard from the git root and from the solution
+    # folder, so it cannot depend on a relative working directory.
+    assert "cwd" not in entry
+    for command in (entry["powershell"], entry["bash"]):
+        assert "git rev-parse --show-toplevel" in command
+        assert "solutions/ess-maker-skills/scripts/" in command
+
+
+def test_card_guard_records_a_trace_line_per_call(tmp_path: Path) -> None:
+    import servicenow_connect_card_guard as guard
+
+    log_dir = Path(guard.__file__).resolve().parents[1] / ".local" / "connect"
+    if not log_dir.is_dir():
+        pytest.skip("no local connect folder to hold the trace")
+    log = log_dir / "card-guard.log"
+    before = log.read_text(encoding="utf-8") if log.is_file() else None
+    try:
+        guard._trace({"toolName": "ask_user"}, {"permissionDecision": "deny"})
+        assert "tool=ask_user decision=deny" in log.read_text(encoding="utf-8")
+    finally:
+        if before is None:
+            log.unlink(missing_ok=True)
+        else:
+            log.write_text(before, encoding="utf-8")
+
+
+PORTAL_SPEC_QUESTION = (
+    "What is the full HTTPS base URL of your ServiceNow employee portal? It "
+    "may differ from the instance URL, so we won't assume `/sp` or `/esc`."
+)
+
+
+def _finish(result: dict, command: str) -> dict:
+    return snow._with_agent_rules(snow.plain_text_output(result), command)
+
+
+def test_portal_url_question_comes_from_the_controller_not_the_agent() -> None:
+    for command, raw in (
+        (
+            "portal-reuse-handoff",
+            {"schemaVersion": "x", "decision": "none", "candidates": []},
+        ),
+        (
+            "portal-reuse-handoff",
+            {
+                "schemaVersion": "x",
+                "decision": "already-recorded",
+                "record": {"decision": "declined"},
+            },
+        ),
+    ):
+        wrapped = _finish(snow.portal_reuse_output(raw), command)
+        _assert_no_card(wrapped)
+        assert wrapped["endTurn"] is True
+        assert "nextCommand" not in wrapped
+        assert wrapped["chatMessage"].startswith(PORTAL_SPEC_QUESTION)
+        assert "Reply here in chat with the URL." in wrapped["chatMessage"]
+        assert wrapped["decision"] == raw["decision"]
+        assert "portal-url-confirmation" in wrapped["nextStep"]
+
+
+def test_portal_reuse_with_an_accepted_value_asks_nothing() -> None:
+    accepted = {
+        "schemaVersion": "x",
+        "decision": "already-recorded",
+        "record": {"decision": "accepted"},
+    }
+    assert snow.portal_reuse_output(accepted) == accepted
+
+
+def test_unresolved_portal_inspection_points_at_the_reuse_check() -> None:
+    result = snow.portal_inspect_output(
+        {"status": "input-required", "input": {"field": "portalUrl"}}
+    )
+    assert "portal-reuse-handoff" in result["nextStep"]
+    assert "question" not in result
+    done = {"status": "configured", "input": None}
+    assert snow.portal_inspect_output(done) == done
+
+
+def test_portal_confirmation_is_a_plain_yes_no_then_saved_message() -> None:
+    confirmation = {
+        "schemaVersion": "servicenow.portal-url-confirmation.v1",
+        "portalUrl": "https://dev123.service-now.com/esc",
+        "header": "Confirm employee portal URL",
+        "question": "Is **https://dev123.service-now.com/esc** the employee portal URL?",
+        "options": [{"label": "Yes"}, {"label": "No"}],
+        "allowFreeformInput": False,
+        "savedMessage": "We'll save that portal URL.",
+    }
+    wrapped = _finish(snow.portal_confirmation_output(confirmation), "portal-url-confirmation")
+    _assert_no_card(wrapped)
+    assert wrapped["endTurn"] is True
+    assert wrapped["chatMessage"] == (
+        "Is **https://dev123.service-now.com/esc** the employee portal URL?"
+        "\n\nReply **Yes** or **No**."
+    )
+    assert wrapped["portalUrl"] == "https://dev123.service-now.com/esc"
+    assert wrapped["savedMessage"] == "We'll save that portal URL."
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_portal_docs_use_the_spec_wording_and_the_saved_message(profile: str) -> None:
+    doc = (
+        CONNECT_DOCS
+        / f"servicenow-da-{profile}"
+        / "actions"
+        / "configure-portal-url.md"
+    ).read_text(encoding="utf-8")
+    flat = " ".join(doc.split())
+    assert PORTAL_SPEC_QUESTION in flat
+    family = "HR" if profile == "hrsd" else "IT"
+    assert (
+        f"We'll save that portal URL and turn on the built-in ServiceNow {family} "
+        "topics, including system topics. Unrelated topics will stay unchanged."
+    ) in flat
+    assert "Do not announce topic changes" not in flat
+    assert "Never ask it yourself" in flat
 
 
 def test_card_guard_denies_only_while_a_lifecycle_is_active(

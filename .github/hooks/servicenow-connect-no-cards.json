@@ -5,9 +5,8 @@
       {
         "type": "command",
         "matcher": "ask_user|vscode_askQuestions|AskUserQuestion|askQuestions",
-        "powershell": "try { if (Get-Command py -ErrorAction SilentlyContinue) { py -3 scripts/servicenow_connect_card_guard.py } else { python scripts/servicenow_connect_card_guard.py } } catch { '{}' }; exit 0",
-        "bash": "(python3 scripts/servicenow_connect_card_guard.py || python scripts/servicenow_connect_card_guard.py || echo '{}'); exit 0",
-        "cwd": "solutions/ess-maker-skills",
+        "powershell": "$p='scripts/servicenow_connect_card_guard.py','solutions/ess-maker-skills/scripts/servicenow_connect_card_guard.py'; $t=git rev-parse --show-toplevel 2>$null; if($t){$p+=($t+'/solutions/ess-maker-skills/scripts/servicenow_connect_card_guard.py')}; $s=$p|Where-Object{Test-Path $_}|Select-Object -First 1; if(-not $s){Add-Content -Path (Join-Path $env:TEMP 'servicenow-card-guard.log') -Value ((Get-Date -Format o)+' script-not-found cwd='+$PWD); '{}'} elseif(Get-Command py -ErrorAction SilentlyContinue){py -3 $s} else {python $s}; exit 0",
+        "bash": "r=$(git rev-parse --show-toplevel 2>/dev/null); for s in scripts/servicenow_connect_card_guard.py solutions/ess-maker-skills/scripts/servicenow_connect_card_guard.py \"$r/solutions/ess-maker-skills/scripts/servicenow_connect_card_guard.py\"; do if [ -f \"$s\" ]; then python3 \"$s\" || python \"$s\" || echo '{}'; exit 0; fi; done; echo '{}'; exit 0",
         "timeoutSec": 15
       }
     ]

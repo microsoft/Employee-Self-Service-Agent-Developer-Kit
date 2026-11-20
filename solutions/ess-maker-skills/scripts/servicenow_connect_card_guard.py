@@ -85,13 +85,35 @@ def decide(payload: dict, now: float | None = None) -> dict:
     }
 
 
+def _trace(payload: dict, decision: dict) -> None:
+    """Append one line proving the hook ran. Best effort; never raises."""
+    try:
+        root = Path(__file__).resolve().parents[1]
+        log = root / ".local" / "connect" / "card-guard.log"
+        if not log.parent.is_dir():
+            return
+        if log.is_file() and log.stat().st_size > 200_000:
+            log.write_text("", encoding="utf-8")
+        line = (
+            f"{time.strftime('%Y-%m-%dT%H:%M:%S')} tool={_tool_name(payload) or '?'} "
+            f"decision={'deny' if decision else 'none'}\n"
+        )
+        with log.open("a", encoding="utf-8") as handle:
+            handle.write(line)
+    except Exception:  # noqa: BLE001 - tracing must never affect the hook
+        return
+
+
 def main() -> int:
+    payload: dict = {}
     try:
         raw = sys.stdin.read()
-        payload = json.loads(raw) if raw.strip() else {}
-        decision = decide(payload if isinstance(payload, dict) else {})
+        parsed = json.loads(raw) if raw.strip() else {}
+        payload = parsed if isinstance(parsed, dict) else {}
+        decision = decide(payload)
     except Exception:  # noqa: BLE001 - fail open on any problem
         decision = {}
+    _trace(payload, decision)
     print(json.dumps(decision))
     return 0
 

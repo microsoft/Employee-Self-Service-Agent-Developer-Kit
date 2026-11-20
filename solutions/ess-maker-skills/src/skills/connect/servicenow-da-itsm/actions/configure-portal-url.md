@@ -22,7 +22,8 @@ workspace. This is local-only and must not call AgentBuilder or Connectivity:
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} portal-reuse-handoff
 ```
 
-- `none`: continue to the manual URL question below.
+- `none`: the output's `chatMessage` is the portal URL question. Send it
+  verbatim as ordinary chat text and end your turn. Never ask it yourself.
 - `already-recorded` with an accepted record: use its exact `portalUrl`
   without asking the Maker again, then run the guarded `set-portal-url` command
   below. A declined record continues to the manual question.
@@ -91,16 +92,16 @@ normalization as `set-portal-url` (HTTPS, no trailing slash) and saves nothing:
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} portal-url-confirmation --portal-url <typed-url>
 ```
 
-Send the returned question's `plainText` verbatim as chat text and map the
-typed reply with `match-reply`; it is a Yes or No question.
+Send the output's `chatMessage` verbatim as chat text and end your turn; map
+the typed reply with `match-reply`. It is a Yes or No question.
 The question is "Is **{NORMALIZED_PORTAL_URL}** the employee portal URL?" and
 the choices are "Yes" and "No". The question text carries the context.
 A pasted new URL in the reply also means "No".
 - **No**: save nothing and ask the URL question above
   again.
-- **Yes**: show the returned `savedMessage` verbatim
-  ("We'll save that portal URL."). Do not announce topic changes in this step;
-  topics were handled in the earlier Topics step. Then run:
+- **Yes**: send the returned `savedMessage` verbatim ("We'll save that
+  portal URL and turn on the built-in ServiceNow IT topics, including system
+  topics. Unrelated topics will stay unchanged."). Then run:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} set-portal-url --portal-url <returned-portalUrl> --yes
