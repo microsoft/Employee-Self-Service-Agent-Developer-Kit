@@ -1444,3 +1444,14 @@ def test_v2_metadata_url_diagnosis_is_routed_in_docs(profile: str) -> None:
         text = " ".join(path.read_text(encoding="utf-8").split())
         assert "metadata-url-handoff" in text, path.name
         assert "generic failure" in text, path.name
+
+
+def test_empty_service_areas_diagnosis_is_routed_in_hr_docs() -> None:
+    root = _SOLUTION / "src" / "skills" / "connect"
+    for path in (
+        root / "servicenow" / "entry.md",
+        root / "servicenow" / "realms.md",
+        root / "servicenow-da-hrsd" / "actions" / "test-connection.md",
+    ):
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert "empty-service-areas-handoff" in text, path.name

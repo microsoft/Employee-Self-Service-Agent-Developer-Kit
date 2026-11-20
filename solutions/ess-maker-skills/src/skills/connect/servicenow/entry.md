@@ -603,6 +603,37 @@ repeat the request in this agent's Test pane.
 
 **End message.**
 
+**HR service areas empty (HR agent only).** When the maker reports that the
+HR service-area list is empty (for example when creating an HR case), get the
+Message from the controller instead of writing it: run
+`python scripts/connect_servicenow_da.py --provider {PROVIDER} empty-service-areas-handoff`
+(add `--realm test` or `--realm prod` for a Test or Prod destination), send
+`chatMessage` verbatim as the whole reply, and follow `endTurn` and
+`afterReply`. The command records nothing. Never claim the employee's roles
+were checked, never assign a role, and never treat the empty list alone as
+proof of the cause. For the IT agent the command returns `no-diagnosis`; this
+scenario does not apply. Do not ask a Yes/No question. When the maker returns,
+any message means they want to continue: record only the administrator's
+non-sensitive reply, rerun the recheck of the affected setup, then ask them to
+repeat the HR request in the Test pane and tell us whether the service areas
+appear. The Dev Message is:
+
+**Message:**
+
+An empty HR service-area list can occur when the signed-in employee doesn't have
+the required ServiceNow HR access.
+
+Ask your ServiceNow administrator to review the access for the account used in
+this request through your organization's normal process. The administrator
+instructions identify the applicable roles: `sn_hr_core.basic`,
+`sn_hr_core.manager`, or `sn_hr_core.admin`.
+
+Return with their non-sensitive reply after any required access work is
+complete. We'll recheck the applicable setup. Then repeat the HR request in this
+agent's Test pane and tell us whether the service areas appear.
+
+**End message.**
+
 **Claim attributes missing.** When the Entra administrator says the identifiers
 are not populated for every employee who will use this agent, pause the claim
 and show the following. Never populate directory attributes or audit employee

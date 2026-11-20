@@ -479,7 +479,9 @@ what to do next.
   > **Do not send employee identifiers, record contents, or secrets.**
 
   Re-check after the maker says it is fixed.
-- **Empty HR service areas (HR only).** Say:
+- **Empty HR service areas (HR only).** Get the Message from the controller
+  (`empty-service-areas-handoff --realm {test|prod}`) and send `chatMessage`
+  verbatim; it records nothing. The text is:
 
   > The HR service-area list is empty. Employees using HR scenarios need one of
   > the ServiceNow roles `sn_hr_core.basic`, `sn_hr_core.manager`, or

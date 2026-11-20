@@ -12828,6 +12828,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     metadata_parser.add_argument("--metadata-url", required=True)
+    service_areas_parser = subparsers.add_parser(
+        "empty-service-areas-handoff",
+        help=(
+            "Return the fixed reply when the maker reports an empty HR "
+            "service-area list; records nothing."
+        ),
+    )
+    service_areas_parser.add_argument(
+        "--realm", choices=("dev", "test", "prod"), default="dev"
+    )
 
     inspect_parser = subparsers.add_parser(
         "inspect",
@@ -13812,6 +13822,70 @@ _METADATA_URL_AFTER_REPLY = (
 )
 
 
+_SERVICE_AREAS_AFTER_REPLY = (
+    "When the maker returns, any message means they want to continue. Do not "
+    "ask a Yes/No question. Record only the administrator's non-sensitive "
+    "reply with the existing commands, rerun the recheck of the affected "
+    "setup, then ask the maker to repeat the HR request in the Test pane and "
+    "tell us whether the service areas appear. Never claim the employee's "
+    "roles were checked, never assign a role, and never treat the empty list "
+    "alone as proof of the cause."
+)
+
+_HR_ACCESS_ROLES = (
+    "`sn_hr_core.basic`, `sn_hr_core.manager`, or `sn_hr_core.admin`"
+)
+
+
+def empty_service_areas_handoff(realm: str = "dev") -> dict[str, Any]:
+    """Fixed reply when the maker reports an empty HR service-area list.
+
+    Used only for the HR agent. Nothing is recorded, no role is checked or
+    assigned, and the empty list alone is not treated as proof of the cause.
+    """
+    if ACTIVE_PROFILE.key != "hrsd":
+        return {
+            "status": "no-diagnosis",
+            "decision": "not-an-hr-agent",
+            "recordsNothing": True,
+            "note": (
+                "HR service areas exist only for the HR agent, so this "
+                "diagnosis does not apply. Continue the normal flow."
+            ),
+        }
+    if realm == "dev":
+        text = (
+            "An empty HR service-area list can occur when the signed-in "
+            "employee doesn't have the required ServiceNow HR access.\n\n"
+            "Ask your ServiceNow administrator to review the access for the "
+            "account used in this request through your organization's normal "
+            "process. The administrator instructions identify the applicable "
+            f"roles: {_HR_ACCESS_ROLES}.\n\n"
+            "Return with their non-sensitive reply after any required access "
+            "work is complete. We'll recheck the applicable setup. Then "
+            "repeat the HR request in this agent's Test pane and tell us "
+            "whether the service areas appear."
+        )
+    else:
+        text = (
+            "The HR service-area list is empty. Employees using HR scenarios "
+            f"need one of the ServiceNow roles {_HR_ACCESS_ROLES}.\n\n"
+            "Ask your ServiceNow administrator to review the access for the "
+            "account used in this request. This skill doesn't check or "
+            "assign those roles.\n\n"
+            "Bring back their non-sensitive reply after any required access "
+            "work is complete. We'll recheck the applicable setup before you "
+            "repeat the request in the destination agent's Test pane."
+        )
+    return {
+        "status": "service-access-review-required",
+        "decision": "service-access-review-required",
+        "recordsNothing": True,
+        "renderBlock": {"kind": "waiting", "text": text},
+        "afterReply": _SERVICE_AREAS_AFTER_REPLY,
+    }
+
+
 def metadata_url_handoff(metadata_url: str) -> dict[str, Any]:
     """Fixed reply when the administrator reports a `/v2.0` metadata URL.
 
@@ -14142,6 +14216,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "metadata-url-handoff":
             result = metadata_url_handoff(args.metadata_url)
+        elif args.command == "empty-service-areas-handoff":
+            result = empty_service_areas_handoff(args.realm)
         else:
             context_kwargs: dict[str, Any] = {}
             if args.agent_id is not None or args.agent_slug is not None:
@@ -14377,6 +14453,7 @@ def main(argv: list[str] | None = None) -> int:
             "agent-chooser",
             "claim-confirmation-handoff",
             "metadata-url-handoff",
+            "empty-service-areas-handoff",
         }:  # pragma: no cover
             raise ServiceNowConnectError("Unsupported command.")
     except (ServiceNowConnectError, AgentBuilderError, ValueError) as exc:

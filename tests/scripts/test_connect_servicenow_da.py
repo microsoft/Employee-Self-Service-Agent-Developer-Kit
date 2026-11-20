@@ -17568,3 +17568,50 @@ def test_metadata_url_diagnosis_needs_the_actual_v2_url(value: str) -> None:
     assert result["decision"] == "no-v2-metadata-url"
     assert result["recordsNothing"] is True
     assert "renderBlock" not in result
+
+
+def test_empty_service_areas_reply_is_hr_only_and_fixed(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    previous = snow.ACTIVE_PROFILE
+    try:
+        assert snow.main(
+            ["--provider", "servicenow-da-hrsd", "empty-service-areas-handoff"]
+        ) == 0
+        dev = json.loads(capsys.readouterr().out)
+        assert snow.main(
+            [
+                "--provider",
+                "servicenow-da-hrsd",
+                "empty-service-areas-handoff",
+                "--realm",
+                "prod",
+            ]
+        ) == 0
+        prod = json.loads(capsys.readouterr().out)
+        assert snow.main(
+            ["--provider", "servicenow-da-itsm", "empty-service-areas-handoff"]
+        ) == 0
+        it = json.loads(capsys.readouterr().out)
+    finally:
+        snow.ACTIVE_PROFILE = previous
+    assert dev["endTurn"] is True and dev["recordsNothing"] is True
+    assert "pendingCard" not in dev and "nextCommand" not in dev
+    assert dev["chatMessage"] == (
+        "An empty HR service-area list can occur when the signed-in employee "
+        "doesn't have the required ServiceNow HR access.\n\n"
+        "Ask your ServiceNow administrator to review the access for the "
+        "account used in this request through your organization's normal "
+        "process. The administrator instructions identify the applicable "
+        "roles: `sn_hr_core.basic`, `sn_hr_core.manager`, or "
+        "`sn_hr_core.admin`.\n\n"
+        "Return with their non-sensitive reply after any required access "
+        "work is complete. We'll recheck the applicable setup. Then repeat "
+        "the HR request in this agent's Test pane and tell us whether the "
+        "service areas appear."
+    )
+    assert "any message means they want to continue" in dev["afterReply"]
+    assert prod["chatMessage"].startswith("The HR service-area list is empty.")
+    assert "destination agent's Test pane" in prod["chatMessage"]
+    assert it["decision"] == "not-an-hr-agent"
+    assert "chatMessage" not in it
