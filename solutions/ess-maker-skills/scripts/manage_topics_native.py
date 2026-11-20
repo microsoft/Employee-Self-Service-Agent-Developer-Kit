@@ -13,7 +13,7 @@ from agentbuilder import AgentBuilderClient, environment_id_from_host
 from manage_topics_client import ManageTopicsClient, verify_native_target
 from manage_topics_catalog import Catalog, plan_catalog_actions, snapshot_from_response
 from manage_topics_discovery import DiscoveryTarget, _identity, _target
-from manage_topics_execution import OperationEvidence, build_state_payload
+from manage_topics_execution import OperationEvidence, SubmissionNotAttempted, build_state_payload
 
 
 @dataclass
@@ -24,6 +24,7 @@ class NativeActionBackend:
     catalog: Catalog
     account_id: str
     components: ManageTopicsClient
+    action: str | None = None
     _last_evidence: OperationEvidence | None = field(default=None, init=False, repr=False)
     _last_read_at: float = field(default=0, init=False, repr=False)
     _submitted: bool = field(default=False, init=False, repr=False)
@@ -53,10 +54,19 @@ class NativeActionBackend:
         snapshot = snapshot_from_response(
             self.catalog, target, self.selected_keys, body, source_inventory_only=True,
         )
-        evidence = OperationEvidence(snapshot, self.account_id, deepcopy(body))
+        if self.action == "add":
+            from manage_topics_content_actions import content_snapshot
+            snapshot = content_snapshot(self.catalog, snapshot, body)
+        evidence = OperationEvidence(snapshot, self.account_id, deepcopy(body), self._dev_blockers(body))
         self._last_evidence = evidence
         self._last_read_at = time.monotonic()
         return self._last_evidence
+
+    def _dev_blockers(self, body: dict) -> tuple[str, ...]:
+        if self.action != "add":
+            return ()
+        from manage_topics_content_actions import dev_blockers
+        return dev_blockers(self.client, self.target, body)
 
     def admission_blockers(self, evidence: OperationEvidence | None) -> tuple[str, ...]:
         try:
@@ -76,7 +86,7 @@ class NativeActionBackend:
             token = evidence.body.get("changeToken")
             if not isinstance(token, str) or not token.strip():
                 return ("inventory_revision_unavailable",)
-            return evidence.snapshot.evidence.blockers
+            return (*evidence.snapshot.evidence.blockers, *self._dev_blockers(evidence.body))
         except (ValueError, AttributeError):
             return ("target_unverified",)
 
@@ -89,8 +99,9 @@ class NativeActionBackend:
             self.admission_blockers(evidence)
             or _identity(target_agent_id) != _target(self.target).agent_id
         ):
-            raise ValueError("Native topic writes are not admitted.")
-        for action in ("enable", "disable"):
+            error = SubmissionNotAttempted if self.action == "add" else ValueError
+            raise error("Native topic writes are not admitted.")
+        for action in ((self.action,) if self.action else ("enable", "disable")):
             plan = plan_catalog_actions(evidence.snapshot, action)
             if (
                 plan.delta and not plan.blockers
@@ -98,5 +109,6 @@ class NativeActionBackend:
             ):
                 break
         else:
-            raise ValueError("The payload does not match the exact computed topic action.")
+            error = SubmissionNotAttempted if self.action == "add" else ValueError
+            raise error("The payload does not match the exact computed topic action.")
         self.components.submit_state_payload(payload)

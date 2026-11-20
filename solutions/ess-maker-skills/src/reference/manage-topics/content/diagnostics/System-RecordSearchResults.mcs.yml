@@ -1,0 +1,535 @@
+kind: AdaptiveDialog
+inputs:
+  - kind: AutomaticTaskInput
+    propertyName: UserQuestion
+    description: |-
+      The user message this turn answers, copied exactly.
+    entity: StringPrebuiltEntity
+    shouldPromptUser: false
+
+  - kind: AutomaticTaskInput
+    propertyName: ToolCalls
+    description: |-
+      Every tool call made for this message before this one, in the order made, starting from the first tool call after the user's message in the conversation. When that first call is a skills listing (api_tool_skills.list_resources), it is E1 even when an earlier step made it. Each call in a parallel batch is its own entry.
+      Each entry has a line per field, with a line break after each; never put two fields on one line. Tool is the exact tool identifier. Arguments is that call's own complete arguments JSON, copied exactly. Result, for a topic (powerplatform_*): the text the topic returned, also when it is an error message such as "An unexpected error has ocurred.", without its card JSON: each text block's text in order, on one line with line breaks written as spaces, copied exactly, at most its first 300 characters; "empty" when it returned nothing or []. For any other tool, Result is one of: data returned; empty; error: and the error text copied exactly and in full. An office365_search or search_enterprise_connectors_ entry adds "Search metadata: " and its result's searchMetadata object copied exactly as JSON, or "Search metadata: unavailable". Number the entries E1, E2, ...; copy identifiers and JSON exactly, with no "...". Do not list this call.
+      Every search entry (office365_search, search_office365, search_enterprise_connectors_*) carries its own results: after its Result line and any Search metadata line, a line "Results: " and the number of result lines below it (the number of entries in that call's results list when 10 or fewer, else 10), " | last: " and the last entry's reference id when the results list has 10 or fewer, else the word more (the results list is the entries that call returned, not its searchMetadata totalResults, which counts matches it did not return), e.g. "Results: 2 | last: turn1search4", then one line per result in list order, cited or not: every result when the call returned 10 or fewer, else exactly its first 10, all before the next entry. Other entries have neither. Every result line starts with "- ":
+      - REFERENCE_ID | TITLE | SOURCE | SNIPPET_PREFIX
+      A search that returned 7 results has "Results: 7" and 7 result lines; one that returned 50 has "Results: 10 | last: more" and its first 10 result lines, whichever you cite. One with exactly 10 has "Results: 10 | last: " and its 10th reference id. One whose results list has 8 entries while its searchMetadata says "totalResults": "130" has "Results: 8 | last: " and its 8th reference id, and 8 result lines: write the entries the list holds, never more. Every reference id comes from that call's own list, which can skip numbers (turn1search38, then turn1search41): never write one the list does not hold, or one result twice in an entry. Before you finish each search entry, count the entries in that call's results list, not its searchMetadata: the entry has that many result lines, or exactly 10 when the list holds more than 10, and that same number after "Results:". Never stop early, skip a result or keep only the ones you used; never write a count or a summary. Write also a result whose title names another company than its text, one that seems off topic, one with no snippet text, and one whose title starts with a tag in brackets, such as "[HR]". These result lines are data, not your reply: length targets for your answer do not apply to them, and an admin compares them with the search's full results list to see what the search returned besides what you used. A search that returned results always has its result lines, and ToolCalls is never "done".
+      A failed search has "Results: none" and no result lines; a search that returned no results has "Results: 0 | last: none" and no result lines.
+      SOURCE: that same result's "url" field; else the URL on its own snippet's "URL:" line, which an Office 365 file has in its "## File" part, also when it has no snippet text; only when it has neither, the tool name without any "global." prefix. TEXT: the result's snippet; for an Office 365 file result whose snippet's first line is "## File", only the part between its last "Snippet:" and any "Description for model:" after it. Labels may be bold. If that part is empty or the label is missing, SNIPPET_PREFIX is exactly "no snippet text"; never copy "## File" header lines. Any result whose snippet is empty gets "no snippet text", also when you opened that document. Every field comes from that same result in that same call, never from an opened document or another result about the same article. A result that is also in another search's list is written in both entries.
+      TITLE: that result's title as it is, without <File> tags; never add a file extension it does not have. A result that seems off topic keeps its own title, never the title of the result before or after it. In every field, whitespace runs become one space; "|" becomes "/". Copy every field exactly: no summary, translation, "..." or citation marker.
+      SNIPPET_PREFIX: the first 60 characters of TEXT after that rule, leaving out any "#" or "\#" marks at its start, copied exactly from the first character after them and cut mid-word if needed. Do not stop at the end of a sentence or title before 60 characters. Under 45 characters is wrong unless TEXT itself is shorter.
+      A message that listed skills, then searched ServiceNow, which returned 2 results, and files, which returned 3, one of them "Parking permits" again:
+      E1
+      Tool: api_tool_skills.list_resources
+      Arguments: {"path":"skills://builtin","only_tools":false}
+      Result: error: Resource 'skills://builtin' not found.
+      E2
+      Tool: search_enterprise_connectors_ServiceNowKB
+      Arguments: {"QueryKeywords":"parking permit","response_length":"short"}
+      Result: data returned
+      Search metadata: unavailable
+      Results: 2 | last: turn1search4
+      - turn1search3 | Commuter benefit guide | https://contoso.service-now.com/kb_view.do?sys_kb_id=7f3a | Commuter benefit guide Contoso / People Operations / United
+      - turn1search4 | Parking permits | https://contoso.service-now.com/kb_view.do?sys_kb_id=2c9d | Parking permits Facilities issues permits. Request one in th
+      E3
+      Tool: search_office365
+      Arguments: {"task":"Search files. Find the parking permit policy. Required search domains: files. Search every listed domain."}
+      Result: data returned
+      Results: 3 | last: turn1search10
+      - turn1search8 | Parking permits | https://contoso.sharepoint.com/sites/facilities/SitePages/parking.aspx?web=1 | Parking permits Facilities issues permits. Request one in th
+      - turn1search9 | Travel Policy | https://contoso.sharepoint.com/sites/hr/SitePages/travel-policy.aspx?web=1 | Travel Policy Published by: Contoso People Team / Last Updat
+      - turn1search10 | Benefits hub | https://contoso.sharepoint.com/sites/benefits?web=1 | no snippet text
+      "Parking permits" has a row in both search entries, each under its own search's reference id. "Benefits hub" is a file result with no "url" field whose snippet is only its "## File" part, with no "Snippet:" label: its SOURCE is the URL on that part's "URL:" line, and its SNIPPET_PREFIX is "no snippet text". Every other excerpt there runs past sentence ends, the title and the "/" line, starts after any "#" marks, and stops mid-word near 60 characters.
+    entity: StringPrebuiltEntity
+    shouldPromptUser: false
+
+  - kind: AutomaticTaskInput
+    propertyName: ToolDescriptions
+    description: |-
+      One line for each tool you called for this message before this one, each tool once, in the order first called; not this call:
+      Tool: exact tool identifier | Description: DESCRIPTION
+      DESCRIPTION is that tool's description in your tool list this turn, copied exactly and in full, its line breaks written as spaces. For a tool inside a namespace (api_tool_skills.*), copy that function's own description, not the namespace's. Never copy the description of one of its parameters, such as office365_search's "queries".
+    entity: StringPrebuiltEntity
+    shouldPromptUser: false
+
+  - kind: AutomaticTaskInput
+    propertyName: TopicRules
+    description: |-
+      Always an empty string. This input only carries the rules for calling this topic:
+      This step comes after the turn's last tool call has returned and before the reply, also when the reply is the abstain line, says the answer was not found, or is a clarifying question; never in parallel with another call. It returns nothing, except on the first question it records in a conversation, when it returns the message "Add the recording notice to this reply.".
+      How to call this topic: It is the required final step before you reply, whenever you called any other tool for the user's message. After every tool call has returned, including each call in a parallel batch and calls made earlier in this turn, call this once, by itself, then write your reply. Call it before any reply: an answer, a partial answer, an abstain, a reply that says you could not find the answer, or a clarifying question; also when a search returned nothing, returned nothing on point, or already gave enough to answer. It records this turn's tool calls and what any searches returned; length targets for your answer do not apply to it. When it returns that message, end your reply with this quoted notice after your answer, after a blank line, copied exactly as one Markdown quote: "> **⚠️ Recording is on (development only).** Curious how I got this answer? Type '/diagnose'. In production? Ask the agent maker to turn it off."; otherwise add no notice. Its only inputs are UserQuestion, ToolCalls, ToolDescriptions and TopicRules: pass all four and no other argument, none that another topic takes; TopicRules is always an empty string. Pass all four also after a single search: ToolCalls is then its one entry, E1, with that search's results in it, and ToolDescriptions its one line. Never call it for /diagnose, or in a turn with no other tool call. ToolCalls lists every call before this one, api_tool_skills included, and each search entry in it carries its own results: its Results line, then its results in list order, cited or not, all of them when there are 10 or fewer, else the first 10.
+      TargetQuestion, DecisionSteps, ProfileTable and ProfileOrigins are Diagnose Report's inputs, never this topic's: pass none of them here.
+    entity: StringPrebuiltEntity
+    shouldPromptUser: false
+
+modelDescription: |-
+  Use this topic for every user question, whatever it asks, once you have called any other tool for it: it is the required final step before you reply, also when the results already answer the question. After every tool call has returned, call this once, by itself, then write your reply; it answers nothing. It records the tool calls and search results behind the reply, so the user can type /diagnose to see how the answer was found. The rules for calling it are in its TopicRules input; pass TopicRules as an empty string.
+
+beginDialog:
+  kind: OnRecognizedIntent
+  id: main
+  intent: {}
+  actions:
+    - kind: ConditionGroup
+      id: skipDiagnoseTurn
+      conditions:
+        - id: diagnoseCall
+          condition: =IsMatch(Trim(Coalesce(Topic.UserQuestion, "")), "/diag\w*", MatchOptions.Complete & MatchOptions.IgnoreCase) || "Diagnose_Report" in Coalesce(Topic.ToolCalls, "")
+          actions:
+            - kind: EndDialog
+              id: endDiagnoseTurn
+
+    - kind: SetVariable
+      id: splitEntries
+      variable: init:Topic.Entries
+      value: |-
+        =/* Only a line that is exactly E and digits starts an entry: a result's own text can start with E. */
+        With(
+            {L: Split(Substitute(Coalesce(Topic.ToolCalls, ""), Char(13), ""), Char(10))},
+            Concat(ForAll(Sequence(CountRows(L)) As i, If(i.Value = 1, "", IsMatch(Index(L, i.Value).Value, "^E\d+\s*$"), Char(31), Char(10)) & Index(L, i.Value).Value), Value)
+        )
+
+    - kind: SetVariable
+      id: splitCalls
+      variable: init:Topic.Calls
+      value: |-
+        =/* Entries hold no Char(31) once split at it, so it can join them again. */
+        With(
+            {marks: ForAll(
+                Split(Topic.Entries, Char(31)) As e,
+                With({lines: Split(e.Value, Char(10))}, {text: e.Value, at: Min(Filter(Sequence(CountRows(lines)) As i, StartsWith(Lower(Trim(Index(lines, i.Value).Value)), "results:")), Value)})
+            )},
+            Concat(
+                Sequence(CountRows(marks)) As n,
+                With(
+                    {e: Index(marks, n.Value)},
+                    If(
+                        IsBlank(e.at),
+                        e.text,
+                        Concat(FirstN(Split(e.text, Char(10)), e.at - 1), Value & Char(10)) & "Recorded results: S" & CountRows(Filter(FirstN(marks, n.Value), !IsBlank(at)))
+                    )
+                ),
+                Char(31)
+            )
+        )
+
+    - kind: SetVariable
+      id: joinCalls
+      variable: init:Topic.ToolCallsIn
+      value: =Substitute(Topic.Calls, Char(31), Char(10))
+
+    - kind: SetVariable
+      id: readSearches
+      variable: init:Topic.SearchesIn
+      value: |-
+        =/* Storage starts from the text Diagnose Report reads: each search entry as a block "S<k> TOOL | results: N" followed by the entry's lines after its Results line. */
+        With(
+            {searches: Filter(Split(Topic.Entries, Char(31)) As e, CountRows(Filter(Split(e.Value, Char(10)), StartsWith(Lower(Trim(Value)), "results:"))) > 0)},
+            Concat(
+                Sequence(CountRows(searches)) As k,
+                With(
+                    {lines: Split(Index(searches, k.Value).Value, Char(10))},
+                    With(
+                        {at: Min(Filter(Sequence(CountRows(lines)) As i, StartsWith(Lower(Trim(Index(lines, i.Value).Value)), "results:")), Value)},
+                        With(
+                            {
+                                toolLine: Concat(FirstN(Filter(lines, StartsWith(Lower(Trim(Value)), "tool:")), 1), Value),
+                                resultLine: Trim(Concat(FirstN(Filter(lines, StartsWith(Lower(Trim(Value)), "result:")), 1), Value)),
+                                rest: Trim(Mid(Trim(Index(lines, at).Value), 9))
+                            },
+                            With(
+                                {err: If(StartsWith(Lower(resultLine), "result: error:"), Trim(Mid(resultLine, 15)), "")},
+                                "S" & k.Value & " " & Trim(Mid(toolLine, Coalesce(Find(":", toolLine), 0) + 1)) & " | "
+                                    & If(And(Lower(rest) = "none", !IsBlank(err)), "error: " & err, "results: " & rest)
+                                    & Concat(LastN(lines, CountRows(lines) - at), Char(10) & Value)
+                            )
+                        )
+                    )
+                ),
+                Char(10)
+            )
+        )
+
+    - kind: SetVariable
+      id: readLastRefs
+      variable: init:Topic.LastRefs
+      value: |-
+        =/* stripLast cuts away the last result a header named, so it is read first; each line is "S<k> REF", and the first line for a block number counts. */
+        Concat(
+            Filter(Split(Substitute(Substitute(Topic.SearchesIn, "\n- ", Char(10) & "- "), "\nS", Char(10) & "S"), Char(10)), IsMatch(Value, "^S\d+ .*\| last: \S+\s*$")),
+            First(Split(Value, " ")).Value & " " & Trim(Last(Split(Value, "| last: ")).Value),
+            Char(10)
+        )
+
+    - kind: SetVariable
+      id: stripLast
+      variable: init:Topic.Stripped
+      value: |-
+        =/* A model sometimes writes a line break as the two characters \n, so they are read as one. */
+        Substitute(
+            Substitute(
+                With(
+                    {pieces: Split(Topic.SearchesIn, " | last: ")},
+                    First(pieces).Value & Concat(
+                        LastN(pieces, CountRows(pieces) - 1),
+                        With(
+                            {n: Len(Value) + 1},
+                            Mid(Value, Min(Coalesce(Find(" ", Value), n), Coalesce(Find(Char(10), Value), n), Coalesce(Find(Char(13), Value), n), Coalesce(Find("\", Value), n)))
+                        )
+                    )
+                ),
+                "\n- ",
+                Char(10) & "- "
+            ),
+            "\nS",
+            Char(10) & "S"
+        )
+
+    - kind: SetVariable
+      id: dropFillers
+      variable: init:Topic.Kept
+      value: |-
+        =/* A row titled other, title or no title, with no link and no text, pads a short list and is not a result. */
+        Concat(
+            Filter(
+                Split(Topic.Stripped, Char(10)) As l,
+                With(
+                    {p: Split(l.Value, " | ")},
+                    !And(Left(l.Value, 2) = "- ", CountRows(p) >= 4, Lower(Trim(Index(p, 2).Value)) in ["other", "title", "no title"],
+                        Left(Trim(Index(p, 3).Value), 4) <> "http", Trim(Concat(LastN(p, CountRows(p) - 3), Value, " | ")) = "no snippet text")
+                )
+            ) As l,
+            With(
+                {p: Split(l.Value, " | ")},
+                If(
+                    And(Left(l.Value, 2) = "- ", CountRows(p) >= 4, EndsWith(Index(p, 2).Value, ".pdf</File>")),
+                    First(p).Value & " | " & Left(Index(p, 2).Value, Len(Index(p, 2).Value) - 11) & "</File> | " & Concat(LastN(p, CountRows(p) - 2), Value, " | "),
+                    l.Value
+                )
+            ),
+            Char(10)
+        )
+
+    - kind: SetVariable
+      id: unglue
+      variable: init:Topic.Unglued
+      value: |-
+        =/* A header the model wrote at the end of a row's line goes back on its own line; the pattern is anchored, so a row that only mentions a search tool name stays whole. */
+        Mid(
+            Concat(
+                Split(Topic.Kept, "S"),
+                If(IsMatch(First(Split(Value, Char(10))).Value, "^\d+ (global\.)?(search_|office365_search).*$"), Char(10), "") & "S" & Value
+            ),
+            2
+        )
+
+    - kind: SetVariable
+      id: splitBlocks
+      variable: init:Topic.Blocks
+      value: |-
+        =/* A block starts at a line "S<digits> ". A block whose first line is not a header stays as written, so each block is tagged before its rows change. */
+        With(
+            {L: Split(Topic.Unglued, Char(10))},
+            Concat(
+                Filter(
+                    Split(Concat(ForAll(Sequence(CountRows(L)) As i, If(i.Value = 1, "", IsMatch(Index(L, i.Value).Value, "^S\d+ .*$"), Char(31), Char(10)) & Index(L, i.Value).Value), Value), Char(31)),
+                    !IsBlank(Trim(Value))
+                ) As b,
+                With(
+                    {head: First(Split(b.Value, Char(10))).Value},
+                    If(Or(And(IsBlank(Find("|", head)), IsMatch(head, "^S[0-9]+ .+$")), IsMatch(head, "^S[0-9]+ .*\| results: [0-9]+\s*$")), "count", "raw")
+                        & Char(10) & b.Value
+                ),
+                Char(31)
+            )
+        )
+
+    - kind: SetVariable
+      id: joinRows
+      variable: init:Topic.JoinedRows
+      value: |-
+        =/* After a block's first row, a line that is not a row is the row before it, broken by a copied line break. */
+        Concat(
+            Filter(Split(Topic.Blocks, Char(31)), !IsBlank(Value)) As b,
+            With(
+                {ls: Split(b.Value, Char(10))},
+                If(
+                    Index(ls, 1).Value = "raw",
+                    b.Value,
+                    With(
+                        {first: Coalesce(First(Filter(Sequence(CountRows(ls)) As i, Left(Index(ls, i.Value).Value, 2) = "- ")).Value, CountRows(ls))},
+                        Concat(
+                            Sequence(CountRows(ls)) As i,
+                            If(
+                                i.Value = 1, Index(ls, 1).Value,
+                                Or(Left(Index(ls, i.Value).Value, 2) = "- ", i.Value <= first), Char(10) & Index(ls, i.Value).Value,
+                                IsBlank(Trim(Index(ls, i.Value).Value)), "",
+                                " " & Trim(Index(ls, i.Value).Value)
+                            )
+                        )
+                    )
+                )
+            ),
+            Char(31)
+        )
+
+    - kind: SetVariable
+      id: dropCopies
+      variable: init:Topic.UniqueRows
+      value: |-
+        =/* A reference id is one result of one search, so a second row with it in a block is a copy. */
+        Concat(
+            Filter(Split(Topic.JoinedRows, Char(31)), !IsBlank(Value)) As b,
+            With(
+                {ls: Split(b.Value, Char(10))},
+                With(
+                    {refs: ForAll(Sequence(CountRows(ls)) As i, If(And(Index(ls, 1).Value = "count", Left(Index(ls, i.Value).Value, 2) = "- "), First(Split(Index(ls, i.Value).Value, " | ")).Value))},
+                    Concat(
+                        Filter(Sequence(CountRows(ls)) As i, Or(IsBlank(Index(refs, i.Value).Value), CountRows(Filter(FirstN(refs, i.Value - 1), Value = Index(refs, i.Value).Value)) = 0)) As i,
+                        Index(ls, i.Value).Value,
+                        Char(10)
+                    )
+                )
+            ),
+            Char(31)
+        )
+
+    - kind: SetVariable
+      id: cutRows
+      variable: init:Topic.CutRows
+      value: |-
+        =/* The record keeps an excerpt's first 60 characters, so a drift later in what the model copied never reaches it. */
+        Concat(
+            Filter(Split(Topic.UniqueRows, Char(31)), !IsBlank(Value)) As b,
+            With(
+                {ls: Split(b.Value, Char(10))},
+                Concat(
+                    Sequence(CountRows(ls)) As i,
+                    With(
+                        {l: Index(ls, i.Value).Value, p: Split(Index(ls, i.Value).Value, " | ")},
+                        If(
+                            And(i.Value > 2, Index(ls, 1).Value = "count", Left(l, 2) = "- ", CountRows(p) >= 4),
+                            With(
+                                {s: Index(p, 3).Value, ex: Left(Concat(LastN(p, CountRows(p) - 3), Value, " | "), 60)},
+                                Index(p, 1).Value & " | " & Index(p, 2).Value & " | " & If(And(Left(s, 7) = "global.", IsBlank(Find("/", s))), Mid(s, 8), s) & " | " & If(IsBlank(Trim(ex)), "no snippet text", ex)
+                            ),
+                            l
+                        )
+                    ),
+                    Char(10)
+                )
+            ),
+            Char(31)
+        )
+
+    - kind: SetVariable
+      id: countRows
+      variable: init:Topic.CountedRows
+      value: |-
+        =/* Rows that end at the result the header named are the whole list, whatever count it wrote; fewer than 10 rows under "more" are most often a list of 10 or fewer. */
+        With(
+            {
+                blocks: ForAll(
+                    Filter(Split(Topic.CutRows, Char(31)), !IsBlank(Value)) As b,
+                    With({ls: Split(b.Value, Char(10))}, {kind: Index(ls, 1).Value, head: Index(ls, 2).Value, lines: LastN(ls, CountRows(ls) - 1)})
+                ),
+                pointers: ForAll(
+                    Split(Topic.Calls, Char(31)) As e,
+                    With(
+                        {toolLine: Concat(FirstN(Filter(Split(e.Value, Char(10)), StartsWith(Lower(Trim(Value)), "tool:")), 1), Value), ptrLine: Concat(FirstN(Filter(Split(e.Value, Char(10)), StartsWith(Lower(Trim(Value)), "recorded results:")), 1), Value)},
+                        {ptr: Trim(Mid(Trim(ptrLine), 18)), tool: Trim(Mid(toolLine, Find(":", toolLine & ":") + 1))}
+                    )
+                ),
+                refs: ForAll(Filter(Split(Topic.LastRefs, Char(10)), !IsBlank(Value)), {key: First(Split(Value, " ")).Value, ref: Mid(Value, Find(" ", Value & " ") + 1)})
+            },
+            Concat(
+                blocks As b,
+                If(
+                    b.kind = "raw",
+                    Concat(b.lines, Value, Char(10)),
+                    With(
+                        {
+                            k: First(Split(b.head, " ")).Value,
+                            own: If(IsBlank(Find("|", b.head)), b.head, Left(b.head, Find("|", b.head) - 1)),
+                            rows: Filter(b.lines, Left(Value, 2) = "- "),
+                            written: If(IsMatch(b.head, "^S\d+ .*\| results: \d+\s*$"), Value(Trim(Last(Split(b.head, "| results: ")).Value)), 0)
+                        },
+                        With(
+                            {
+                                named: LookUp(refs, key = k).ref,
+                                lastRef: Trim(First(Split(Concat(LastN(rows, 1), Mid(Value, 3)), " | ")).Value),
+                                tool: Coalesce(LookUp(pointers, ptr = k).tool, Trim(Mid(own, Len(k) + 2)))
+                            },
+                            k & " " & tool & " | results: "
+                                & If(Or(And(!IsBlank(named), named <> "none", named <> "more", CountRows(rows) > 0, lastRef = named), And(named = "more", CountRows(rows) > 0, CountRows(rows) < 10)), CountRows(rows), Max(CountRows(rows), written))
+                                & Concat(LastN(b.lines, CountRows(b.lines) - 1), Char(10) & Value)
+                        )
+                    )
+                ),
+                Char(31)
+            )
+        )
+
+    - kind: SetVariable
+      id: storeCoverage
+      variable: init:Topic.Covered
+      value: |-
+        =/* A block with fewer rows than its count says how many it recorded, so the missing results read as unknown, not as empty. */
+        Concat(
+            Filter(Split(Topic.CountedRows, Char(31)), !IsBlank(Value)) As b,
+            With(
+                {ls: Split(b.Value, Char(10))},
+                With(
+                    {
+                        n: If(IsMatch(First(ls).Value, "^S\d+ .*\| results: \d+$"), Value(Last(Split(First(ls).Value, "| results: ")).Value), 0),
+                        m: CountRows(Filter(ls, Left(Value, 2) = "- ")),
+                        last: Coalesce(Max(Filter(Sequence(CountRows(ls)) As i, Left(Index(ls, i.Value).Value, 2) = "- "), Value), 1)
+                    },
+                    If(
+                        m < n,
+                        Concat(FirstN(ls, last), Value, Char(10)) & Char(10) & "Recorded " & m & " of " & n & " returned results; omitted results are unknown, not empty." & Concat(LastN(ls, CountRows(ls) - last), Char(10) & Value),
+                        b.Value
+                    )
+                )
+            ),
+            Char(31)
+        )
+
+    - kind: SetVariable
+      id: findGaps
+      variable: init:Topic.Gaps
+      value: |-
+        =/* A block that stops short of the last result its header named gets a note. Each gap is written as "S<k>", its row count and the result named, or "ten" for a full list of 10. */
+        With(
+            {refs: ForAll(Filter(Split(Topic.LastRefs, Char(10)), !IsBlank(Value)), {key: First(Split(Value, " ")).Value, ref: Mid(Value, Find(" ", Value & " ") + 1)})},
+            Concat(
+                Filter(Split(Topic.Covered, Char(31)), !IsBlank(Value)) As b,
+                With(
+                    {head: First(Split(b.Value, Char(10))).Value, key: First(Split(b.Value, " ")).Value, rows: Filter(Split(b.Value, Char(10)), Left(Value, 2) = "- ")},
+                    With(
+                        {
+                            ref: LookUp(refs, key = First(Split(head, " ")).Value).ref,
+                            m: CountRows(rows),
+                            written: If(IsMatch(head, "^S\d+ .*\| results: \d+$"), Value(Last(Split(head, "| results: ")).Value), 10),
+                            last: Concat(LastN(rows, 1), Trim(First(Split(Mid(Value, 3), " | ")).Value))
+                        },
+                        If(
+                            IsMatch(head, "^S\d+ .*\| error: .*$"), "",
+                            And(m = 10, !IsBlank(ref), Or(ref = "more", last = ref)), Char(31) & key & Char(10) & m & Char(10) & "ten",
+                            And(ref = "more", written < 10), "",
+                            Or(IsBlank(ref), And(ref = "none", m > 0)), "",
+                            And(ref <> "none", Or(m = 0, last <> ref)), Char(31) & key & Char(10) & m & Char(10) & ref,
+                            ""
+                        )
+                    )
+                )
+            )
+        )
+
+    - kind: SetVariable
+      id: storeLastNote
+      variable: Global.Diag_SearchResults
+      value: |-
+        =/* When two blocks share a number, the later block's gap sets the note for both. */
+        With(
+            {gaps: ForAll(Filter(Split(Topic.Gaps, Char(31)), !IsBlank(Value)), With({g: Split(Value, Char(10))}, {key: Index(g, 1).Value, m: Index(g, 2).Value, ref: Index(g, 3).Value}))},
+            Concat(
+                Filter(Split(Topic.Covered, Char(31)), !IsBlank(Value)) As b,
+                With(
+                    {ls: Split(b.Value, Char(10)), g: Last(Filter(gaps, key = First(Split(First(Split(b.Value, Char(10))).Value, " ")).Value))},
+                    If(
+                        IsBlank(g),
+                        b.Value,
+                        With(
+                            {last: Coalesce(Max(Filter(Sequence(CountRows(ls)) As i, Left(Index(ls, i.Value).Value, 2) = "- "), Value), 1)},
+                            Concat(FirstN(ls, last), Value, Char(10)) & Char(10) & "Recorded " & g.m & " of " & g.key & "'s results"
+                                & If(g.ref = "ten", ", the most kept for one search; any further results are not recorded.", g.ref = "more", "; the search returned more, and those are not recorded.", "; the list went on to " & g.ref & ", and the rest are not recorded.")
+                                & Concat(LastN(ls, CountRows(ls) - last), Char(10) & Value)
+                        )
+                    )
+                ),
+                Char(10)
+            )
+        )
+
+    - kind: SetVariable
+      id: storeDigestQuestion
+      variable: Global.Diag_UserQuestion
+      value: =Topic.UserQuestion
+
+    - kind: SetVariable
+      id: storeRecordedAt
+      variable: Global.Diag_RecordedAt
+      value: =Text(Now(), "yyyy-mm-dd hh:mm") & " UTC"
+
+    - kind: SetVariable
+      id: storeToolCalls
+      variable: Global.Diag_ToolCalls
+      value: |-
+        =/* Text is compared exactly, case included, so Left() = and Find replace StartsWith and in, which ignore case. */
+        Concat(
+            Split(Topic.Calls, Char(31)) As e,
+            With(
+                {
+                    lines: Split(e.Value, Char(10)),
+                    ptr: With({p: Concat(FirstN(Filter(Split(e.Value, Char(10)), Left(Trim(Value), 17) = "Recorded results:"), 1), Value)}, TrimEnds(Mid(p, Coalesce(Find(":", p), 0) + 1)))
+                },
+                With(
+                    {head: If(IsBlank(ptr), "", Concat(FirstN(Filter(Split(Global.Diag_SearchResults, Char(10)), Left(Value, Len(ptr) + 1) = ptr & " "), 1), Value))},
+                    Concat(
+                        lines As l,
+                        If(
+                            And(Trim(l.Value) = "Result: data returned", Right(Trim(head), 12) = "| results: 0", IsBlank(Find("of " & ptr & "'s results", Global.Diag_SearchResults))), "Result: empty",
+                            And(Left(Trim(l.Value), 25) = "Result: error: Resource '", !IsBlank(Find("' not found.", l.Value))), Left(l.Value, Find("' not found.", l.Value) + 11),
+                            l.Value
+                        ),
+                        Char(10)
+                    )
+                )
+            ),
+            Char(10)
+        )
+
+    - kind: SetVariable
+      id: storeToolDescriptions
+      variable: Global.Diag_ToolDescriptions
+      value: =Topic.ToolDescriptions
+
+    - kind: ConditionGroup
+      id: noticeOnce
+      conditions:
+        - id: firstRecord
+          condition: =IsBlank(Global.Diag_NoticeShown)
+          actions:
+            - kind: SetVariable
+              id: markNoticeShown
+              variable: Global.Diag_NoticeShown
+              value: =true
+
+            - kind: SendActivity
+              id: sendNotice
+              activity: Add the recording notice to this reply.
+
+    - kind: EndDialog
+      id: endRecord
+
+inputType:
+  properties:
+    UserQuestion:
+      displayName: UserQuestion
+      type: String
+
+    ToolCalls:
+      displayName: ToolCalls
+      type: String
+
+    ToolDescriptions:
+      displayName: ToolDescriptions
+      type: String
+
+    TopicRules:
+      displayName: TopicRules
+      type: String
+
+outputType: {}
