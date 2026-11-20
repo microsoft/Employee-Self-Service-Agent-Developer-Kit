@@ -12810,6 +12810,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     chooser_parser.add_argument("--selection-key")
     chooser_parser.add_argument("--agent-link")
+    claim_parser = subparsers.add_parser(
+        "claim-confirmation-handoff",
+        help=(
+            "Return the fixed reply for a custom claim the Entra "
+            "administrator has not confirmed; records nothing."
+        ),
+    )
+    claim_parser.add_argument("--custom-claim", action="store_true")
+    claim_parser.add_argument("--claim-name-given", action="store_true")
+    claim_parser.add_argument("--servicenow-confirmed", action="store_true")
 
     inspect_parser = subparsers.add_parser(
         "inspect",
@@ -13691,6 +13701,82 @@ def _pending_cards(value: Any) -> list[dict[str, Any]]:
     return unique
 
 
+_CLAIM_CONFIRMATION_AFTER_REPLY = (
+    "When the maker returns, any message means they want to continue. "
+    "Do not ask a Yes/No question. Record only the administrators' "
+    "non-sensitive reply with the existing record-identity-direct "
+    "commands; a proposed name, a name alone or a vague \"done\" is "
+    "not confirmation, so keep waiting and ask only for what is "
+    "still missing."
+)
+
+
+def claim_confirmation_handoff(
+    *,
+    custom_claim: bool = False,
+    claim_name_given: bool = False,
+    servicenow_confirmed: bool = False,
+) -> dict[str, Any]:
+    """Fixed reply for an identifier the Entra administrator has not confirmed.
+
+    The Part 4 custom-claim instructions are sent only when the maker says a
+    custom claim is wanted. The maker is never asked to pick a mapping, invent
+    a claim name or fall back to email; only the missing confirmations are
+    requested.
+    """
+    if not custom_claim:
+        return {
+            "status": "claim-confirmation-required",
+            "decision": "claim-confirmation-required",
+            "recordsNothing": True,
+            "renderBlock": {
+                "kind": "waiting",
+                "text": (
+                    "We need your Entra administrator to confirm which claim "
+                    "the app sends for ServiceNow before we continue.\n\n"
+                    "Ask them to reply with the exact claim name. Don't send "
+                    "employee identifiers or secrets.\n\n"
+                    "We'll keep the Client ID and tenant ID already supplied."
+                ),
+            },
+            "afterReply": _CLAIM_CONFIRMATION_AFTER_REPLY,
+        }
+    paragraphs = [
+        "We need the Entra administrator to confirm the custom claim before "
+        "ServiceNow can use it to identify employees."
+    ]
+    if claim_name_given:
+        paragraphs.append(
+            "Ask them to complete the custom-claim work in Part 4 of their "
+            "instructions. Bring back confirmation that the setup is complete, "
+            "including the appropriate format and populated source attribute "
+            "for every intended employee. You don't need to resend the claim "
+            "name."
+        )
+    else:
+        paragraphs.append(
+            "Ask them to complete the custom-claim work in Part 4 of their "
+            "instructions. Bring back the exact configured claim name and "
+            "confirmation that the setup is complete, including the "
+            "appropriate format and populated source attribute for every "
+            "intended employee."
+        )
+    if not servicenow_confirmed:
+        paragraphs.append(
+            "Then ask your ServiceNow administrator to confirm that the "
+            "supported configuration is saved, with the matching User Claim "
+            "and User Field. Don't send employee identifiers or secrets."
+        )
+    paragraphs.append("We'll keep the Client ID and tenant ID already supplied.")
+    return {
+        "status": "claim-confirmation-required",
+        "decision": "claim-confirmation-required",
+        "recordsNothing": True,
+        "renderBlock": {"kind": "waiting", "text": "\n\n".join(paragraphs)},
+        "afterReply": _CLAIM_CONFIRMATION_AFTER_REPLY,
+    }
+
+
 def _chat_message(result: dict[str, Any]) -> str:
     """Build the one chat message the agent relays for this output.
 
@@ -13936,6 +14022,12 @@ def main(argv: list[str] | None = None) -> int:
                 selection_key=args.selection_key,
                 agent_link=args.agent_link,
             )
+        elif args.command == "claim-confirmation-handoff":
+            result = claim_confirmation_handoff(
+                custom_claim=args.custom_claim,
+                claim_name_given=args.claim_name_given,
+                servicenow_confirmed=args.servicenow_confirmed,
+            )
         else:
             context_kwargs: dict[str, Any] = {}
             if args.agent_id is not None or args.agent_slug is not None:
@@ -14160,6 +14252,7 @@ def main(argv: list[str] | None = None) -> int:
             "adapt-question",
             "list-agents",
             "agent-chooser",
+            "claim-confirmation-handoff",
         }:  # pragma: no cover
             raise ServiceNowConnectError("Unsupported command.")
     except (ServiceNowConnectError, AgentBuilderError, ValueError) as exc:

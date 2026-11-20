@@ -48,6 +48,12 @@ with the confirmed Client ID and User Claim already locked:
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} identity-direct-handoff --stage servicenow
 ```
 
+A maker message that says a custom claim is wanted but not confirmed by the
+Entra administrator is answered only with the "Custom claim not confirmed"
+Message from `claim-confirmation-handoff --custom-claim` (see `Clarification and recovery
+Messages` in `src/skills/connect/servicenow/entry.md`), verbatim; do not
+improvise steps, suggest email, or record anything.
+
 When the maker returns from a pause with an administrator reply outstanding,
 do not render the instructions again: follow the "Maker pauses for an
 administrator" messages in `servicenow/entry.md`, then record the reply below.

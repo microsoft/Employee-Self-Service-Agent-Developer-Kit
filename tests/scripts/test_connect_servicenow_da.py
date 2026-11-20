@@ -17389,3 +17389,53 @@ def test_checklist_due_always_shows_the_final_state(tmp_path: Path) -> None:
         assert snow._checklist_due(context, "b") is True
         assert snow._checklist_due(context, "b", force=True) is True
         assert snow._checklist_due(context, "b") is False
+
+@pytest.mark.parametrize(
+    "provider", ["servicenow-da-hrsd", "servicenow-da-itsm"]
+)
+def test_claim_confirmation_handoff_is_fixed_and_only_custom_claims_get_part_four(
+    provider: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    previous = snow.ACTIVE_PROFILE
+    try:
+        assert snow.main(["--provider", provider, "claim-confirmation-handoff", "--custom-claim"]) == 0
+        full = json.loads(capsys.readouterr().out)
+        assert snow.main(
+            [
+                "--provider",
+                provider,
+                "claim-confirmation-handoff",
+                "--custom-claim",
+                "--claim-name-given",
+                "--servicenow-confirmed",
+            ]
+        ) == 0
+        partial = json.loads(capsys.readouterr().out)
+        assert snow.main(["--provider", provider, "claim-confirmation-handoff"]) == 0
+        plain = json.loads(capsys.readouterr().out)
+    finally:
+        snow.ACTIVE_PROFILE = previous
+
+    assert full["chatMessage"] == (
+        "We need the Entra administrator to confirm the custom claim before "
+        "ServiceNow can use it to identify employees.\n\n"
+        "Ask them to complete the custom-claim work in Part 4 of their "
+        "instructions. Bring back the exact configured claim name and "
+        "confirmation that the setup is complete, including the appropriate "
+        "format and populated source attribute for every intended employee.\n\n"
+        "Then ask your ServiceNow administrator to confirm that the supported "
+        "configuration is saved, with the matching User Claim and User Field. "
+        "Don't send employee identifiers or secrets.\n\n"
+        "We'll keep the Client ID and tenant ID already supplied."
+    )
+    for output in (full, partial, plain):
+        assert output["endTurn"] is True
+        assert output["recordsNothing"] is True
+        assert "pendingCard" not in output
+        assert "email" not in output["chatMessage"].lower()
+    assert "Then ask your ServiceNow administrator" not in partial["chatMessage"]
+    assert "exact configured claim name" not in partial["chatMessage"]
+    assert "Part 4" in partial["chatMessage"]
+    assert "Part 4" not in plain["chatMessage"]
+    assert "tenant ID already supplied" in plain["chatMessage"]

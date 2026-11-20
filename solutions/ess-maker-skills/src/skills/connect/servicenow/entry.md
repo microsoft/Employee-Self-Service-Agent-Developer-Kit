@@ -477,12 +477,33 @@ Send that value here.
 
 **End message.**
 
-**Custom claim not confirmed.** When a custom claim (for example employee ID)
-is mentioned but the Entra administrator has not confirmed it, show the
-following. The maker is not asked to select an identity mapping or invent a
-claim name; a proposed name, a name alone, or a vague "done" does not establish
-readiness. When some items are already confirmed, ask only for the missing
-ones:
+**Custom claim not confirmed.** Only when the maker says a custom claim (or
+custom field) is wanted and the Entra administrator has not confirmed it, show
+the following Message verbatim as the whole reply. Mentioning an employee ID or
+another field without saying a custom claim is wanted does not trigger it:
+never point the maker to Part 4 then; run the same command without
+`--custom-claim` and send its reply, which only asks the Entra administrator to
+confirm the exact claim name. This
+applies at any point in the journey, including while waiting for the
+ServiceNow administrator's reply. Do not explain the current claim, list your
+own next steps, record anything, or ask a question. Get the Message from the
+controller instead of writing it: run
+`python scripts/connect_servicenow_da.py --provider {PROVIDER} claim-confirmation-handoff --custom-claim`
+(add `--claim-name-given` when the Entra administrator's exact claim name is
+already stated, and `--servicenow-confirmed` when the ServiceNow
+administrator's saved-configuration confirmation with the matching User Claim
+and User Field is already supplied), send `chatMessage` verbatim and follow
+`endTurn`/`afterReply`. The command records nothing and needs no agent state. The maker
+is not asked to select an identity mapping or invent a claim name; a proposed
+name, a name alone, or a vague "done" does not establish readiness. End the
+turn and wait; the next message from the maker continues the setup.
+
+When some items are already confirmed, ask only for the missing ones: when the
+Entra administrator's exact claim name is already stated, show the "We have
+the claim name" Message below instead of asking for the name again; when the ServiceNow administrator's
+saved-configuration confirmation with the matching User Claim and User Field
+is already supplied, omit the third paragraph. Never drop the last paragraph:
+the already supplied values stay in place.
 
 **Message:**
 
@@ -495,10 +516,10 @@ complete, including the appropriate format and populated source attribute for
 every intended employee.
 
 Then ask your ServiceNow administrator to confirm that the supported
-configuration is saved, with the matching User Field. Don't send employee
-identifiers or secrets.
+configuration is saved, with the matching User Claim and User Field. Don't send
+employee identifiers or secrets.
 
-We'll keep the Client ID already supplied.
+We'll keep the Client ID and tenant ID already supplied.
 
 **End message.**
 

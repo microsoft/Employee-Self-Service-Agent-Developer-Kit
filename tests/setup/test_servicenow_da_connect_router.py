@@ -227,7 +227,9 @@ def test_servicenow_connect_does_not_ask_the_maker_for_a_tenant_id() -> None:
     messages = entry.split("## Clarification and recovery Messages", 1)[
         1
     ].split("## ServiceNow rules", 1)[0]
-    assert "tenant ID" not in messages
+    assert "tenant ID" not in " ".join(messages.split()).replace(
+        "the Client ID and tenant ID already supplied", ""
+    )
     realms = (connect / "servicenow" / "realms.md").read_text(
         encoding="utf-8"
     )
@@ -506,6 +508,12 @@ def test_servicenow_connect_entry_has_flow_clarification_messages() -> None:
         "ServiceNow can use it to identify employees.",
         "Ask them to complete the custom-claim work in Part 4 of their "
         "instructions.",
+        "Then ask your ServiceNow administrator to confirm that the supported "
+        "configuration is saved, with the matching User Claim and User Field. "
+        "Don't send employee identifiers or secrets.",
+        "We'll keep the Client ID and tenant ID already supplied.",
+        "show the following Message verbatim as the whole reply",
+        "ask only for the missing ones",
         "Send the reported conflict to your Entra and ServiceNow "
         "administrators.",
         "We won't change that configuration or troubleshoot the conflict.",
@@ -1397,3 +1405,13 @@ def test_plugin_not_active_reply_is_only_the_two_waiting_sentences() -> None:
     assert "direct link and identifiers" not in no_branch
     assert "HR setup is waiting for your ServiceNow administrator" in no_branch
     assert "Bring back that confirmation when it's ready" in no_branch
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_custom_claim_not_confirmed_is_routed_to_the_spec_message(profile: str) -> None:
+    actions = _SOLUTION / "src" / "skills" / "connect" / f"servicenow-da-{profile}" / "actions"
+    for name in ("guide-entra-registration.md", "guide-servicenow-oidc.md"):
+        text = " ".join((actions / name).read_text(encoding="utf-8").split())
+        assert '"Custom claim not confirmed" Message' in text, name
+        assert "verbatim" in text, name
+        assert "email" in text, name

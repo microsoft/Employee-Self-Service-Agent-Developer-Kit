@@ -117,7 +117,9 @@ Client ID. Show the returned question verbatim. This hint is validated but not
 persisted, so a new chat without an atomic receipt may ask for Client ID again.
 Record the non-secret values only after the reply supplies both.
 
-For a reply that proposes a custom claim without configuring it, names two
+For a reply that proposes a custom claim without configuring it, and the maker says a custom claim is wanted, show the
+"Custom claim not confirmed" Message (run `claim-confirmation-handoff --custom-claim`)
+verbatim and nothing else; never suggest email as a fallback. For a reply that names two
 claims, gives a name without completion confirmation, reports missing
 attributes, an email format, or an Entra error, or that the maker is waiting
 for the claim, show the matching Message in `Clarification and recovery
