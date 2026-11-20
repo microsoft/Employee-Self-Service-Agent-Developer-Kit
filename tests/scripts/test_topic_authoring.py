@@ -976,6 +976,10 @@ def _deletion_preview(topic_cli):
     ("core", "ConversationStart", "catalog.authoring-additions.json"),
     ("hr", "WorkdayEmployeeID", "catalog.provisional.json"),
     ("it", "Example-CraftedResponse", "catalog.authoring-additions.json"),
+    ("hr", "System-RecordSearchResults", "catalog.provisional.json"),
+    ("hr", "System-DiagnoseReport", "catalog.provisional.json"),
+    ("it", "System-RecordSearchResults", "catalog.provisional.json"),
+    ("it", "System-DiagnoseReport", "catalog.provisional.json"),
 ])
 @pytest.mark.parametrize("contained", [False, True])
 @pytest.mark.parametrize("operation", ["preview", "apply"])

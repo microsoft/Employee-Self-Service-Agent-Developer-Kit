@@ -30,6 +30,10 @@ class TopicChange:
     component_id: str
     before: str
     after: str
+    operation: str = "update"
+    schema_name: str | None = None
+    display_name: str | None = None
+    content_digest: str | None = None
 
 
 @dataclass(frozen=True)

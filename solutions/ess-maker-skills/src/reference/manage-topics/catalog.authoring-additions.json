@@ -9,8 +9,8 @@
   "baseCatalog": {
     "file": "catalog.provisional.json",
     "repositoryUrl": "https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit",
-    "revision": "9953b38b39df3e727e3a705af717f2e1771a150e",
-    "gitBlob": "81bbfb411eda270d4ddc490c0318b26d6d6b4cf5"
+    "revision": "569142647fcc76bf0a006576397cc1602d2bcef8",
+    "gitBlob": "88f9fe9b567ed7500dc8ab6a98ce475e75114309"
   },
   "packages": [
     {
@@ -22,7 +22,10 @@
       "sourcePath": "/sources/dev/AgentTemplates/CopilotForEmployeeSelfServiceCore/Plugin/Agents/gptagent_copilotforemployeeselfservicecore/agent.yml",
       "sourceRevision": "0737a5a499a03a0e32ea329ae815be0013a6f686",
       "combinedTopicInventory": {
-        "coverage": "complete_at_source_revision",
+        "coverage": "recorded_source_union",
+        "sourceRevisions": [
+          "0737a5a499a03a0e32ea329ae815be0013a6f686"
+        ],
         "topicCount": 3,
         "schemaNamesSha256": "99d3e7f62e53747a95606949d3f4f3e5a462361a1bf52abd7363c586931bb525"
       },
@@ -50,9 +53,13 @@
       "sourcePath": "/sources/dev/AgentTemplates/CopilotForEmployeeSelfServiceHR/Plugin/Agents/gptagent_copilotforemployeeselfservicehr/agent.yml",
       "sourceRevision": "0737a5a499a03a0e32ea329ae815be0013a6f686",
       "combinedTopicInventory": {
-        "coverage": "complete_at_source_revision",
-        "topicCount": 50,
-        "schemaNamesSha256": "bc35dd504740161fe840e335898e012f25c69e043ea1a624ae27eb2a3d1ab066"
+        "coverage": "recorded_source_union",
+        "sourceRevisions": [
+          "0737a5a499a03a0e32ea329ae815be0013a6f686",
+          "eb423aaea30944b7f8cbf205b424e779ef7f53cf"
+        ],
+        "topicCount": 52,
+        "schemaNamesSha256": "e2f7905953f1fd80b173f2d956a3f7d86b65112e6d9b2405fe786b6b2b3ba46a"
       },
       "topics": [
         {
@@ -102,9 +109,13 @@
       "sourcePath": "/sources/dev/AgentTemplates/CopilotForEmployeeSelfServiceIT/Plugin/Agents/gptagent_copilotforemployeeselfserviceit/agent.yml",
       "sourceRevision": "0737a5a499a03a0e32ea329ae815be0013a6f686",
       "combinedTopicInventory": {
-        "coverage": "complete_at_source_revision",
-        "topicCount": 47,
-        "schemaNamesSha256": "f8c7beec3f4c7987c52d4f908faa31b576acd81eb1d41ac1ef2c01851f6ed163"
+        "coverage": "recorded_source_union",
+        "sourceRevisions": [
+          "0737a5a499a03a0e32ea329ae815be0013a6f686",
+          "eb423aaea30944b7f8cbf205b424e779ef7f53cf"
+        ],
+        "topicCount": 49,
+        "schemaNamesSha256": "92f3dc0f825cfde8653a2157ff45a1cc16b21157266ed727e0e5de83ae3c9e4b"
       },
       "topics": [
         {
