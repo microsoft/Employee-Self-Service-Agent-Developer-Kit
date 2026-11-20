@@ -1,6 +1,6 @@
 ---
 mode: agent
-description: "Manage ESS topic sets: list current states, or review and approve enabling or disabling them"
+description: "Manage ESS topic sets: list current states, or review and approve adding, enabling or disabling them"
 ---
 
 # Manage topics
@@ -17,11 +17,13 @@ target and workspace-preparation gate; do not require connection health or
 ## Mandatory set-picker gate
 
 Never batch action and set selection into one question call. If the action
-is unknown, ask Enable/Disable/List in that order, keeping the host's
-"Enter custom answer" fourth. Wait for the answer, then run
+is unknown, ask Enable/Disable/Add/List in that order, keeping the host's
+"Enter custom answer" fifth. Wait for the answer, then run
 `--list-agent-sets` for the currently selected agent before any set picker.
 If the action is already known but sets are unknown, run that same fresh
 discovery before asking for sets.
+Omit `setKeys` from listing requests. For List/Enable/Disable, omit `action`;
+for Add, include `action: "add"`.
 
 Use the actual question as both `header` and `question` so it appears in the
 card's top row, not under a generic "Manage topics", "Topic sets" or
@@ -33,9 +35,13 @@ Render the returned `userMessage`. For enable/disable, pass the returned
 `selectionQuestion` unchanged as the sole next structured question. Its
 options contain only friendly set names, without state/count suffixes or
 descriptions; keep counts and states in the overview only. This applies to
-all four supported sets. These are the complete allowed picker choices; map answered labels back
+all supported sets. These are the complete allowed picker choices; map answered labels back
 to the keys in the same response's `sets`. Never add catalog entries,
 integration/HR/IT combinations, custom-answer fields or remembered choices.
+Add uses the same picker rules and lists supported shipped-content sets not fully present.
+When complete Add discovery lists exactly one set, the helper omits `selectionQuestion`;
+go directly to that set's fresh review. Keep presence in the overview only; review checks
+content, state and Dev enrollment.
 Do not use `--list-sets` or `catalog.provisional.json` as a picker source.
 If `selectionQuestion` is absent/null or discovery failed, do not show a
 set picker or fall back to the catalog. Listing stops after the overview
@@ -50,32 +56,36 @@ Keep the exact change count in the approval question.
 Follow its interaction and output contract: reuse known selections, keep
 routine checks quiet, show one complete fresh execution review and collect
 one explicit structured chat approval decision. If the action is unknown,
-ask Enable/Disable/List in that order, with "Enter custom answer" fourth.
+ask Enable/Disable/Add/List in that order, with "Enter custom answer" fifth.
 Then use `--list-agent-sets` to show the
 selected agent's live set names, present topic counts and
 Enabled/Disabled/Mixed/Unknown states. Listing stops there, without a set
 question or approval. Enable/disable without known sets uses a structured
 multi-select supplied by `selectionQuestion`, not a free-text internal-key question.
+Add uses the same multi-select flow with its separate presence list.
 Do not invent catalog-only choices or treat failed/incomplete discovery as
 an empty success. Reuse an explicit action and sets without this detour.
 Listing and previews need no approval. Only explicit topic-detail previews
 show individual short topic names and current states, not requested states,
 plans, change counts or write-specific limitation notes.
-Successful read-only replies show only the heading and requested tables:
+For List/Enable/Disable, successful read-only replies show only the heading and requested tables:
 no target identifiers, redundant set-total summary, "No topics were changed"
 footer, publishing commentary or follow-up suggestions. Keep complete target
 and account details in execution reviews.
+Add previews also show presence. Keep add's no-change note.
 Keep unresolved topics and blockers visible.
 Use "No change" instead of "Already correct" in execution plans.
 Review tables follow Chelsea's # / Integration / Topic / Current state /
 Planned change columns. Use catalog integration names and per-group numbering,
 without a separate Requested state column. Planned changes say Enable,
 Disable, No change - already enabled/disabled, or the evidenced skip reason.
+Add plans instead use Add and the helper's no-change/skip wording.
 Retain the complete account/target, selected scope, unknown states and unique
 shared-topic rows; the new table does not change consent or execution.
 Use Enable/Disable for actions and Enabled/Disabled/Unknown for topic states;
 aggregate states can also be Mixed. Follow the helper's grouped review and
 per-topic result tables with friendly set names and unique shared-topic rows.
+Use Add for that action. There is no Remove; the maker deletes added topics in Copilot Studio.
 Keep the grouped result tables even when no changes are needed: show zero
 changes, already-matching counts and the unchanged topics, without approval.
 Execution results use Chelsea's outcome-first hierarchy: a concise verified
@@ -86,15 +96,18 @@ Do not show a protected-topics section or protection counts in this scope.
 Keep underlying safeguards; any evidenced skipped row retains its state and
 reason inline in the existing set table. Keep uncertain state/cause and
 preservation failures explicit. Omit zero-valued unchanged counts,
-repeated selected-set summaries and routine submission/publishing footers.
-Cancellation says only "Canceled."; denial says only "Not approved."
+repeated selected-set summaries and routine submission/publishing footers for enable/disable.
+For enable/disable, cancellation says only "Canceled."; denial says only "Not approved."
+For add, retain the helper's draft/publish and
+no-change notes. Render cancellation and denial as returned.
 Put error guidance in a short paragraph under a standalone **NEXT STEPS**
 heading instead of an inline "Next step:" label. Do not invent unrelated
 setup or connection suggestions.
 Use this pattern wherever Manage topics next-step guidance appears, including
 partial and unverified outcomes. Do not add next steps where none are needed.
 Errors show the specific problem and one supported next step, without a
-generic failure heading, repeated inventory or unchanged-topic footer.
+generic failure heading or repeated inventory. Retain the helper's wording
+and any no-change note.
 Use explicit bold table headers and normal Markdown block spacing. Do not put
 tables in code fences, lists or blockquotes. Width, padding, background and
 accent colors are host-owned, not controllable through skill Markdown.
@@ -112,16 +125,20 @@ commands or checks. Host tool panels and required sign-in/permission controls
 cannot be hidden by this skill; do not change editor settings to hide them.
 Do not paraphrase it, add warning lists, display internal codes or append raw
 diagnostic messages. Do not add a "Before you approve" section or replacement
-warning notes. Limitations stay in structured diagnostics; safe technical
+warning notes except the required diagnostics Add notice. Limitations stay in structured diagnostics; safe technical
 details are available on request.
+For diagnostics Add, supplement the helper with the skill's experimental/model-written record notice,
+special-settings caveat and GitHub Issues route before approval. After success, give its Enable,
+publish, question then `/diagnose` steps, 45-minute example and Dev-before-promotion warning.
 
 Use its source-inventory preview or Workday-style review/approval/apply flow.
 Once enable/disable sets are established, use `--review`; never replace
 the requested change with a read-only listing. For verified no-change enable/disable, display
 the `already_correct` result and stop without approval or `--apply-review`.
+Add follows the same review, explicit approval, apply and no-change rules.
 Only `review_ready` permits approval. Display the
 returned review, then pass its `approvalQuestion` unchanged as the sole next
-structured question. It uses Enable/Disable with the unique changed-topic count,
+structured question. It uses Add/Enable/Disable with the unique changed-topic count,
 selected set names and Not now, plus the host's custom-answer field. Leave
 approval unset, with no recommended option. Map only explicit selection of the
 supplied action option to `approve`; Not now maps to `deny`. Dismissal, custom
@@ -150,20 +167,31 @@ exceptions, caller context or service bodies.
 Distinguish setup not established, incomplete and broken. `/setup` is a
 supported setup entry, not a universal repair command or package installer.
 Do not label unavailable evidence as missing packages, access denial or an
-already-correct result. Before writes, cancellation says only "Canceled."
+already-correct result. Before writes, enable/disable cancellation says only "Canceled."
+For add, render cancellation as returned.
 A rejected or consumed review explains that the review is unavailable or already
 used and requires a fresh request and approval; never imply that an earlier
 invocation changed nothing. Submission status remains in structured diagnostics.
 Preserve confirmed caller progress without promising an
 unverified automatic return or resume.
 
-Native writes are not restricted to Dev agents or ALM-enrolled agents.
+Native enable/disable writes are not restricted to Dev agents or ALM-enrolled agents.
+Add requires a live Development agent enrolled in ALM and a shipped-content set.
+Add inserts absent members disabled; all-present matching content is a no-op. Partial sets or
+content/kind/identity conflicts block add. The helper verifies presence, content and state.
+Only add needs the Object Model converter; missing runtime stops before writing.
+All checks and writes belong to the script. Other topic creation, update and deletion
+still stop at the existing capability gate.
 Verify the exact selected native target and account; the service enforces
 edit access. Use the skill-owned component client, not Connect
 Workday's client or update logic. Central release admission and prequalification
 are not required by this implementation; retain catalog, package, protection
 and API limitations in structured diagnostics for technical questions. Do not claim
 customer-release qualification or proven draft/published isolation.
+Keep the helper's draft-only note after submitted writes and its no-change
+note when no write occurred. A review says the change will stay in the draft;
+Microsoft 365 Copilot sees it after the maker publishes in Copilot Studio.
+Leave the local agent folder and push baseline unchanged.
 Never invent approval, prefill an approve response, publish, or bypass a
 remaining identity, membership, state or freshness blocker through another
 mutation path. Never retry a consumed review, reuse an earlier answer, or claim

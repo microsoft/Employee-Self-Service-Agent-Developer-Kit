@@ -17,6 +17,7 @@ from pathlib import Path
 from jsonschema import Draft202012Validator
 
 from manage_topics_components import normalize_state
+from manage_topics_content import load_set_content
 from manage_topics_discovery import (
     DiscoveryError, DiscoverySnapshot, DiscoveryTarget, SourceBinding, TopicEvidence, TopicSet,
     _fail, _identity, _key, _target, build_provisional_snapshot,
@@ -56,6 +57,7 @@ class CatalogSnapshot:
     evidence_kind: str = "provided_inventory"
     source_inventory_only: bool = False
     warnings: tuple[str, ...] = ()
+    content_members: tuple = ()
 
 
 def parse_catalog(document: dict) -> Catalog:
@@ -93,6 +95,7 @@ def parse_catalog(document: dict) -> Catalog:
         ):
             _fail("invalid_required_coverage")
     seen = set()
+    content_digests = {}
     for topic_set in document["sets"]:
         if topic_set["key"] in seen:
             _fail("duplicate_set")
@@ -115,8 +118,13 @@ def parse_catalog(document: dict) -> Catalog:
                 topic = registry[name]
                 if topic["required"] is True or topic["classification"] in ("required_system", "other_non_isv"):
                     _fail("ineligible_member")
+        content = load_set_content(topic_set)
+        if content:
+            content_digests[topic_set["key"]] = {item.stem: item.digest for item in content}
     encoded = json.dumps(document, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    return Catalog(hashlib.sha256(encoded.encode()).hexdigest(), encoded)
+    # Approval binds the shipped topic files as well as the catalog that names them.
+    contents = json.dumps(content_digests, sort_keys=True) if content_digests else ""
+    return Catalog(hashlib.sha256((encoded + contents).encode()).hexdigest(), encoded)
 
 
 def load_catalog(path: str | Path = BUNDLED_CATALOG) -> Catalog:
@@ -371,6 +379,9 @@ def snapshot_from_response(
 
 def plan_catalog_actions(snapshot: CatalogSnapshot, action: str) -> TopicPlan:
     """Compute eligibility and outside-set protection instead of accepting skips."""
+    if action == "add" and type(snapshot) is CatalogSnapshot and snapshot.source_inventory_only:
+        from manage_topics_content_actions import plan_content_actions
+        return plan_content_actions(snapshot, action)
     if type(snapshot) is not CatalogSnapshot or action not in ("enable", "disable"):
         _fail("invalid_plan")
     evidence = snapshot.evidence

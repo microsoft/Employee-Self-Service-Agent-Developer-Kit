@@ -31,7 +31,7 @@ def test_authoring_catalog_union_covers_only_the_pinned_da_ga_template_families(
     additions = catalogs["catalog.authoring-additions.json"]
     primary = catalogs[additions["baseCatalog"]["file"]]
     assert len(catalogs) >= 2
-    expected_counts = {"core": 3, "hr": 50, "it": 47}
+    expected_counts = {"core": 3, "hr": 52, "it": 49}
     expected_keys = {
         f"source-family:gptagent_copilotforemployeeselfservice{suffix}"
         for suffix in expected_counts
@@ -55,7 +55,14 @@ def test_authoring_catalog_union_covers_only_the_pinned_da_ga_template_families(
         assert len({name.casefold() for name in covered}) == len(set(covered))
         names = sorted(set(covered))
         source_coverage = package["combinedTopicInventory"]
-        assert source_coverage["coverage"] == "complete_at_source_revision"
+        assert source_coverage["coverage"] == "recorded_source_union"
+        assert package["sourceRevision"] in source_coverage["sourceRevisions"]
+        if suffix in ("hr", "it"):
+            assert "eb423aaea30944b7f8cbf205b424e779ef7f53cf" in source_coverage["sourceRevisions"]
+            assert {
+                f"{schema}.topic.System-RecordSearchResults",
+                f"{schema}.topic.System-DiagnoseReport",
+            } <= set(names)
         assert len(names) == source_coverage["topicCount"] == expected_counts[suffix]
         digest = hashlib.sha256(("\n".join(names) + "\n").encode()).hexdigest()
         assert digest == source_coverage["schemaNamesSha256"]
@@ -76,7 +83,7 @@ def test_manage_topics_companion_catalog_matches_pinned_git_content():
     base = additions["baseCatalog"]
     for filename, expected_blob in (
         (base["file"], base["gitBlob"]),
-        ("catalog.schema.json", "f20a61ef9fdf8c120f21706712153c509bf014a5"),
+        ("catalog.schema.json", "9fbb0c127ff34670324aca8a29dd600e02f8125b"),
     ):
         content = (reference / filename).read_bytes().replace(b"\r\n", b"\n")
         blob = hashlib.sha1(f"blob {len(content)}\0".encode() + content).hexdigest()
