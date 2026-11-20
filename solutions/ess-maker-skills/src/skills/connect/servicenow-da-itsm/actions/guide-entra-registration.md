@@ -125,6 +125,11 @@ attributes, an email format, or an Entra error, or that the maker is waiting
 for the claim, show the matching Message in `Clarification and recovery
 Messages` of `src/skills/connect/servicenow/entry.md`. Record nothing until
 the administrator's reply supplies the Client ID and a confirmed claim name.
+A custom claim name (anything other than `email` or `upn`) is recorded only
+with `--claim-setup-confirmed`, added when the Entra administrator confirms the
+claim setup is complete. Without it the command records nothing and returns the
+"We have the claim name" Message in `chatMessage`; send it verbatim, end the
+turn, and never ask a clarifying card about the name.
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} record-identity-direct --stage entra --client-id "<application-client-id-guid>" --claim-name "<selected-claim-name>" --yes

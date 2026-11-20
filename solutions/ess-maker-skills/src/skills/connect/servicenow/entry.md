@@ -528,7 +528,12 @@ custom claim "is configured" without naming it, record nothing about the claim,
 never guess a name from the phrase, and show the first Message. When the reply
 contains two possible claim names, show the second. When an exact name is given
 without confirmation that its setup is complete, show the third, substituting
-the stated name:
+the stated name. Get it from the controller: run `record-identity-direct
+--stage entra --claim-name "<name>" --yes` without `--claim-setup-confirmed`
+(it records nothing and returns this Message in `chatMessage`). Never ask a
+clarifying card about the name, and record a custom name only after the Entra
+administrator confirms the setup is complete (then add
+`--claim-setup-confirmed`):
 
 **Message:**
 

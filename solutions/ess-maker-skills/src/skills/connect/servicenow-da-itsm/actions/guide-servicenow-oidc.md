@@ -54,6 +54,16 @@ Message from `claim-confirmation-handoff --custom-claim` (see `Clarification and
 Messages` in `src/skills/connect/servicenow/entry.md`), verbatim; do not
 improvise steps, suggest email, or record anything.
 
+A maker message that only states a claim name (for example "it is X") is not a
+confirmation. Never ask a clarifying card and never record the name: run
+`record-identity-direct --stage entra` with the stated name and without the
+claim-setup confirmation option described in the Entra registration guide. It
+records nothing and returns the "We have the claim name" Message in
+`chatMessage`; send it verbatim and end the turn. Add that option only when the
+Entra administrator's reply confirms the claim setup is complete. The standard `email` and `upn` claims need no
+such confirmation. Only a recorded, confirmed claim makes the ServiceNow
+administrator message below necessary again.
+
 When the maker returns from a pause with an administrator reply outstanding,
 do not render the instructions again: follow the "Maker pauses for an
 administrator" messages in `servicenow/entry.md`, then record the reply below.

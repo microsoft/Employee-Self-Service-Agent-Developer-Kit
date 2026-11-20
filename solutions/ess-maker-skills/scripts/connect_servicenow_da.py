@@ -12943,6 +12943,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,
     )
     direct_mapping_parser.add_argument("--claim-name")
+    direct_mapping_parser.add_argument(
+        "--claim-setup-confirmed",
+        action="store_true",
+        help=(
+            "The Entra administrator confirmed the custom claim setup is "
+            "complete. Required to record a claim other than email or upn."
+        ),
+    )
     direct_mapping_parser.add_argument("--user-field")
     direct_mapping_parser.add_argument("--yes", action="store_true")
     saved_mapping_group = direct_mapping_parser.add_mutually_exclusive_group()
@@ -13777,6 +13785,37 @@ def claim_confirmation_handoff(
     }
 
 
+_STANDARD_USER_CLAIMS = frozenset({"email", "upn"})
+
+
+def claim_setup_confirmation_required(claim_name: str) -> dict[str, Any]:
+    """Reply for a custom claim name stated without its setup confirmation.
+
+    A name alone does not establish custom-claim readiness, so nothing is
+    recorded and the already-supplied values stay in place.
+    """
+    name = _safe_identity_name(claim_name, "user_claim")
+    return {
+        "status": "claim-confirmation-required",
+        "decision": "claim-confirmation-required",
+        "recordsNothing": True,
+        "renderBlock": {
+            "kind": "waiting",
+            "text": (
+                f"We have the claim name `{name}`. Ask your Entra "
+                "administrator to confirm that its setup is complete, "
+                "including the appropriate format and populated source "
+                "attribute for every intended employee, as requested in "
+                "their message.\n\n"
+                "Bring back their non-sensitive confirmation; you don't "
+                "need to resend the name or the Client ID. Don't include "
+                "employee identifiers or secrets."
+            ),
+        },
+        "afterReply": _CLAIM_CONFIRMATION_AFTER_REPLY,
+    }
+
+
 def _chat_message(result: dict[str, Any]) -> str:
     """Build the one chat message the agent relays for this output.
 
@@ -14099,6 +14138,15 @@ def main(argv: list[str] | None = None) -> int:
                 context,
                 choice=args.choice,
             )
+        elif (
+            args.command == "record-identity-direct"
+            and args.stage == "entra"
+            and args.claim_name
+            and args.claim_name.strip().casefold()
+            not in _STANDARD_USER_CLAIMS
+            and not args.claim_setup_confirmed
+        ):
+            result = claim_setup_confirmation_required(args.claim_name)
         elif args.command == "record-identity-direct":
             result = record_identity_direct(
                 context,

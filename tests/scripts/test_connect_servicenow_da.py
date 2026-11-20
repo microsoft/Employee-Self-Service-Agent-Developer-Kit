@@ -17439,3 +17439,71 @@ def test_claim_confirmation_handoff_is_fixed_and_only_custom_claims_get_part_fou
     assert "Part 4" in partial["chatMessage"]
     assert "Part 4" not in plain["chatMessage"]
     assert "tenant ID already supplied" in plain["chatMessage"]
+
+
+_HR = ["--provider", "servicenow-da-hrsd"]
+
+
+def test_custom_claim_name_alone_is_not_recorded_until_setup_is_confirmed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(snow, "ACTIVE_PROFILE", snow.ACTIVE_PROFILE)
+    _write_foundation_context(tmp_path, components=_components())
+    context = _context_at(tmp_path)
+    with snow.product_profile_context("hrsd"):
+        state = snow._state_base(context, _components())
+    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
+    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
+    snow.main([*_HR, "identity-direct-handoff", "--stage", "entra"])
+    capsys.readouterr()
+    _ack_identity_availability(context, stage="entra")
+    snow.main([*_HR, "identity-direct-handoff", "--stage", "entra"])
+    snow.main(
+        [
+            *_HR,
+            "identity-direct-handoff",
+            "--stage",
+            "entra",
+            "--client-id",
+            APP_CLIENT_ID,
+        ]
+    )
+    capsys.readouterr()
+
+    args = [
+        *_HR,
+        "record-identity-direct",
+        "--stage",
+        "entra",
+        "--client-id",
+        APP_CLIENT_ID,
+        "--claim-name",
+        "employeeid",
+        "--yes",
+    ]
+    assert snow.main(args) == 0
+    pending = json.loads(capsys.readouterr().out)
+    assert pending["recordsNothing"] is True
+    assert pending["decision"] == "claim-confirmation-required"
+    assert pending["endTurn"] is True
+    assert pending["chatMessage"].startswith(
+        "We have the claim name `employeeid`. Ask your Entra administrator "
+        "to confirm that its setup is complete"
+    )
+    for banned in ("email", "Part 4", "ServiceNow administrator"):
+        assert banned not in pending["chatMessage"]
+    persisted = json.loads(_lifecycle_path(tmp_path).read_text("utf-8"))
+    assert (
+        persisted["adminSetup"]["phaseHandoffs"]["entra-registration"].get(
+            "status"
+        )
+        != "completed"
+    )
+
+    assert snow.main([*args, "--claim-setup-confirmed"]) == 0
+    recorded = json.loads(capsys.readouterr().out)
+    assert recorded["candidates"] == ["employeeid"]
+    assert recorded["entraAdministratorConfirmed"] is True

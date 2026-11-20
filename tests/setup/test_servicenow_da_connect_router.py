@@ -1415,3 +1415,18 @@ def test_custom_claim_not_confirmed_is_routed_to_the_spec_message(profile: str) 
         assert '"Custom claim not confirmed" Message' in text, name
         assert "verbatim" in text, name
         assert "email" in text, name
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_custom_claim_name_alone_is_gated_in_docs(profile: str) -> None:
+    root = _SOLUTION / "src" / "skills" / "connect"
+    actions = root / f"servicenow-da-{profile}" / "actions"
+    for path in (
+        actions / "guide-entra-registration.md",
+        actions / "guide-servicenow-oidc.md",
+        root / "servicenow" / "entry.md",
+    ):
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        if path.name != "guide-servicenow-oidc.md":
+            assert "--claim-setup-confirmed" in text, path.name
+        assert "clarifying card" in text, path.name
