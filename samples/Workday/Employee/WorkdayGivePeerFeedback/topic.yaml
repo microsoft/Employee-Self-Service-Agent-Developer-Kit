@@ -46,18 +46,25 @@ beginDialog:
 
             - kind: BeginDialog
               id: Za15eH
-              displayName: Redirect to Workday Get Common Execution
+              displayName: Submit peer feedback through the SOAP adapter
               input:
                 binding:
-                  parameters: ="{""params"":[{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """}, {""key"":""{Employee_ID_Of_Receiver}"",""value"":"""& Topic.varEmployeeId & """}, {""key"":""{Comment}"",""value"":""" & Topic.FeedbackText & """}]}"
                   scenarioName: msdyn_WorkdayHCMRuntimeEmployeeGiveFeedback
+                  requestParametersJson: |-
+                    =JSON({
+                      Employee_ID: Global.ESS_UserContext_Employee_Id,
+                      Employee_ID_Of_Receiver: Topic.varEmployeeId,
+                      Comment: Topic.FeedbackText
+                    }, JSONFormat.Compact)
 
-              dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+              dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemWriteSOAPExecution
               output:
                 binding:
-                  errorResponse: Topic.errorResponse
+                  connectorStatus: Topic.connectorStatus
+                  errorMessage: Topic.errorResponse
+                  failureReason: Topic.failureReason
                   isSuccess: Topic.isSuccess
-                  workdayResponse: Topic.workdayResponse
+                  responseJson: Topic.workdayResponse
 
             - kind: ConditionGroup
               id: conditionGroup_r9LEup
