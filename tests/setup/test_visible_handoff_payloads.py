@@ -88,7 +88,7 @@ def test_lifecycle_plan_confirmation_is_exact_and_separate_from_reply() -> None:
                 "question": "Nothing starts until you answer Yes.",
                 "options": [
                     {"label": "Yes"},
-                    {"label": "Not now"},
+                    {"label": "No"},
                 ],
                 "allowFreeformInput": False,
             }
@@ -219,16 +219,9 @@ def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
             ),
         ),
         (
-            _ACTIONS / "prepare-topics.md",
-            (
-                "Should we enable the inactive ServiceNow topics?",
-                "inventory listed above",
-            ),
-        ),
-        (
             _ACTIONS / "test-connection.md",
             (
-                "What did the request return?",
+                "Did the request return the results you expected?",
                 "No need to share case contents",
             ),
         ),
@@ -278,7 +271,6 @@ def test_visible_handoff_payloads_are_supported_and_complete(
     (
         _ACTIONS / "verify-plugin-prerequisites.md",
         _ACTIONS / "prepare-credential.md",
-        _ACTIONS / "prepare-topics.md",
         _ACTIONS / "configure-portal-url.md",
         _ACTIONS / "test-connection.md",
         _CONNECT
@@ -527,16 +519,14 @@ def test_servicenow_test_question_has_explicit_result_choices(
             _CONNECT / provider / "actions" / "test-connection.md"
         )[0],
         required_phrases=(
-            "What did the request return?",
+            "Did the request return the results you expected?",
             f"No need to share {record} contents.",
         ),
     )
 
     assert [option["label"] for option in payload["options"]] == [
-        "Expected results",
-        "Empty result",
-        "Error",
-        "Finish without testing",
+        "Yes",
+        "No",
     ]
     assert not any(option.get("recommended") for option in payload["options"])
     assert payload["allowFreeformInput"] is False

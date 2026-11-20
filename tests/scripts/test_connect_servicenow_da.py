@@ -5011,7 +5011,6 @@ def test_shared_reuse_partial_hr_to_it_requires_one_maker_acceptance(
         assert handoff["question"]["options"] == [
             {"label": "Yes"},
             {"label": "No"},
-            {"label": "Not now"},
         ]
         assert handoff["question"]["header"] == (
             "Reuse the shared setup from your existing HR agent?"
@@ -5019,7 +5018,6 @@ def test_shared_reuse_partial_hr_to_it_requires_one_maker_acceptance(
         assert handoff["reuseDecisionChoices"] == [
             {"label": "Yes", "decision": "accept"},
             {"label": "No", "decision": "decline"},
-            {"label": "Not now", "decision": "not-now"},
         ]
         body = handoff["question"]["question"]
         for technical in ("Current target:", "Environment:", "Realm:", "Agent:"):
@@ -6121,7 +6119,6 @@ def test_saved_portal_value_persists_and_reloads_for_future_agent(
     assert offer["question"]["options"] == [
         {"label": "Yes"},
         {"label": "No"},
-        {"label": "Not now"},
     ]
     assert offer["question"]["header"] == (
         "Reuse the saved employee portal URL "
@@ -9970,9 +9967,10 @@ def test_record_test_attestation_accepts_maker_fail_without_category(
         (
             "hrsd",
             "list-my-open-hr-cases",
-            "**The setup steps are finished, but the integration hasn't "
-            "been tested.** Test it before employees use it.\n\n"
-            "Your progress is saved at the Test-pane request. When you "
+            "**The HR setup steps are finished, but this integration "
+            "hasn't been tested.** Test Employee Self-Service HR before "
+            "employees use it.\n\n"
+            "Your progress is saved at the HR Test-pane request. When you "
             "return, we'll continue there.",
         ),
         (
@@ -12483,9 +12481,8 @@ def test_topic_action_handoff_returns_complete_it_question(
         "allowFreeformInput",
     }
     assert result["question"]["options"] == [
-        {"label": "Enable all"},
-        {"label": "Keep current"},
-        {"label": "Not now"},
+        {"label": "Yes"},
+        {"label": "No"},
     ]
     assert "choices" not in result["question"]
     question = result["question"]["question"]
@@ -12589,9 +12586,8 @@ def test_topic_action_handoff_has_hr_parity(
         "Should we enable the inactive ServiceNow topics?"
     )
     assert result["question"]["options"] == [
-        {"label": "Enable all"},
-        {"label": "Keep current"},
-        {"label": "Not now"},
+        {"label": "Yes"},
+        {"label": "No"},
     ]
     assert "Purpose:" not in question
     assert "Owner:" not in question
@@ -13234,7 +13230,7 @@ def test_phase_progress_uses_provider_contract_labels_and_order(
     assert [item["customerLabel"] for item in progress["items"]] == (
         expected_customer_labels
     )
-    assert progress["headline"] == "Setup ServiceNow"
+    assert progress["headline"] == "Set up ServiceNow HR"
 
 
 def _real_contract(provider: str) -> dict[str, object]:
@@ -13492,7 +13488,7 @@ def test_phase_progress_final_text_requires_every_current_verified_marker() -> N
         "Employee Self-Service IT returned the tickets you expected in the "
         "Test pane."
     ) in final
-    assert final.startswith("**Setup ServiceNow IT**")
+    assert final.startswith("**Set up ServiceNow IT**")
     assert "Responsible role:" not in final
     assert "Connection progress:" not in final
     assert "- ✅ Test a ServiceNow request\n" in final
@@ -13954,8 +13950,8 @@ def test_initial_plan_shows_business_groups_without_preflight_gate(
     )
     assert initial["lifecycle"]["phase"]["id"] == "preflight"
     assert ordinary.startswith(
-        "**Setup ServiceNow**" if profile == "hrsd"
-        else "**Setup ServiceNow IT**"
+        "**Set up ServiceNow HR**" if profile == "hrsd"
+        else "**Set up ServiceNow IT**"
     )
     assert "Complete these tasks to finish setup." in ordinary
     for removed in (
@@ -14169,7 +14165,7 @@ def test_grouped_ordinary_reply_uses_canonical_status_glyphs_without_mutation(
             context=context,
             contract=contract,
             state=state,
-            title="Setup ServiceNow",
+            title="Set up ServiceNow HR",
             phase_items=phase_items,
             current_group=None,
             roles_available=None,
@@ -14199,7 +14195,7 @@ def test_grouped_ordinary_reply_uses_canonical_status_glyphs_without_mutation(
         (
             "hrsd",
             "servicenow-da-hrsd",
-            "Setup ServiceNow",
+            "Set up ServiceNow HR",
             [
                 "Confirm HR ServiceNow prerequisites",
                 "Confirm Microsoft Entra identity details",
@@ -14213,7 +14209,7 @@ def test_grouped_ordinary_reply_uses_canonical_status_glyphs_without_mutation(
         (
             "itsm",
             "servicenow-da-itsm",
-            "Setup ServiceNow IT",
+            "Set up ServiceNow IT",
             [
                 "Confirm Microsoft Entra identity details",
                 "Confirm ServiceNow single sign-on and user mapping",
@@ -17117,7 +17113,7 @@ def test_resume_render_block_final_is_grouped_final_text() -> None:
 
 
 def _assert_grouped_phase_view(text: str, contract: dict) -> None:
-    assert text.startswith("**Setup ServiceNow")
+    assert text.startswith("**Set up ServiceNow")
     assert "Complete these tasks to finish setup." in text
     for removed in (
         "Connection progress:",
@@ -17223,3 +17219,47 @@ def test_checkpoint_recording_emits_grouped_waiting_and_error_blocks(
     _assert_grouped_phase_view(block["text"], contract)
     assert "Review the current setup needs your review" in block["text"]
     assert list(failed)[0] == "renderBlock"
+
+
+def _profile_words(text: str, profile: str) -> str:
+    """Normalise the profile-specific words so HR and IT text can be compared."""
+    audience, record, records = (
+        ("HR", "case", "cases") if profile == "hrsd" else ("IT", "ticket", "tickets")
+    )
+    name = "Employee Self-Service " + audience
+    text = text.replace(name, "<agent>")
+    for word, token in ((records, "<records>"), (record, "<record>")):
+        text = text.replace(word, token)
+    return text.replace(audience, "<X>")
+
+
+def test_hr_and_it_maker_messages_share_the_same_wording(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(snow, "ACTIVE_PROFILE", snow.ACTIVE_PROFILE)
+    monkeypatch.setattr(snow, "ACTIVE_AGENT_NAME", None)
+    context = _context()
+    rendered: dict[str, dict[str, str]] = {}
+    for profile in ("hrsd", "itsm"):
+        with snow.product_profile_context(profile):
+            rendered[profile] = {
+                "title": snow._setup_title(),
+                "ready": snow._dev_test_ready_message(),
+                "empty": snow._dev_empty_result_message(),
+                "untested": snow._dev_untested_message(),
+                "topics": snow._current_task_guidance(
+                    context, {}, phase_id="topics", role="Maker"
+                ),
+                "portal": snow._current_task_guidance(
+                    context, {}, phase_id="portal-url", role="Maker"
+                ),
+                "credential": snow._current_task_guidance(
+                    context, {}, phase_id="credential", role="Maker"
+                ),
+            }
+    for key in rendered["hrsd"]:
+        assert _profile_words(rendered["hrsd"][key], "hrsd") == _profile_words(
+            rendered["itsm"][key], "itsm"
+        ), key
+    assert rendered["hrsd"]["title"] == "Set up ServiceNow HR"
+    assert rendered["itsm"]["title"] == "Set up ServiceNow IT"

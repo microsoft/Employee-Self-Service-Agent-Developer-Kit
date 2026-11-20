@@ -39,7 +39,6 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-sl
   - **No**: run
     `record-portal-reuse --source-key <internal-source-key> --decision decline`
     and continue to the manual question.
-  - **Not now**: record nothing and return `ACTION_RESULT = "waiting"`.
 
 Candidate discovery and decision recording do not complete the phase or copy
 the source topic ID, binding, phase result, or readback. The current agent must

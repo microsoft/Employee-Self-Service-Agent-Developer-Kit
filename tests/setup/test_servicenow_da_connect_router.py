@@ -834,12 +834,13 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "--details" not in test
     assert "save the current authored draft" in test
     assert "selected ServiceNow connection" in test
-    assert '"label": "Expected results"' in test
-    assert '"label": "Empty result"' in test
-    assert '"label": "Error"' in test
+    assert '"label": "Yes"' in test
+    assert '"label": "No"' in test
+    for removed in ("Expected results", "Empty result", "Finish without testing"):
+        assert f'"label": "{removed}"' not in test
     assert "empty result or an error" not in test
     assert "`--result empty`" in test
-    assert '"label": "Finish without testing"' in test
+    assert "`--result untested`" in test
     assert 'ACTION_RESULT = "waiting"' in test
     assert "Do not ask a second failure-classification question" in (
         " ".join(test.split())
@@ -858,8 +859,8 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "missing target topic" in topics
     assert "must not repeat the confirmed update" in topics
     assert "adapt-question" in topics
-    assert "while the\n  question is pending" in topics
-    assert "Absence of\n  an answer is not cancellation" in topics
+    assert "while pending, do not return an" in topics
+    assert "Absence of an answer is not cancellation" in topics
     assert "Maker-selected public ServiceNow instance" in preflight
     assert "does not ask the Maker to classify setup\nprogress" in preflight
     assert "which situation matches" not in preflight
@@ -990,7 +991,8 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     )
     assert "physical connections" in entra_normalized
     assert "It makes no API call" in entra_normalized
-    assert "**Reuse shared identity**" in entra
+    assert "**Yes** (reuse the shared identity)" in entra
+    assert "Not now" not in entra
     assert "If it returns `decision: no-action`, immediately return" in entra
     assert "Do not render instructions, call the question tool" in (
         entra_normalized
@@ -1167,12 +1169,13 @@ def test_da_servicenow_itsm_skill_uses_isolated_shared_lifecycle() -> None:
     assert "Global.ServiceNowITSMPortalBaseURI" in portal
     assert "Show my open IT tickets" in test
     assert "record `--result untested`" in test
-    assert '"label": "Expected results"' in test
-    assert '"label": "Empty result"' in test
-    assert '"label": "Error"' in test
+    assert '"label": "Yes"' in test
+    assert '"label": "No"' in test
+    for removed in ("Expected results", "Empty result", "Finish without testing"):
+        assert f'"label": "{removed}"' not in test
     assert "empty result or an error" not in test
     assert "`--result empty`" in test
-    assert '"label": "Finish without testing"' in test
+    assert "`--result untested`" in test
     assert "--failure-category" not in test
     assert "decides pass, fail, or untested" in " ".join(test.split())
     assert "Do not require a non-empty" not in test
@@ -1349,3 +1352,29 @@ def test_connect_completion_uses_human_verified_wording_without_realm_text() -> 
         flat = " ".join(text[name].split())
         assert "Maker-reported Test pane result" in flat
         assert "human-verified" in flat
+
+
+_SERVICENOW_DA_DOCS = (
+    "src/skills/connect/servicenow-da-hrsd",
+    "src/skills/connect/servicenow-da-itsm",
+)
+
+
+def test_servicenow_da_cards_offer_only_yes_no_choices() -> None:
+    root = _ROOT / "solutions" / "ess-maker-skills"
+    texts = []
+    for folder in _SERVICENOW_DA_DOCS:
+        texts.extend(
+            path.read_text(encoding="utf-8")
+            for path in (root / folder).rglob("*.md")
+        )
+    texts.append(
+        (root / "src/skills/connect/shared/lifecycle-runner.md").read_text(
+            encoding="utf-8"
+        )
+    )
+    for text in texts:
+        for banned in ('"label": "Not sure"', '"label": "Not now"'):
+            assert banned not in text
+        for banned in ("**Not now**", "**Not sure**"):
+            assert banned not in text

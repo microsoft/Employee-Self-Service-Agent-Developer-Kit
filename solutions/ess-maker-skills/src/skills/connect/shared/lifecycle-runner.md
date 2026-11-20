@@ -105,9 +105,9 @@ local zero-write pre-action for the current selected target provider and
 agent. For `source-selection-required`, ask one label-only candidate question
 and rerun `shared-reuse-handoff --source-key <internal-source-key>`. For
 `question-required`, pass its canonical question through the active question
-adapter. Translate **Reuse shared identity** to the existing target-scoped
-`record-shared-reuse ... --decision accept`, **Configure separately** to
-`--decision decline`, and **Not now** to no command plus waiting. Do not render
+adapter. Translate **Yes** to the existing target-scoped
+`record-shared-reuse ... --decision accept` and **No** to
+`--decision decline`. Do not render
 or ask Entra availability in the same turn. After accept, rerun
 `resume-handoff`; current reused Entra/OIDC handoffs skip their corresponding
 availability gates and proceed to owning checks. After decline, the next
@@ -338,7 +338,7 @@ confirmation question through the active ServiceNow question adapter:
     "question": "Nothing starts until you answer Yes.",
     "options": [
       { "label": "Yes" },
-      { "label": "Not now" }
+      { "label": "No" }
     ],
     "allowFreeformInput": false
   }
@@ -350,7 +350,7 @@ automatic answer. The plan, roles, and progress belong only in the ordinary
 reply. This is the only plan confirmation question; initialize or continue
 only after the user explicitly selects **Yes**.
 
-**If "Not now":** Stop here. On a first run, do not write the state file. On a
+**If "No":** Stop here. On a first run, do not write the state file. On a
 contract-revision re-attestation, preserve the existing state unchanged,
 byte-for-byte. The next invocation should show this same plan again.
 

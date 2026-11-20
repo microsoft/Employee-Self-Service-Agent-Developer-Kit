@@ -6476,7 +6476,6 @@ def portal_value_reuse_handoff(
     decision_choices = [
         {"label": "Yes", "decision": "accept"},
         {"label": "No", "decision": "decline"},
-        {"label": "Not now", "decision": "not-now"},
     ]
     return {
         "schemaVersion": "servicenow.portal-value-reuse.v1",
@@ -7029,10 +7028,6 @@ def shared_reuse_handoff(
         {
             "label": "No",
             "decision": "decline",
-        },
-        {
-            "label": "Not now",
-            "decision": "not-now",
         },
     ]
     source_label = {"hrsd": "HR", "itsm": "IT"}.get(
@@ -9853,11 +9848,7 @@ def topic_action_handoff(
         "question": _native_question(
             header="Should we enable the inactive ServiceNow topics?",
             question=question,
-            option_labels=[
-                "Enable all",
-                "Keep current",
-                "Not now",
-            ],
+            option_labels=["Yes", "No"],
         ),
     }
 
@@ -10575,19 +10566,13 @@ def _dev_empty_result_message() -> str:
 
 
 def _dev_untested_message() -> str:
-    if ACTIVE_PROFILE.key == "hrsd":
-        return (
-            "**The setup steps are finished, but the integration hasn't "
-            "been tested.** Test it before employees use it.\n\n"
-            "Your progress is saved at the Test-pane request. When you "
-            "return, we'll continue there."
-        )
+    audience = _product_audience()
     return (
-        "**The IT setup steps are finished, but this integration hasn't "
-        f"been tested.** Test {_spec_agent_name()} before employees use "
-        "it.\n\n"
-        "Your progress is saved at the IT Test-pane request. When you "
-        "return, we'll continue there."
+        f"**The {audience} setup steps are finished, but this integration "
+        f"hasn't been tested.** Test {_spec_agent_name()} before employees "
+        "use it.\n\n"
+        f"Your progress is saved at the {audience} Test-pane request. When "
+        "you return, we'll continue there."
     )
 
 
@@ -10704,9 +10689,9 @@ def _current_task_guidance(
 
 def _setup_title() -> str:
     return (
-        "Setup ServiceNow IT"
+        "Set up ServiceNow IT"
         if ACTIVE_PROFILE.key == "itsm"
-        else "Setup ServiceNow"
+        else "Set up ServiceNow HR"
     )
 
 
@@ -12219,7 +12204,7 @@ REALM_COMMANDS = frozenset(
         "select-realm",
     }
 )
-REALM_RECOVERY_CHOICES = ("Check again", "Choose another environment", "Not now")
+REALM_RECOVERY_CHOICES = ("Yes", "No")
 
 
 def _realm_dev_state(context: dict[str, Any]) -> dict[str, Any]:

@@ -138,9 +138,8 @@ If promotion completion is unknown, ask once with `ask_user`:
         "title": "Promotion",
         "description": "Has the agent already been promoted to the requested realm?",
         "oneOf": [
-          { "const": "yes", "title": "Yes, promotion is complete - check again" },
-          { "const": "no", "title": "No, I need to complete promotion first" },
-          { "const": "later", "title": "Not now" }
+          { "const": "yes", "title": "Yes" },
+          { "const": "no", "title": "No" }
         ]
       }
     }
@@ -150,8 +149,7 @@ If promotion completion is unknown, ask once with `ask_user`:
 
 An explicit statement that promotion completed, or a pasted agent link,
 already answers it. On **No**, give the Dev agent link and the deployment-owner
-handoff, then ask the maker to return after promotion. **Not now** preserves
-all progress.
+handoff, then ask the maker to return after promotion. All progress is preserved.
 
 ## Discover the promoted agent
 
@@ -190,9 +188,9 @@ or URLs it returns and ask the maker to choose one. Leave the choice unset,
 then rerun with `--environment "{ENVIRONMENT_NAME_OR_URL}"`.
 
 If discovery fails, keep the active realm and all completed administrator work.
-Show the observed failure and the returned remediation. Offer **Check again**,
-**Choose another environment**, and **Not now** with `ask_user`. Reuse a supplied
-environment selection on **Check again**. Do not send the maker back to Dev.
+Show the observed failure and the returned remediation. Ask one Yes/No question with `ask_user`: "Should we check again?" Reuse a supplied
+environment selection on **Yes**. On **No**, ask in chat which environment to use, or
+stop and preserve all progress. Do not send the maker back to Dev.
 
 ## Realm stages
 

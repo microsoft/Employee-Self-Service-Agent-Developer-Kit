@@ -104,7 +104,7 @@ def test_pending_card_title_is_the_question_and_has_no_body() -> None:
 
 @pytest.mark.parametrize(
     "labels",
-    [["Yes", "No"], ["Enable all", "Keep current", "Not now"]],
+    [["Yes", "No"]],
 )
 def test_option_labels_stay_short(labels: list[str]) -> None:
     arguments = snow.adapt_question_to_ask_user(

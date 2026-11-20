@@ -127,7 +127,7 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
     assert "The `question` field itself must contain the complete" not in plan
     assert "rendered question" not in plan
 
-    refusal = plan.split('**If "Not now":**', 1)[1].split(
+    refusal = plan.split('**If "No":**', 1)[1].split(
         '**If "Yes" on a first run', 1
     )[0]
     assert "Stop here. On a first run, do not write the state file" in refusal
