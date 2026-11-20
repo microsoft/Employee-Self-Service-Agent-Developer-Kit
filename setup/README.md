@@ -61,7 +61,7 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 Maker mode is the same install as Developer mode plus the **ESS Maker Profile** extension applying:
 - A guided layout: a focused activity-bar rail with the walkthrough and chat, developer surfaces tucked away
-- A **Customization** rail listing common tasks (Customize landing page, Create a topic, Update a topic, Scan for issues, Run a flightcheck, Generate tests, Push to Copilot Studio)
+- A **Customization** rail listing common tasks (Post an announcement, Create a topic, Update a topic, Scan for issues, Run a flightcheck, Generate tests, Push to Copilot Studio, Customize landing page)
 - A built-in **Getting started** walkthrough explaining each step
 
 Run `/setup` yourself in Copilot Chat when you're ready — it isn't triggered automatically. You can restore the default VS Code layout at any time with **ESS Maker: Restore Developer Layout** from the Command Palette.

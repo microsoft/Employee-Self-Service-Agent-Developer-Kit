@@ -571,16 +571,19 @@ command lists, with the recommended command first:
   - Run `/connect` **(Recommended)** to add or change an external HR or IT system. Setup did not find authoritative evidence that an applicable external system is configured.
     {SUPPORTED_INTEGRATION_SHORTCUTS}
   - Run `/landing-page` to configure the branding and content employees see.
+  - Run `/org-announcements` to create or manage announcements for this agent.
   - Type `/menu` to see all available capabilities.
 - For the evidence-based landing-page recommendation:
   - Run `/landing-page` **(Recommended)** to configure the branding and content employees see. An applicable external HR or IT system is already configured, so this is the next useful customization step.
   - Run `/connect` to add or change an external HR or IT system.
     {SUPPORTED_INTEGRATION_SHORTCUTS}
+  - Run `/org-announcements` to create or manage announcements for this agent.
   - Type `/menu` to see all available capabilities.
 - For an explicitly requested `/connect` action:
   - Run `/connect` **(Recommended)** to add or change an external HR or IT system. This matches what you asked to do next.
     {SUPPORTED_INTEGRATION_SHORTCUTS}
   - Run `/landing-page` to configure the branding and content employees see.
+  - Run `/org-announcements` to create or manage announcements for this agent.
   - Type `/menu` to see all available capabilities.
 
 Every exit from setup when the active canonical agent has `connect_ready` equal
@@ -589,7 +592,7 @@ durable completion snapshot. These reminders are text, not another choice
 control.
 
 Do not render the case labels above. Replace
-`{POST_SETUP_COMMAND_REMINDERS}` with only the three bullets for the applicable
+`{POST_SETUP_COMMAND_REMINDERS}` with only the four bullets for the applicable
 case, and replace or omit `{SUPPORTED_INTEGRATION_SHORTCUTS}` under the
 `/connect` bullet using the authoritative product rule above.
 
