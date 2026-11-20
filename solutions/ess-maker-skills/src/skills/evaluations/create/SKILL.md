@@ -80,6 +80,20 @@ actions. Explicit evaluation push remains available through
 
 ## Step 2: Detect Existing Sets and Ask User About Scope
 
+### Planner handoff: reuse the supplied scope
+
+When invoked from a selected Planner build/evaluation task, the handoff includes
+the target agent, selected scenario/topic scope, draft evaluation cases, and
+known knowledge sources. Read these and the actual topics; do not repeat the
+HR/IT, system, or scope interview. Run Step 2a to detect existing tests, then
+generate only missing coverage for the supplied scope. Ask only for genuinely
+missing facts or approval to overwrite existing tests. Unknown integrations or
+missing topics block only their cases, not unrelated generation.
+
+Do not ask the maker to invoke `/evaluate` separately. Preserve all checkpoint,
+quality validation, review, dry-run, explicit push approval, and verification
+steps below. Generation/static validation is not runtime execution.
+
 ### 2a. Scan for existing evaluation sets
 
 Before asking what to generate, discover workspace and current-agent sets:

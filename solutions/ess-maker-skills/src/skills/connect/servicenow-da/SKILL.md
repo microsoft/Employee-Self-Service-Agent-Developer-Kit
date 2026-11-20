@@ -39,12 +39,28 @@ python scripts/connect_servicenow_da.py agent-chooser \
 ```
 
 Do not ask for an environment ID, agent ID, account, or multiple values in the
-same field. A malformed, non-Copilot, different-environment, or different-ring
-link returns an actionable no-write error. A link matching a prepared agent
+same field. A malformed, non-Copilot, or different-ring link returns an
+actionable no-write error. A link to a different environment hands off to
+Setup's existing conflicting-environment choice (see the entry doc). A link
+matching a prepared agent
 returns `ready` without duplicate setup. `setup-required` means the exact
-existing agent is new to this workspace: show the returned typed `/setup`
-handoff and stop. Do not run setup, create an agent, switch environment/account,
-or mutate local state from this chooser.
+existing agent is new to this workspace: follow the automatic Setup handoff in
+`src/skills/connect/servicenow/entry.md` (**Choose the agent**) for that exact
+link, then rerun this command with the same link. `setup-incomplete` means the
+agent is in the workspace but its Setup steps are still pending; it is not an
+"agent no longer available" error. Follow the same entry doc: Setup's remaining
+steps run (at most one resume per invocation), then rerun this command. The
+chooser itself never
+runs setup, creates an agent, switches environment/account, or mutates local
+state.
+
+When `agent-chooser` returns `setup-required` with branch
+`workspace-not-prepared`, the workspace has no prepared setup state yet. Follow
+the same automatic handoff; a supplied link is carried into Setup, otherwise
+Setup asks its normal questions. If Setup is cancelled or blocked, use the
+cancel/blocked Messages in the entry doc (blocker: say what to fix, ask the
+maker to fix it, then to tell me to finish setup and connect again; cancel:
+nothing to fix); never tell the maker to type `/setup`.
 
 After selection, keep only invocation-local values:
 
@@ -63,6 +79,11 @@ Dispatch by the canonical profile returned for `status: ready`:
 
 - `hrsd` -> read `src/skills/connect/servicenow-da-hrsd/SKILL.md`
 - `itsm` -> read `src/skills/connect/servicenow-da-itsm/SKILL.md`
+
+`unsupported-agent` means the pasted link points to an agent already in this
+workspace that is neither an HR nor an IT ESS agent. Show the Unsupported agent
+Message in the entry doc and offer **Choose a different agent**; do not hand
+off to Setup.
 
 The selected provider then invokes the shared lifecycle with
 `AGENT_SLUG = SELECTED_AGENT_SLUG`. Local state may label a choice

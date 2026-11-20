@@ -245,7 +245,7 @@ def _client(monkeypatch, handler):
         ([503, 200], True, 2, 1, False, None),
         ([429, 200], False, 2, 1, False, None),
         ([503], False, 1, 0, False, 503),
-        ([503, 503, 503], True, 3, 2, True, None),
+        ([503, 503, 503], True, 3, 2, True, 503),
         ([400], True, 1, 0, False, 400),
     ],
 )

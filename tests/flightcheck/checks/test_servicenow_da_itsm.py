@@ -167,7 +167,6 @@ def test_all_itsm_blocking_phase_outputs_include_actionable_recovery() -> None:
         "TOPICS",
         "PORTAL",
         "CREDENTIAL",
-        "AGENT-CONNECTION",
         "TEST",
     }
     assert {
@@ -349,9 +348,11 @@ def _write_it_state(root: Path, components: dict) -> dict:
             binding_identity
         )
         state["evidence"]["agentConnection"] = {
-            "kind": "maker-attestation",
+            "kind": "binding-proof",
             "status": "completed",
-            "makerAttested": True,
+            "mode": "adk-verified",
+            "verificationSource": "saved-draft-connection-reference",
+            "bindingVerified": True,
             "physicalStatus": "Connected",
             "authMode": snow.AUTH_MODE,
             "connectionId": CONNECTION_ID,
