@@ -26,6 +26,7 @@ from urllib3.util.retry import Retry
 CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
 DEFAULT_API_VERSION = "2024-10-01"
 NATIVE_ALM_API_VERSION = "2022-03-01-preview"
+M365_PUBLISH_STATUS_API_VERSION = "2024-10-01"
 COPILOT_STUDIO_CLIENT_NAME = "CopilotStudio"
 AGENT_LIST_CREATION_SOURCES = ("CopilotStudio", "AgentBuilder")
 DEFAULT_TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
@@ -1438,6 +1439,35 @@ class AgentBuilderClient:
             raise AgentBuilderError("Component fetch returned an invalid shape.")
         return body
 
+    def get_m365_publish_status(self, agent_id: str) -> dict[str, Any]:
+        """Read M365 channel status; its titleId identifies the LOB registration.
+
+        This is the Studio fetchM365PublishStatus route, verified by read-only
+        probes, not a public API contract. Never POST this publication route.
+        """
+        agent_id = str(uuid.UUID(agent_id))
+        response = self.session.request(
+            "GET",
+            f"{self.host}/copilotstudio/agents/{agent_id}/channels/m365/publish",
+            params={"api-version": M365_PUBLISH_STATUS_API_VERSION},
+            headers={**self.headers, "X-CCI-CdsBotId": agent_id},
+            timeout=120,
+            allow_redirects=False,
+        )
+        if not 200 <= response.status_code < 300:
+            _response_error(response, "M365 publish status")
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise AgentBuilderError(
+                "M365 publish status returned a non-JSON response."
+            ) from exc
+        if not isinstance(body, dict):
+            raise AgentBuilderError(
+                "M365 publish status returned an invalid shape."
+            )
+        return body
+
     def update_components(
         self,
         agent_id: str,
@@ -1465,7 +1495,7 @@ class AgentBuilderClient:
     ) -> None:
         """One isolated submission, without redirects or any transport replay.
 
-        This is a transport primitive, not topic-action release admission. It
+        This is a transport primitive, not Manage topics release admission. It
         deliberately leaves existing Workday and shared-client defaults intact.
         """
         agent_id = str(uuid.UUID(agent_id))

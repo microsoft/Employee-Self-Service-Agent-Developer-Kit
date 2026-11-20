@@ -168,6 +168,27 @@ def user(
     }
 
 
+def profile_user(*, user_id: str = MOCK_USER_ID) -> dict[str, Any]:
+    """Selected standard properties for check_entra_profile.py.
+
+    Source (validatable), verified against the public CSDL:
+      https://graph.microsoft.com/v1.0/$metadata
+      EntityType user: country, department, employeeId, employeeType, jobTitle,
+      officeLocation, preferredLanguage, usageLocation, userType: Edm.String.
+      <Property Name="employeeHireDate" Type="Edm.DateTimeOffset" />
+      Inherited entity: <Property Name="id" Type="Edm.String" Nullable="false" />
+    Operation/example responses:
+      https://learn.microsoft.com/en-us/graph/api/user-get?view=graph-rest-1.0#examples
+      https://learn.microsoft.com/en-us/graph/api/user-list?view=graph-rest-1.0#examples
+    """
+    return {
+        "id": user_id, "userType": "Member",
+        "usageLocation": "US", "preferredLanguage": "en-US", "country": "United States",
+        "officeLocation": "Mock office", "jobTitle": "Mock title", "department": "Mock department",
+        "employeeType": "Employee", "employeeId": "MOCK-001", "employeeHireDate": "2020-01-01T00:00:00Z",
+    }
+
+
 def directory_role(
     *,
     role_id: str = "00000000-0000-0000-0000-000000003001",

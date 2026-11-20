@@ -61,7 +61,7 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 Maker mode is the same install as Developer mode plus the **ESS Maker Profile** extension applying:
 - A guided layout: a focused activity-bar rail with the walkthrough and chat, developer surfaces tucked away
-- A **Customization** rail listing common tasks (Customize landing page, Create a topic, Update a topic, Scan for issues, Run a flightcheck, Generate tests, Push to Copilot Studio)
+- A **Customization** rail listing common tasks (Post an announcement, Create a topic, Update a topic, Scan for issues, Run a flightcheck, Generate tests, Push to Copilot Studio, Customize landing page)
 - A built-in **Getting started** walkthrough explaining each step
 
 Run `/setup` yourself in Copilot Chat when you're ready — it isn't triggered automatically. You can restore the default VS Code layout at any time with **ESS Maker: Restore Developer Layout** from the Command Palette.
@@ -238,7 +238,7 @@ The installer provisions the following dependencies. Users do not need to instal
 | GitHub CLI (`gh`) | Latest | Device-code auth flow for private repo clone | ❌ |
 | VS Code | Latest | Editor and Copilot host | ❌ |
 | PowerShell 7 | Latest | Script execution (Windows only) | ❌ |
-| .NET runtime | 10 | Runtime for Microsoft Object Model serialization | ❌ |
+| .NET runtime / SDK | 10 | Object Model serialization; macOS installs a user-local SDK to verify NuGet signatures | ❌ |
 | NuGet | Latest available | Retrieves Microsoft Object Model packages using configured package sources | ❌ |
 
 ### Python packages (installed via pip from `scripts/requirements.txt`)
@@ -273,7 +273,7 @@ The devcontainer provides an equivalent pre-built environment:
 
 ### Microsoft Object Model packages
 
-The full installer retrieves the exact Microsoft Object Model package versions required by the kit. NuGet uses the standard machine, user, and repository configuration hierarchy, including enterprise feeds, credentials, proxies, and package-source mappings.
+The full installer retrieves the exact Microsoft Object Model package versions required by the kit. NuGet uses the standard machine, user, and repository configuration hierarchy, including enterprise feeds, credentials, proxies, and package-source mappings. On macOS, package signatures are checked by the .NET SDK with `dotnet nuget verify --all`; Mono NuGet remains responsible only for package acquisition. When an existing .NET 10 SDK is unavailable, the installer uses Microsoft's `dotnet-install.sh` to install it under `~/.dotnet` without administrator privileges or a system package. If signature verification cannot run or reports a failure, setup prints a warning and continues with the downloaded package.
 
 If the runtime, NuGet, or Object Model packages cannot be installed, setup warns and continues. Object Model serialization remains unavailable until the reported dependency is installed and the package installer below is rerun.
 

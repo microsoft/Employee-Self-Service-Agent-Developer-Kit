@@ -13,6 +13,8 @@ Reuses the same MSAL token cache as auth.py so users don't sign in twice.
 import os
 import sys
 
+from .graph_transport import BoundedGraphTransport, CollectionRead, GraphPermissionError, collection_page
+
 try:
     import msal
 except ImportError:
@@ -39,6 +41,7 @@ except ImportError:
 GRAPH_CLIENT_ID = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+GRAPH_BASE_BETA = "https://graph.microsoft.com/beta"
 
 # Scopes needed for FlightCheck Graph queries (all read-only).
 GRAPH_SCOPES = [
@@ -94,6 +97,19 @@ _RETRY = Retry(
 )
 _SESSION = requests.Session()
 _SESSION.mount("https://", HTTPAdapter(max_retries=_RETRY))
+
+class GraphConsentError(RuntimeError):
+    """Required Graph authentication failed because consent is unavailable."""
+
+
+def _consent_unavailable(result: dict | None) -> bool:
+    if not result or "access_token" in result:
+        return False
+    return (
+        result.get("error") == "consent_required"
+        or result.get("suberror") == "consent_required"
+        or bool({65001, 65004, 90094}.intersection(result.get("error_codes") or []))
+    )
 
 
 def _persist_token_cache(cache: "msal.SerializableTokenCache", cache_path: str) -> None:
@@ -296,6 +312,14 @@ def _try_me_company_name_lookup(app, account) -> str:
         return ""
 
 
+def authenticate_self_profile(tenant_id: str, preferred_username: str | None) -> "GraphClient":
+    """Create a separate, identity-bound client without downgrading shared clients."""
+    client = GraphClient(tenant_id, scopes=_USER_READ_SCOPE, strict_reads=True)
+    client.authenticate(preferred_username=preferred_username)
+    client.verify_identity(preferred_username)
+    return client
+
+
 class GraphClient:
     """Lightweight Microsoft Graph client with MSAL interactive auth."""
 
@@ -319,8 +343,13 @@ class GraphClient:
     def authenticate(
         self,
         preferred_username: str | None = None,
+        *,
+        require_existing_consent: bool = False,
     ) -> str:
         """Acquire a Graph access token, reusing the shared MSAL cache."""
+        requested_scopes = self._scopes
+        if not requested_scopes:
+            raise ValueError("At least one Graph scope is required.")
         authority = f"https://login.microsoftonline.com/{self.tenant_id}"
         cache = msal.SerializableTokenCache()
         cache_path = os.path.join(".local", ".token_cache.bin")
@@ -346,22 +375,35 @@ class GraphClient:
         )
         result = None
         if selected_account is not None:
-            result = app.acquire_token_silent(
-                self._scopes,
+            acquire_silently = (
+                app.acquire_token_silent_with_error
+                if require_existing_consent else app.acquire_token_silent
+            )
+            result = acquire_silently(
+                requested_scopes,
                 account=selected_account,
             )
+        if require_existing_consent and _consent_unavailable(result):
+            raise GraphPermissionError("Existing Graph consent is unavailable for the requested read scope.")
 
         if not result or "access_token" not in result:
             print("Opening browser for Microsoft Graph sign-in...")
             selected_account = None
             interactive_options = {"prompt": "select_account"}
+            if require_existing_consent:
+                # Reuse browser SSO without asking the operator to grant scopes.
+                interactive_options = {"prompt": "none", "timeout": 30}
             if preferred_username:
                 interactive_options["login_hint"] = preferred_username
             result = app.acquire_token_interactive(
-                self._scopes,
+                requested_scopes,
                 **interactive_options,
             )
 
+        if _consent_unavailable(result):
+            if require_existing_consent or requested_scopes == ["https://graph.microsoft.com/User.Read"]:
+                raise GraphPermissionError("Existing Graph consent is unavailable for the requested read scope.")
+            raise GraphConsentError("Graph authentication failed (consent_required).")
         if "access_token" not in result:
             # Don't echo error_description - it can include tenant IDs and
             # internal flow details (CWE-209). Mirrors the auth.py pattern.
@@ -381,6 +423,21 @@ class GraphClient:
             or (selected_account or {}).get("username")
         )
         return self._token
+
+    def verify_identity(self, preferred_username: str | None = None) -> str:
+        """Bind profile reads to the authenticated account and issuing tenant."""
+        from agentbuilder import AgentBuilderError, tenant_id_from_access_token
+
+        account = self.signed_in_username
+        if not account or (preferred_username and account.casefold() != preferred_username.casefold()):
+            raise ValueError("Graph authentication selected a different or unverifiable account.")
+        try:
+            tenant = tenant_id_from_access_token(self._token or "")
+        except AgentBuilderError as exc:
+            raise ValueError("Graph authentication returned an unreadable tenant identity.") from exc
+        if self.tenant_id != "organizations" and tenant.casefold() != self.tenant_id.casefold():
+            raise ValueError("Graph authentication selected a different tenant.")
+        return tenant
 
     @property
     def headers(self) -> dict:
@@ -447,25 +504,33 @@ class GraphClient:
                 return items  # partial results
             resp.raise_for_status()
             data = resp.json()
-            if self.strict_reads and (
-                not isinstance(data, dict) or not isinstance(data.get("value"), list)
-                or any(not isinstance(row, dict) for row in data["value"])
-            ):
-                raise ValueError("Graph returned an invalid resource collection.")
-            items.extend(data.get("value", []))
-            url = data.get("@odata.nextLink")
-            if self.strict_reads and url is not None:
-                from urllib.parse import urlsplit
-
-                expected, actual = urlsplit(f"{GRAPH_BASE}{path}"), urlsplit(str(url))
-                if (
-                    not isinstance(url, str) or not url
-                    or actual.scheme != expected.scheme or actual.netloc != expected.netloc
-                    or actual.path != expected.path or actual.fragment
-                ):
-                    raise ValueError("Graph returned an invalid collection continuation.")
+            if self.strict_reads:
+                page, url = collection_page(data, f"{GRAPH_BASE}{path}")
+            else:
+                page, url = data.get("value", []), data.get("@odata.nextLink")
+            items.extend(page)
             params = None  # nextLink is fully qualified
         return items
+
+    def get_bounded_collection(
+        self, path: str, *, params: dict, limit: int, time_budget: float,
+    ) -> CollectionRead:
+        """Read sequential pages with a cancellable budget, including retry sleeps."""
+        return BoundedGraphTransport(GRAPH_BASE, self.headers, _RETRY).get_collection(
+            path, params=params, limit=limit, time_budget=time_budget,
+        )
+
+    def get_bounded_profile(self, *, params: dict, time_budget: float) -> dict:
+        """Read the signed-in profile using the collection retry/deadline policy."""
+        return BoundedGraphTransport(GRAPH_BASE_BETA, self.headers, _RETRY).get_profile(
+            params=params, time_budget=time_budget, path="/me/profile",
+        )
+
+    def get_bounded_profiles(self, user_ids: list[str], *, time_budget: float) -> list[dict]:
+        """Read public rich profiles in batches, never using internal People APIs."""
+        return BoundedGraphTransport(GRAPH_BASE_BETA, self.headers, _RETRY).get_profiles(
+            user_ids, time_budget=time_budget,
+        )
 
     # ----- Convenience methods for common FlightCheck queries -----
 

@@ -13,8 +13,10 @@ Parse the structured result. This read-only command is authoritative:
 
 - `verified-noop` with `actionResult: applied` — set
   `ACTION_RESULT = "applied"` without asking or mutating.
-- `question-required` — return the exact `question` object to the shared
-  lifecycle runner; do not rebuild or shorten its inventory/names.
+- `question-required` — show the returned `replyBeforeQuestion` verbatim as
+  an ordinary agent reply (with the current-task link below) before the card,
+  then return the exact `question` object to the shared lifecycle runner; do
+  not rebuild or shorten either field or move the topic list into the card;
 - any failure, unknown decision, malformed question or identity mismatch —
   fail closed before checkpoint or mutation.
 
@@ -22,10 +24,21 @@ Use the shared lifecycle runner's `adapt-question` path for the returned
 canonical question. Only ServiceNow ITSM topics in this inventory are in
 scope; unrelated topics remain unchanged.
 
+The command-generated `replyBeforeQuestion` is an ordinary reply, not part of
+the card:
+
+```text
+Current topic inventory: {TOPIC_INVENTORY}
+
+Inactive {PRODUCT_NAME} topics:
+{INACTIVE_TOPIC_NAMES}
+```
+
 The command-generated question conforms to the same supported
-`visible-handoff-question:v1` shape with the exact selected agent,
-environment, component hash, current inventory, inactive ITSM names, and
-exactly these returned labels:
+`visible-handoff-question:v1` shape with exactly this question text:
+"Do you want to enable all listed inactive ServiceNow topics, or keep their
+current states? Only topics in the inventory listed above are in scope;
+unrelated topics remain unchanged." and exactly these returned labels:
 **Enable all listed inactive ServiceNow topics**,
 **Keep the current topic states for this configuration**, and
 **Not now, leave the phase incomplete**.

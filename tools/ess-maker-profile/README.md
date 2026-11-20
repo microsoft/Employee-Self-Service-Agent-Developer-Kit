@@ -16,6 +16,7 @@ In Maker mode, the extension opens the **Agent Developer Kit** rail on the left,
 
 | Customization action | Copilot Chat command |
 |---|---|
+| Post an announcement | Create an organization announcement |
 | Create a topic (Coming Soon) | Topic creation availability message |
 | Update a topic (Coming Soon) | Topic update availability message |
 | Scan for issues | `/scan` |
