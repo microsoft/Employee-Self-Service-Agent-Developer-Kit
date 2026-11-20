@@ -157,4 +157,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        from adk_telemetry import script_error_boundary
+    except Exception:
+        from contextlib import nullcontext as script_error_boundary
+
+    with script_error_boundary("flightcheck_setup"):
+        sys.exit(main())

@@ -29,33 +29,46 @@ from __future__ import annotations
 
 import json
 import ast
+import builtins
 import re
 import subprocess
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+import requests
 
 import adk_telemetry as adk
 from flightcheck import telemetry as _fc
+
+
+def _script_entry_point(script_id):
+    path = Path(adk.__file__).parent.joinpath(*script_id.split(".")).with_suffix(".py")
+    tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+    guard = tree.body[-1]
+    assert isinstance(guard, ast.If)
+    body = [guard]
+    if script_id == "flightcheck.cli":
+        body.insert(0, next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main"))
+    return path, compile(ast.Module(body=body, type_ignores=[]), str(path), "exec")
 
 
 @pytest.mark.parametrize("script_id", adk.SCRIPT_ERROR_ENTRY_POINTS)
 def test_script_entry_point_observes_crash_without_changing_exception(script_id, monkeypatch, captured_post):
     """Execute the actual CLI guard with a failing main, without tenant operations."""
     monkeypatch.setattr(adk, "_SYNC", False)
-    path = Path(adk.__file__).parent.joinpath(*script_id.split(".")).with_suffix(".py")
-    tree = ast.parse(path.read_text(encoding="utf-8-sig"))
-    guard = tree.body[-1]
-    assert isinstance(guard, ast.If)
+    path, entry_point = _script_entry_point(script_id)
     error = RuntimeError("customer content and secret must stay local")
     namespace = {"__name__": "__main__", "sys": sys}
     exec(compile("def main():\n    raise failure\n", str(path), "exec"),
          {"failure": error}, namespace)
     namespace["cli"] = namespace["main"]
+    namespace["_run_cli"] = lambda args: namespace["cli"]()
+    namespace["_parse_args"] = lambda: SimpleNamespace(no_telemetry=False)
     with pytest.raises(RuntimeError) as raised:
-        exec(compile(ast.Module(body=[guard], type_ignores=[]), str(path), "exec"), namespace)
+        exec(entry_point, namespace)
     assert raised.value is error
     events = [event for event in _captured_events(captured_post) if event["name"] == adk.EVENT_SCRIPT_ERROR]
     assert len(events) == 1
@@ -65,6 +78,139 @@ def test_script_entry_point_observes_crash_without_changing_exception(script_id,
     assert data["failure_line"] == 2
     assert data["agent_type"] == "declarative_agent"
     assert "customer content" not in json.dumps(events)
+
+
+@pytest.mark.parametrize("script_id", adk.SCRIPT_ERROR_ENTRY_POINTS)
+@pytest.mark.parametrize("import_error", [ImportError, RuntimeError, SyntaxError])
+def test_script_entry_point_still_runs_when_telemetry_import_breaks(
+    script_id, import_error, monkeypatch, captured_post,
+):
+    _, entry_point = _script_entry_point(script_id)
+    original_import = builtins.__import__
+
+    def broken_import(name, *args, **kwargs):
+        if name == "adk_telemetry":
+            raise import_error("broken telemetry import")
+        return original_import(name, *args, **kwargs)
+
+    error = ValueError("original CLI failure")
+
+    def crash(*args):
+        raise error
+
+    namespace = {
+        "__name__": "__main__", "sys": sys, "main": crash, "cli": crash,
+        "_run_cli": crash, "_parse_args": lambda: SimpleNamespace(no_telemetry=False),
+    }
+    monkeypatch.setattr(builtins, "__import__", broken_import)
+    with pytest.raises(ValueError) as raised:
+        exec(entry_point, namespace)
+    assert raised.value is error
+    assert not captured_post
+
+
+def test_every_cli_has_a_script_error_coverage_decision():
+    # Existing CLIs outside the instrumented DA entry points remain explicit.
+    excluded = {
+        "adk_telemetry", "alm.get_dataverse_token", "backup_template_configs",
+        "check_dataverse_mcp", "check_environment_roles", "check_isv_coverage",
+        "connect_lifecycle", "da_product_registry", "discover", "emit_capability",
+        "evaluation_review", "extract", "fetch_and_setup",
+        "flightcheck.environment_picker", "flightcheck.telemetry",
+        "install_agentbuilder_object_model", "install_ootb_topics",
+        "list_environments", "merge_findings", "reply_signal", "reset_local_workspace",
+        "restore_template_configs", "setup", "sync_docs", "sync_isv_docs",
+        "sync_runtime_heuristics", "sync_samples", "topic_checker_capture", "validate",
+    }
+    root = Path(adk.__file__).parent
+    entry_points = set()
+    for path in root.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        if any(
+            isinstance(node, ast.If)
+            and isinstance(node.test, ast.Compare)
+            and isinstance(node.test.left, ast.Name)
+            and node.test.left.id == "__name__"
+            and any(isinstance(value, ast.Constant) and value.value == "__main__"
+                    for value in node.test.comparators)
+            for node in tree.body
+        ):
+            entry_points.add(".".join(path.relative_to(root).with_suffix("").parts))
+    registered = set(adk.SCRIPT_ERROR_ENTRY_POINTS)
+    assert not registered & excluded
+    assert entry_points == registered | excluded
+
+
+@pytest.mark.parametrize("flag", ["--no-telemetry", "--no-telem"])
+@pytest.mark.parametrize("crash", [False, True])
+def test_flightcheck_opt_out_suppresses_auth_session_and_crash_events(
+    flag, crash, monkeypatch, captured_post,
+):
+    from flightcheck import cli
+
+    monkeypatch.setattr(sys, "argv", ["flightcheck", flag])
+    monkeypatch.setenv("ESS_ADK_TELEMETRY", "on")
+    monkeypatch.setattr(adk, "_SYNC", False)
+    error = RuntimeError("private FlightCheck failure")
+
+    def run(args):
+        assert args.no_telemetry
+        adk.start_session(tenant_id="test-tenant")
+        adk.emit_api_call(api_endpoint="GET bots", block=False)
+        adk._emit_many(adk.EVENT_CLIENT, [{"session_id": "test"}])
+        if crash:
+            raise error
+        return 0
+
+    monkeypatch.setattr(cli, "_run_cli", run)
+    if crash:
+        with pytest.raises(RuntimeError) as raised:
+            cli.main()
+        assert raised.value is error
+    else:
+        assert cli.main() == 0
+    adk.flush()
+    assert not captured_post
+    assert not Path(adk.BUFFER_PATH).exists()
+    assert adk.telemetry_enabled()
+    adk.start_session()
+    adk.flush()
+    assert _captured_events(captured_post)[0]["name"] == adk.EVENT_SESSION_START
+
+
+def test_nested_boundaries_cannot_override_invocation_opt_out(captured_post):
+    with adk.script_error_boundary("flightcheck.cli", enabled=False):
+        with adk.script_error_boundary("setup_existing_da"):
+            assert not adk.telemetry_enabled()
+            adk.start_session()
+    assert not captured_post
+    assert not Path(adk.SESSION_PATH).exists()
+
+
+@pytest.mark.parametrize(("error", "category", "code"), [
+    (FileNotFoundError("private path"), "io", "UNHANDLED_OS_ERROR"),
+    (PermissionError("private path"), "io", "UNHANDLED_OS_ERROR"),
+    (json.JSONDecodeError("private message", "private document", 0), "value", "UNHANDLED_VALUE_ERROR"),
+    (subprocess.CalledProcessError(1, ["private command"]), "process", "UNHANDLED_SUBPROCESS_ERROR"),
+    (requests.HTTPError("private response"), "io", "UNHANDLED_OS_ERROR"),
+])
+def test_script_error_classifies_exception_bases_without_collecting_text(error, category, code, captured_post):
+    adk.emit_script_error("setup_existing_da", error, block=True)
+    data = _last_activity(captured_post)["data"]
+    assert data["error_category"] == category
+    assert data["error_code"] == code
+    assert "private" not in json.dumps(data)
+
+
+def test_script_error_uses_nearest_mapped_base_without_formatting(captured_post):
+    class SensitiveError(ValueError, OSError):
+        def __str__(self):
+            raise AssertionError("Exception formatting must not run")
+
+    adk.emit_script_error("setup_existing_da", SensitiveError("private"), block=True)
+    data = _last_activity(captured_post)["data"]
+    assert data["error_code"] == "UNHANDLED_VALUE_ERROR"
+    assert "SensitiveError" not in json.dumps(data)
 
 
 def test_script_error_payload_is_closed_and_never_formats_exception(monkeypatch, captured_post):
@@ -161,7 +307,7 @@ def test_script_boundary_success_and_handled_errors_do_not_emit(captured_post):
     assert not captured_post
 
 
-@pytest.mark.parametrize("failure_point", ["emit_script_error", "flush"])
+@pytest.mark.parametrize("failure_point", ["emit_script_error", "flush", "telemetry_enabled"])
 def test_script_boundary_preserves_original_failure_when_reporting_breaks(monkeypatch, failure_point):
     def broken(*args, **kwargs):
         raise OSError("telemetry failure")

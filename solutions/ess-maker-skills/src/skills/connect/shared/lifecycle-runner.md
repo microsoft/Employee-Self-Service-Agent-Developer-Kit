@@ -688,6 +688,7 @@ For each checkpoint target the current phase lists, run:
 
 ```
 python scripts/flightcheck/cli.py --checkpoint {TARGET} \
+  --invocation-source connect \
   --agent-slug "{AGENT_SLUG}"
 ```
 
@@ -696,6 +697,7 @@ new opaque `CHECKPOINT_INVOCATION_ID` for this command and instead run:
 
 ```
 python scripts/flightcheck/cli.py --checkpoint {TARGET} \
+  --invocation-source connect \
   --compact-result \
   --invocation-id "{CHECKPOINT_INVOCATION_ID}" \
   --quiet-auth \

@@ -55,6 +55,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -124,6 +125,7 @@ SCRIPT_ERROR_ENTRY_POINTS = {
     "evaluation_runs": "evaluation_validate",
     "flow_run_inspect": "workflow_test",
     "flightcheck.cli": "flightcheck",
+    "flightcheck_setup": "flightcheck",
     "install_workday_da_extension": "connect",
     "mcp_config": "setup",
     "plant_debug": "topic_test",
@@ -154,6 +156,7 @@ _SCRIPT_ERROR_FILES = {
     for name in _SCRIPT_ERROR_MODULES
 }
 _SCRIPT_ERROR_ACTIVE: ContextVar[bool] = ContextVar("adk_script_error_active", default=False)
+_TELEMETRY_SUPPRESSED: ContextVar[bool] = ContextVar("adk_telemetry_suppressed", default=False)
 _SCRIPT_ERROR_TYPES = {
     TypeError: ("type", "UNHANDLED_TYPE_ERROR", "An unexpected value type caused the script to fail."),
     ValueError: ("value", "UNHANDLED_VALUE_ERROR", "An unexpected value caused the script to fail."),
@@ -162,6 +165,7 @@ _SCRIPT_ERROR_TYPES = {
     AttributeError: ("attribute", "UNHANDLED_ATTRIBUTE_ERROR", "An expected attribute was unavailable."),
     OSError: ("io", "UNHANDLED_OS_ERROR", "An operating-system operation failed."),
     RuntimeError: ("runtime", "UNHANDLED_RUNTIME_ERROR", "An unexpected runtime error caused the script to fail."),
+    subprocess.SubprocessError: ("process", "UNHANDLED_SUBPROCESS_ERROR", "An external process failed."),
 }
 
 CLIENT_EVENTS_SCHEMA_VERSION = 2
@@ -661,6 +665,8 @@ def _write_config(cfg: dict[str, Any]) -> bool:
 
 def telemetry_enabled() -> bool:
     """True unless opted out via env var or ``~/.adk/config``."""
+    if _TELEMETRY_SUPPRESSED.get():
+        return False
     val = os.environ.get("ESS_ADK_TELEMETRY", "").strip().lower()
     if val in ("0", "off", "false", "no", "disabled"):
         return False
@@ -1731,6 +1737,9 @@ def _emit_sync(event_name: str, data: dict[str, Any]) -> dict[str, Any]:
 
 def _emit(event_name: str, data: dict[str, Any], *, block: bool = False) -> dict[str, Any]:
     """Dispatch an emit. Async (daemon thread) unless sync/block requested."""
+    # Context variables do not carry over to the transport thread.
+    if _TELEMETRY_SUPPRESSED.get():
+        return {"sent": False, "events": 0, "status": None, "reason": "disabled"}
     if _SYNC or block:
         return _emit_sync(event_name, data)
     t = threading.Thread(target=_emit_sync, args=(event_name, data), daemon=True)
@@ -1869,6 +1878,8 @@ def _buffer_many_sync(
 
 def _emit_many(event_name: str, rows: list[dict[str, Any]], *, block: bool = False) -> dict[str, Any]:
     """Dispatch a batch emit. Async (daemon thread) unless sync/block requested."""
+    if _TELEMETRY_SUPPRESSED.get():
+        return {"sent": False, "events": 0, "status": None, "reason": "disabled"}
     if _SYNC or block:
         return _emit_many_sync(event_name, rows)
     t = threading.Thread(target=_emit_many_sync, args=(event_name, rows), daemon=True)
@@ -2215,8 +2226,8 @@ def emit_script_error(
             return {"sent": False, "reason": "unsupported-script"}
         if _fc.get_toolkit_git_branch() == "main-ca":
             return {"sent": False, "reason": "unsupported-agent-type"}
-        category, code, message = _SCRIPT_ERROR_TYPES.get(
-            type(error),
+        category, code, message = next(
+            (_SCRIPT_ERROR_TYPES[base] for base in type(error).__mro__ if base in _SCRIPT_ERROR_TYPES),
             ("unexpected", "UNHANDLED_EXCEPTION", "An unexpected exception caused the script to fail."),
         )
         failure_module, failure_line = "unknown", 0
@@ -2247,21 +2258,24 @@ def emit_script_error(
 
 
 @contextmanager
-def script_error_boundary(script_id: str) -> Iterator[None]:
-    """Observe escaping exceptions once; leave cancellation and exit codes alone."""
+def script_error_boundary(script_id: str, *, enabled: bool = True) -> Iterator[None]:
+    """Observe escaping exceptions once; ``enabled=False`` opts this invocation out."""
     outermost = not _SCRIPT_ERROR_ACTIVE.get()
     token = _SCRIPT_ERROR_ACTIVE.set(True)
+    consent_token = _TELEMETRY_SUPPRESSED.set(_TELEMETRY_SUPPRESSED.get() or not enabled)
     try:
         yield
     except Exception as error:
         if outermost:
             try:
-                emit_script_error(script_id, error)
-                flush(timeout=1.0)
+                if telemetry_enabled():
+                    emit_script_error(script_id, error)
+                    flush(timeout=1.0)
             except Exception:  # noqa: BLE001 — preserve the original traceback
                 pass
         raise
     finally:
+        _TELEMETRY_SUPPRESSED.reset(consent_token)
         _SCRIPT_ERROR_ACTIVE.reset(token)
 
 
@@ -2284,6 +2298,8 @@ def start_session(
     ``set_identity`` call (e.g. auth.py's silent Graph lookup) instead of
     blanking it back to ``""``.
     """
+    if not telemetry_enabled():
+        return {"sent": False, "events": 0, "status": None, "reason": "disabled"}
     _need_set = (
         instance_id is not None
         or not _IDENTITY["instance_id"]
