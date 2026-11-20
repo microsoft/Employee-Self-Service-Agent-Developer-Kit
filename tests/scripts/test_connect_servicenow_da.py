@@ -7470,14 +7470,6 @@ def test_ready_to_send_messages_are_wrapped_in_one_fenced_block(
         "When they reply, paste their response here without secrets. "
         "We'll use it to prepare the ServiceNow handoff; you don't need to "
         "interpret the settings.\n\n"
-        "If your ServiceNow administrator identifies employees by something "
-        "other than email or UPN, such as a payroll ID, the custom-claim "
-        "part of the message applies. Ask your Entra administrator to "
-        "coordinate with them first, to confirm the exact claim name, its "
-        "format, and that its source attribute is populated for every "
-        "intended employee, and to say whether an existing setup was reused "
-        "and whether the setup is complete. You don't need to choose the "
-        "identifier or send anyone's payroll ID.\n\n"
     )
     for technical in (
         "Target agent:",
@@ -7494,8 +7486,8 @@ def test_ready_to_send_messages_are_wrapped_in_one_fenced_block(
         "We have the Entra values. Send this message to your ServiceNow "
         "administrator to set up employee matching.\n\n"
         "It includes the values already supplied. When they reply, paste "
-        "their saved-configuration confirmation, **User Field**, and "
-        "same-value confirmation here without secrets.\n\n"
+        "their saved-configuration confirmation, **User Claim**, and "
+        "**User Field** here without secrets.\n\n"
     )
     if plugin is not None:
         assert plugin.split("**Ready-to-send message**")[0].endswith(
@@ -7693,11 +7685,11 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     assert service_now_completion["ordinaryReply"] == {
         "kind": "ordinary-agent-response",
         "text": (
-            "I recorded the User Field `u_employee_id`. I still need your "
-            "ServiceNow administrator's confirmation that the configuration "
-            "is saved and that this field holds exactly the same value as "
-            "the User Claim `employee_id`. You don't need to send the field "
-            "again."
+            "Thanks—please ask your ServiceNow administrator to confirm that "
+            "the configuration is saved and name both the **User Claim** and "
+            "**User Field**.\n\n"
+            "That will clarify which settings use `employee_id` to identify "
+            "the signed-in employee."
         ),
     }
     assert "```" not in service_now_completion["ordinaryReply"]["text"]
@@ -10588,7 +10580,7 @@ def test_dev_test_follow_up_question_follows_spec(
         question = snow._dev_test_clarifying_question()
 
     assert question == (
-        f"What did the request return: your expected {records}, an empty "
+        f"What did the request return—your expected {records}, an empty "
         f"result, or an error? No need to share {record} contents."
     )
 
@@ -12773,7 +12765,7 @@ def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
         )
         assert "   - **Resource URI:** `" in text
         assert (
-            "   - **Instance name:** `dev123`, not the full URL\n"
+            "   - **Instance name:** `dev123`—not the full URL\n"
             "4. Complete the connection creation.\n\n"
             "Return here and tell us which connection you used. You won't "
             "need to resend the administrator replies.\n\n"
@@ -12793,7 +12785,7 @@ def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
         expected_test = (
             "We're ready to try an HR request.\n\n"
             "In **Employee Self-Service HR's Test pane**, run a request that "
-            "should return your real ServiceNow data, for example **\"Show "
+            "should return your real ServiceNow data—for example **\"Show "
             "my open HR cases,\"** if you have open cases.\n\n"
             "Come back and tell us what happened and whether it matched what "
             "you expected. You don't need to paste case contents.\n\n"
@@ -12804,7 +12796,7 @@ def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
         expected_test = (
             "We're ready to try an IT request.\n\n"
             "In **Employee Self-Service IT's Test pane**, run a request that "
-            "should return your real ServiceNow data, for example **\"Show "
+            "should return your real ServiceNow data—for example **\"Show "
             "my open IT tickets,\"** if you have open tickets.\n\n"
             "Come back and tell us what happened and whether it matched what "
             "you expected. You don't need to paste ticket contents.\n\n"
@@ -16958,7 +16950,11 @@ def test_phase_checklist_default_is_a_compact_snapshot_and_progress_is_kept(
         assert marker not in hidden["renderBlock"]["text"]
     assert compact["renderBlock"]["text"].startswith("We'll connect")
 
-    snapshot = compact["renderBlock"]["progressSnapshot"]
+    snapshot = snow._render_progress_snapshot(
+        snow._load_json(Path(snow.__file__).resolve().parents[1] / snow.CONTRACT_PATH),
+        compact["progress"]["items"],
+        title="Here's your connection setup:",
+    )
     lines = snapshot.splitlines()
     assert lines[0].startswith("Here's your ")
     bullets = lines[2:]
@@ -16966,9 +16962,30 @@ def test_phase_checklist_default_is_a_compact_snapshot_and_progress_is_kept(
     assert all(line.startswith("- ") and line[2] in "✅🔄⛔⬜" for line in bullets)
     assert "HR prerequisite" in snapshot
     assert "Responsible" not in snapshot and "Complete — " not in snapshot
-    assert "progressSnapshot" in compact["renderBlock"]["instruction"]
+
+    # Default delivery is the host todo list tool, not a chat message.
+    assert compact["renderBlock"]["progressSnapshot"] == ""
+    todos = compact["renderBlock"]["progressTodos"]
+    assert len(todos) == 4
+    assert [t["id"] for t in todos] == [1, 2, 3, 4]
+    assert all(
+        t["status"] in {"completed", "in-progress", "not-started"} for t in todos
+    )
+    assert "HR prerequisite" in todos[0]["title"]
+    assert "progressTodos" in compact["renderBlock"]["instruction"]
+    assert "todo list tool" in compact["renderBlock"]["instruction"]
     assert hidden["renderBlock"]["progressSnapshot"] == ""
+    assert hidden["renderBlock"]["progressTodos"] == []
     assert "✅" not in hidden["renderBlock"]["text"]
+
+    monkeypatch.setattr(snow.realms, "PROGRESS_DELIVERY", "chat")
+    chat = handoff("chat", snapshot=True, legacy=False)
+    assert chat["renderBlock"]["progressSnapshot"].splitlines()[0].startswith(
+        "Here's your "
+    )
+    assert chat["renderBlock"]["progressTodos"] == []
+    assert "progressSnapshot" in chat["renderBlock"]["instruction"]
+    monkeypatch.setattr(snow.realms, "PROGRESS_DELIVERY", "todo")
 
     assert hidden["progress"]["items"] == compact["progress"]["items"]
     ignored = {"renderedAt", "internal"}
@@ -17148,6 +17165,7 @@ def test_resume_render_block_final_is_grouped_final_text() -> None:
     assert block == {
         "kind": "final",
         "progressSnapshot": "",
+        "progressTodos": [],
         "text": "G\n\nDONE",
         "instruction": snow._RENDER_INSTRUCTION,
     }

@@ -1638,6 +1638,7 @@ def test_realm_checklist_defaults_to_a_snapshot_and_state_is_intact(
 ) -> None:
     monkeypatch.setattr(realms, "SHOW_REALM_CHECKLIST", True)
     monkeypatch.setattr(realms, "SHOW_LEGACY_REALM_ROWS", False)
+    assert realms.PROGRESS_DELIVERY == "todo"
     registry = _registry()
     result = realms.realm_status(registry, render=_render_context(footer="Footer."))
     block = result["renderBlock"]
@@ -1646,18 +1647,30 @@ def test_realm_checklist_defaults_to_a_snapshot_and_state_is_intact(
     assert block["text"].endswith("Footer.")
     assert "✅" not in block["text"] and "⬜" not in block["text"]
     assert result["realmIntro"]
-    snapshot = block["progressSnapshot"]
+    assert block["progressSnapshot"] == ""
+    todos = block["progressTodos"]
+    assert todos and [t["id"] for t in todos] == list(range(1, len(todos) + 1))
+    assert all(
+        t["status"] in {"completed", "in-progress", "not-started"} for t in todos
+    )
+    assert any(t["title"] == "Permission to configure this agent" for t in todos)
+    assert all("—" not in t["title"] for t in todos)
+
+    monkeypatch.setattr(realms, "PROGRESS_DELIVERY", "chat")
+    chat = realms.realm_status(registry, render=_render_context(footer="Footer."))
+    snapshot = chat["renderBlock"]["progressSnapshot"]
     lines = snapshot.splitlines()
     assert lines[0].startswith("Here's your ") and lines[1] == ""
     assert lines[2:] and all(
         line.startswith("- ") and line[2] in "✅🔄⛔⬜" for line in lines[2:]
     )
-    assert "Permission to configure this agent" in snapshot
-    assert "—" not in snapshot
+    assert chat["renderBlock"]["progressTodos"] == []
+    monkeypatch.setattr(realms, "PROGRESS_DELIVERY", "todo")
 
     monkeypatch.setattr(realms, "SHOW_REALM_CHECKLIST", False)
     hidden = realms.realm_status(registry, render=_render_context(footer="Footer."))
     assert hidden["renderBlock"]["progressSnapshot"] == ""
+    assert hidden["renderBlock"]["progressTodos"] == []
     assert hidden["phases"] == result["phases"]
 
     monkeypatch.setattr(realms, "SHOW_LEGACY_REALM_ROWS", True)

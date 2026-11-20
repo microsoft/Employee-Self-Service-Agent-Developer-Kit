@@ -173,14 +173,17 @@ environment selection on **Check again**. Do not send the maker back to Dev.
 
 After discovery succeeds, `discover-realm-target`, `check-realm`,
 `realm-status`, `select-realm`, and `record-realm-test` each return
-`renderBlock.progressSnapshot` and `renderBlock.text`: the progress list (post
-it verbatim as its own short chat message, like `/setup`; nothing is pinned)
+`renderBlock.progressTodos` and `renderBlock.text`: the progress list (write it
+verbatim into the todo list tool, one list updated in place, and do not also
+post it as chat text; only when `PROGRESS_DELIVERY = "chat"` does the block
+carry `renderBlock.progressSnapshot` instead, posted verbatim as its own short
+chat message)
 and the conversation text for the active Test or Prod step
 (`renderBlock.kind` is `realm-step`; `realmIntro` is the case paragraph).
 `SHOW_REALM_CHECKLIST = False` in `scripts/servicenow_connect_realms.py` hides
-the snapshot, and `SHOW_LEGACY_REALM_ROWS = True` restores the old verbose
-rows. Emit the snapshot (when non-empty) and then the returned text verbatim
-when it is non-empty, before any other tool call. Never write your
+the progress list, and `SHOW_LEGACY_REALM_ROWS = True` restores the old verbose
+rows. Update the todo list (when non-empty) and then emit the returned text
+verbatim when it is non-empty, before any other tool call. Never write your
 own checklist, status table, or item list, and do not paraphrase its
 explanation or its instruction. Use `phases` and `nextPhaseId` only to decide
 what to do next.

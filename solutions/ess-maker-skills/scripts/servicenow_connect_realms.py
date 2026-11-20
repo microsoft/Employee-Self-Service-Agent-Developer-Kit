@@ -893,6 +893,58 @@ as its own chat message. Nothing is pinned by the host. Set False to hide it.
 Recorded stages, statuses, and resume logic never depend on this switch.
 """
 
+PROGRESS_DELIVERY = "todo"
+"""How a visible progress list reaches the maker.
+
+``"todo"`` (default): the render block carries ``progressTodos``, a structured
+list the agent writes into the host's todo list tool, which keeps one list that
+is updated in place. No Markdown progress message is posted in this mode.
+``"chat"``: the render block carries ``progressSnapshot`` instead, an ordinary
+Markdown list the agent posts as its own chat message each time. Both modes use
+the same status data and never change resume logic.
+"""
+
+_SNAPSHOT_STATUS = {
+    "✅": "completed",
+    "🔄": "in-progress",
+    "⛔": "in-progress",
+    "⬜": "not-started",
+}
+
+
+def snapshot_to_todos(snapshot: str) -> list[dict[str, Any]]:
+    """Convert a Markdown progress snapshot into todo list items.
+
+    A blocked row stays in progress and its title says it needs attention.
+    """
+    todos: list[dict[str, Any]] = []
+    for line in str(snapshot or "").splitlines():
+        match = re.match(r"^- (✅|🔄|⛔|⬜) (.+)$", line.strip())
+        if not match:
+            continue
+        marker, label = match.groups()
+        title = label.strip()
+        if marker == "⛔":
+            title = f"{title} (needs attention)"
+        todos.append(
+            {
+                "id": len(todos) + 1,
+                "title": title,
+                "status": _SNAPSHOT_STATUS[marker],
+            }
+        )
+    return todos
+
+
+def deliver_progress(snapshot: str) -> tuple[str, list[dict[str, Any]]]:
+    """Return ``(chat_snapshot, todos)`` for the configured delivery mode."""
+    if not snapshot:
+        return "", []
+    if PROGRESS_DELIVERY == "chat":
+        return snapshot, []
+    return "", snapshot_to_todos(snapshot)
+
+
 SHOW_LEGACY_REALM_ROWS = False
 """Restores the old verbose row view (with per-row detail text) when True.
 
@@ -1912,13 +1964,15 @@ def realm_status(
             if SHOW_REALM_CHECKLIST
             else ""
         )
+        chat_snapshot, todos = deliver_progress(snapshot)
         if text is not None or snapshot:
             result["renderBlock"] = {
                 "kind": (
                     "realm-checklist" if SHOW_LEGACY_REALM_ROWS else "realm-step"
                 ),
                 "case": case,
-                "progressSnapshot": snapshot,
+                "progressSnapshot": chat_snapshot,
+                "progressTodos": todos,
                 "text": text or "",
             }
         if not SHOW_LEGACY_REALM_ROWS:

@@ -27,7 +27,7 @@ Render the target link, saved-draft instruction, and privacy boundary above in t
 [
   {
     "header": "Test ServiceNow HRSD",
-    "question": "What did the request return: your expected cases, an empty result, or an error? No need to share case contents.",
+    "question": "What did the request return—your expected cases, an empty result, or an error? No need to share case contents.",
     "options": [
       { "label": "It returned the cases I expected" },
       { "label": "It returned an empty result" },

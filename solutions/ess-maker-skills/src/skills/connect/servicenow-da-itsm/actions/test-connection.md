@@ -27,7 +27,7 @@ Render the target link, saved-draft instruction, and privacy boundary above in t
 [
   {
     "header": "Test ServiceNow ITSM",
-    "question": "What did the request return: your expected tickets, an empty result, or an error? No need to share ticket contents.",
+    "question": "What did the request return—your expected tickets, an empty result, or an error? No need to share ticket contents.",
     "options": [
       { "label": "It returned the tickets I expected" },
       { "label": "It returned an empty result" },

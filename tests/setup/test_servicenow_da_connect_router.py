@@ -109,6 +109,21 @@ def test_servicenow_connect_entry_files_gate_progress_rendering() -> None:
         ), path.name
 
 
+def test_servicenow_connect_docs_deliver_progress_through_the_todo_list() -> None:
+    skills = _SOLUTION / "src" / "skills" / "connect"
+    for path in (
+        skills / "servicenow" / "entry.md",
+        skills / "servicenow" / "realms.md",
+        skills / "servicenow-da-hrsd" / "SKILL.md",
+        skills / "servicenow-da-itsm" / "SKILL.md",
+        skills / "shared" / "lifecycle-runner.md",
+    ):
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert "`renderBlock.progressTodos`" in text, path.name
+        assert "todo list tool" in text, path.name
+        assert "PROGRESS_DELIVERY" in text or "chat mode" in text, path.name
+
+
 def test_servicenow_connect_docs_suppress_flightcheck_health_table() -> None:
     skills = _SOLUTION / "src" / "skills" / "connect"
     runner = " ".join(
@@ -922,16 +937,14 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
         preflight_normalized
     )
     assert "com.sn_hr_core" in plugins
+    assert "visible-handoff-question" not in plugins
+    assert "Ask nothing else: there is no yes/no question." in plugins
     assert (
-        '"label": "Yes, all listed installed-and-ready evidence is present"'
-        in plugins
-    )
-    assert (
-        '"label": "No, one or more required items are missing"' in plugins
-    )
-    assert (
-        '"label": "Not sure, the administrator still needs to check"'
-        in plugins
+        "Ask your ServiceNow administrator to confirm that the HR Service "
+        "Delivery Core plugin is installed and active so we can continue."
+    ) in plugins
+    assert "Paste their reply here or relay their explicit confirmation." in (
+        plugins
     )
     assert "[Open HR Service Delivery Core]({HR_CORE_PLUGIN_URL})" in plugins
     assert "OIDC capability belongs to the later ServiceNow OIDC phase" in (

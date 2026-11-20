@@ -210,16 +210,6 @@ def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
             ),
         ),
         (
-            _ACTIONS / "verify-plugin-prerequisites.md",
-            (
-                "Human Resources Scoped App: Core",
-                "`com.sn_hr_core`",
-                "listed as Installed",
-                "installed and ready for you to use",
-                "Has the ServiceNow administrator confirmed",
-            ),
-        ),
-        (
             _ACTIONS / "prepare-topics.md",
             (
                 "Do you want to enable all listed inactive",
@@ -229,7 +219,7 @@ def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
         (
             _ACTIONS / "test-connection.md",
             (
-                "What did the request return: your expected cases",
+                "What did the request return—your expected cases",
                 "No need to share case contents",
             ),
         ),
@@ -277,7 +267,6 @@ def test_visible_handoff_payloads_are_supported_and_complete(
 @pytest.mark.parametrize(
     "path",
     (
-        _ACTIONS / "verify-plugin-prerequisites.md",
         _ACTIONS / "prepare-credential.md",
         _ACTIONS / "prepare-topics.md",
         _ACTIONS / "configure-portal-url.md",
@@ -376,21 +365,11 @@ def test_servicenow_questions_use_buttons_and_bounded_freeform() -> None:
                 assert adapted["choices"] == []
 
 
-def test_hr_plugin_completion_header_and_question_are_distinct() -> None:
-    payload = _validate_payload(
-        _payloads(_ACTIONS / "verify-plugin-prerequisites.md")[0],
-        required_phrases=(
-            "Human Resources Scoped App: Core",
-            "Has the ServiceNow administrator confirmed",
-        ),
+def test_hr_plugin_step_has_no_question_payload() -> None:
+    text = (_ACTIONS / "verify-plugin-prerequisites.md").read_text(
+        encoding="utf-8"
     )
-    assert payload["header"] == "HR Service Delivery Core"
-    assert payload["header"] != payload["question"]
-    assert [option["label"] for option in payload["options"]] == [
-        "Yes, all listed installed-and-ready evidence is present",
-        "No, one or more required items are missing",
-        "Not sure, the administrator still needs to check",
-    ]
+    assert "visible-handoff-question" not in text
 
 
 @pytest.mark.parametrize("provider", ("servicenow-da-hrsd", "servicenow-da-itsm"))
@@ -529,7 +508,7 @@ def test_servicenow_test_question_has_explicit_result_choices(
             _CONNECT / provider / "actions" / "test-connection.md"
         )[0],
         required_phrases=(
-            f"What did the request return: your expected {records}, an empty "
+            f"What did the request return—your expected {records}, an empty "
             "result, or an error?",
             f"No need to share {record} contents.",
         ),

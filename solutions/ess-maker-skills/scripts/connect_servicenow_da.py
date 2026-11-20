@@ -974,6 +974,7 @@ def adapt_question_to_plain_text(
     return {
         "schemaVersion": "servicenow.plain-question.v1",
         "canonicalQuestion": canonical,
+        "question": body.strip(),
         "replyKind": reply_kind,
         "plainText": text,
         "choices": choices,
@@ -1175,9 +1176,8 @@ def _identity_runtime_instruction_source(
 
 
 SERVICENOW_USER_FIELD_TEXT_QUESTION = (
-    "Which **User Field** did your ServiceNow administrator select? Paste "
-    "their reply here, or just type the field name. Please don't include "
-    "secrets or employee values."
+    "Ask your administrator which **User Field** they selected.\n\n"
+    "Send that value on its own."
 )
 
 
@@ -1202,23 +1202,14 @@ def _identity_handoff_lead_in(stage: str) -> str:
             "administrator to prepare ServiceNow sign-in.\n\n"
             "When they reply, paste their response here without secrets. "
             "We'll use it to prepare the ServiceNow handoff; you don't need "
-            "to interpret the settings.\n\n"
-            "If your ServiceNow administrator identifies employees by "
-            "something other than email or UPN, such as a payroll ID, the "
-            "custom-claim part of the message applies. Ask your Entra "
-            "administrator to coordinate with them first, to confirm the "
-            "exact claim name, its format, and that its source attribute is "
-            "populated for every intended employee, and to say whether an "
-            "existing setup was reused and whether the setup is complete. "
-            "You don't need to choose the identifier or send anyone's "
-            "payroll ID."
+            "to interpret the settings."
         )
     return (
         "We have the Entra values. Send this message to your ServiceNow "
         "administrator to set up employee matching.\n\n"
         "It includes the values already supplied. When they reply, paste "
-        "their saved-configuration confirmation, **User Field**, and "
-        "same-value confirmation here without secrets."
+        "their saved-configuration confirmation, **User Claim**, and "
+        "**User Field** here without secrets."
     )
 
 
@@ -1436,12 +1427,11 @@ def identity_direct_handoff(
             else {
                 "kind": "ordinary-agent-response",
                 "text": (
-                    f"I recorded the User Field "
-                    f"`{str(captured_user_field).strip()}`. I still need your "
-                    "ServiceNow administrator's confirmation that the "
-                    "configuration is saved and that this field holds exactly "
-                    f"the same value as the User Claim `{claim_name}`. You "
-                    "don't need to send the field again."
+                    "Thanks—please ask your ServiceNow administrator to "
+                    "confirm that the configuration is saved and name both "
+                    "the **User Claim** and **User Field**.\n\n"
+                    "That will clarify which settings use "
+                    f"`{claim_name}` to identify the signed-in employee."
                 ),
             }
             if captured_user_field is not None
@@ -10652,7 +10642,7 @@ def _dev_test_ready_message() -> str:
     return (
         f"We're ready to try {copy_['article']} {copy_['audience']} request.\n\n"
         f"In **{_spec_agent_name()}'s Test pane**, run a request that should "
-        "return your real ServiceNow data, for example "
+        "return your real ServiceNow data—for example "
         f"**\"{copy_['example']},\"** if you have open {copy_['records']}.\n\n"
         "Come back and tell us what happened and whether it matched what you "
         f"expected. You don't need to paste {copy_['record']} contents.\n\n"
@@ -10664,7 +10654,7 @@ def _dev_test_ready_message() -> str:
 def _dev_test_clarifying_question() -> str:
     copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
     return (
-        f"What did the request return: your expected {copy_['records']}, an "
+        f"What did the request return—your expected {copy_['records']}, an "
         "empty result, or an error? No need to share "
         f"{copy_['record']} contents."
     )
@@ -10781,7 +10771,7 @@ def _current_task_guidance(
             "3. Use:\n"
             "   - **Authentication type:** Microsoft Entra ID User Login\n"
             f"   - **Resource URI:** `{client_id or 'not yet confirmed'}`\n"
-            f"   - **Instance name:** `{instance_name}`, not the full URL\n"
+            f"   - **Instance name:** `{instance_name}`—not the full URL\n"
             "4. Complete the connection creation.\n\n"
             "Return here and tell us which connection you used. You won't "
             "need to resend the administrator replies.\n\n"
@@ -10810,13 +10800,13 @@ def _current_task_guidance(
 SHOW_PHASE_CHECKLIST = True
 """Maker-visible phase progress snapshot switch.
 
-When True, every ``renderBlock`` also carries ``progressSnapshot``: a short
-ordinary-Markdown list with one status line per business phase, written the
-way /setup writes its progress. The agent posts it as its own chat message
-(re-posted at the start, after each phase change, on resume, on waiting or
-blocked, and at completion); nothing is pinned by the host. Set this to False
-to hide the snapshot. Progress items, counts, evidence, and resume logic never
-depend on it.
+When True, every ``renderBlock`` also carries the phase progress list: one
+status line per business phase. By default (``realms.PROGRESS_DELIVERY ==
+"todo"``) it is delivered as ``progressTodos`` for the host todo list tool,
+which keeps one list updated in place; with ``"chat"`` it is delivered as
+``progressSnapshot``, an ordinary Markdown message written the way /setup
+writes its progress. Set this to False to hide the list entirely. Progress
+items, counts, evidence, and resume logic never depend on it.
 """
 
 SHOW_LEGACY_PHASE_VIEW = False
@@ -11348,10 +11338,36 @@ _SNAPSHOT_INSTRUCTION = (
     "edit, reorder, or rebuild it, and never use a card or input for it. "
 )
 
+_TODOS_INSTRUCTION = (
+    "`progressTodos` is the maker's progress list. Write it verbatim into the "
+    "todo list tool before `text`: create the list on the first call and "
+    "update the same list in place afterwards, always sending every item with "
+    "its `title` and `status`. Do not also post it as a chat message, and never "
+    "edit, reorder, or rebuild it. "
+)
 
-def _render_instruction(text: str, snapshot: str = "") -> str:
+
+def _render_instruction(
+    text: str, snapshot: str = "", todos: list[dict[str, Any]] | None = None
+) -> str:
     base = _RENDER_INSTRUCTION if text else _NO_RENDER_INSTRUCTION
-    return f"{_SNAPSHOT_INSTRUCTION}{base}" if snapshot else base
+    prefix = ""
+    if snapshot:
+        prefix += _SNAPSHOT_INSTRUCTION
+    if todos:
+        prefix += _TODOS_INSTRUCTION
+    return f"{prefix}{base}"
+
+
+def _progress_fields(
+    internal: dict[str, Any], kind: str
+) -> tuple[str, list[dict[str, Any]]]:
+    """Chat snapshot and todo items for the configured delivery mode."""
+    if not SHOW_PHASE_CHECKLIST:
+        return "", []
+    key = "progressSnapshotBlocked" if kind == "error" else "progressSnapshot"
+    raw = str(internal.get(key) or internal.get("progressSnapshot") or "")
+    return realms.deliver_progress(raw)
 
 
 _WAITING_RESUME_NOTE = (
@@ -11410,15 +11426,13 @@ def _resume_render_block(
             if SHOW_LEGACY_PHASE_VIEW:
                 parts.append(str(current["startText"]))
     text = _join_visible(*parts)
-    snapshot = ""
-    if SHOW_PHASE_CHECKLIST:
-        key = "progressSnapshotBlocked" if kind == "error" else "progressSnapshot"
-        snapshot = str(internal.get(key) or internal.get("progressSnapshot") or "")
+    snapshot, todos = _progress_fields(internal, kind)
     return {
         "kind": kind,
         "progressSnapshot": snapshot,
+        "progressTodos": todos,
         "text": text,
-        "instruction": _render_instruction(text, snapshot),
+        "instruction": _render_instruction(text, snapshot, todos),
     }
 
 
@@ -11458,16 +11472,13 @@ def _checkpoint_render_block(
             _WAITING_RESUME_NOTE,
         ]
     text = _join_visible(*parts)
-    snapshot = ""
-    if SHOW_PHASE_CHECKLIST:
-        key = "progressSnapshotBlocked" if kind == "error" else "progressSnapshot"
-        internal = progress["internal"]
-        snapshot = str(internal.get(key) or internal.get("progressSnapshot") or "")
+    snapshot, todos = _progress_fields(progress["internal"], kind)
     return {
         "kind": kind,
         "progressSnapshot": snapshot,
+        "progressTodos": todos,
         "text": text,
-        "instruction": _render_instruction(text, snapshot),
+        "instruction": _render_instruction(text, snapshot, todos),
     }
 
 
@@ -13772,9 +13783,12 @@ def _command_error_recovery(
 AGENT_RULES = (
     "Run every command with the launcher resolved by /setup (py -3, "
     "python3, then python), never assuming bare `python`.",
-    "When renderBlock.progressSnapshot is non-empty, first send it verbatim as "
-    "its own short chat message (plain Markdown progress list, the same way "
-    "/setup posts its progress). Then emit renderBlock.text verbatim "
+    "When renderBlock.progressTodos is non-empty, first write it verbatim into "
+    "the todo list tool (create on the first call, then update the same list "
+    "in place, always sending every item); do not also post it as chat text. "
+    "When renderBlock.progressSnapshot is non-empty instead, send it verbatim "
+    "as its own short chat message (plain Markdown progress list). Then emit "
+    "renderBlock.text verbatim "
     "(conversation text only), or the ordinaryReply/recovery text a guide "
     "output returns, as an assistant message before any other tool call, "
     "unless renderBlock.text is empty; never write your own checklist or a "
