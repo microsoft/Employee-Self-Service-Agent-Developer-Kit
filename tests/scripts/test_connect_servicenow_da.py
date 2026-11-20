@@ -17507,3 +17507,64 @@ def test_custom_claim_name_alone_is_not_recorded_until_setup_is_confirmed(
     recorded = json.loads(capsys.readouterr().out)
     assert recorded["candidates"] == ["employeeid"]
     assert recorded["entraAdministratorConfirmed"] is True
+
+
+_TENANT_PLACEHOLDER = "22222222-2222-4222-8222-222222222222"
+
+
+@pytest.mark.parametrize(
+    "provider", ["servicenow-da-hrsd", "servicenow-da-itsm"]
+)
+def test_v2_metadata_url_gets_the_fixed_spec_reply(
+    provider: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    previous = snow.ACTIVE_PROFILE
+    try:
+        reported = (
+            f"https://login.microsoftonline.com/{_TENANT_PLACEHOLDER}"
+            "/v2.0/.well-known/openid-configuration"
+        )
+        assert snow.main(
+            ["--provider", provider, "metadata-url-handoff", "--metadata-url", reported]
+        ) == 0
+        out = json.loads(capsys.readouterr().out)
+    finally:
+        snow.ACTIVE_PROFILE = previous
+    assert out["endTurn"] is True
+    assert out["recordsNothing"] is True
+    assert "pendingCard" not in out and "nextCommand" not in out
+    assert "any message means they want to continue" in out["afterReply"]
+    assert out["chatMessage"] == (
+        "That metadata URL contains `/v2.0`, which is a known setup problem "
+        "for this connection.\n\n"
+        "Ask your ServiceNow administrator to review the saved URL against "
+        "the supported ESS metadata URL below, coordinating compatibility "
+        "with your Entra administrator before any repair:\n\n"
+        f"`https://login.microsoftonline.com/{_TENANT_PLACEHOLDER}"
+        "/.well-known/openid-configuration`\n\n"
+        "Don't change an existing configuration serving SSO or the Microsoft "
+        "Graph connector. If compatibility is unresolved, the administrators "
+        "need to resolve it manually.\n\n"
+        "Bring back their non-sensitive confirmation that the supported "
+        "configuration is saved and any changed setup values. We'll recheck "
+        "the affected setup before you repeat the request in this agent's "
+        "Test pane."
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://login.microsoftonline.com/22222222-2222-4222-8222-222222222222/.well-known/openid-configuration",
+        "https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration",
+        "https://example.invalid/22222222-2222-4222-8222-222222222222/v2.0/.well-known/openid-configuration",
+        "https://login.microsoftonline.com/22222222-2222-4222-8222-222222222222/v2.0/.well-known/openid-configuration?x=1",
+        "the connection failed",
+    ],
+)
+def test_metadata_url_diagnosis_needs_the_actual_v2_url(value: str) -> None:
+    result = snow.metadata_url_handoff(value)
+    assert result["decision"] == "no-v2-metadata-url"
+    assert result["recordsNothing"] is True
+    assert "renderBlock" not in result

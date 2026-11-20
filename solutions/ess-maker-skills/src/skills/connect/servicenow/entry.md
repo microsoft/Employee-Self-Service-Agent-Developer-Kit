@@ -566,6 +566,43 @@ or the Client ID. Don't include employee identifiers or secrets.
 
 **End message.**
 
+**Metadata URL with `/v2.0` reported.** Only when the maker (or an administrator
+reply) states the actual saved OIDC metadata URL and it contains `/v2.0`; never
+infer it from a generic failure or from a URL that was not reported. Get the
+Message from the controller instead of writing it: run
+`python scripts/connect_servicenow_da.py --provider {PROVIDER} metadata-url-handoff --metadata-url "<reported URL>"`,
+send `chatMessage` verbatim as the whole reply, and follow `endTurn` and
+`afterReply`. The command records nothing and changes no shared identity
+configuration; the corrected URL it shows is derived from the reported one.
+If it returns `no-diagnosis`, this scenario does not apply: do not call it a
+known setup problem and continue the normal flow. Do not ask a Yes/No
+question. When the maker returns, any message means they want to continue:
+record only the administrators' non-sensitive reply and recheck the affected
+setup before the Test-pane request is repeated. An unresolved compatibility
+conflict stays paused. The Message is, with the directory GUID taken from the
+reported URL:
+
+**Message:**
+
+That metadata URL contains `/v2.0`, which is a known setup problem for this
+connection.
+
+Ask your ServiceNow administrator to review the saved URL against the supported
+ESS metadata URL below, coordinating compatibility with your Entra
+administrator before any repair:
+
+`https://login.microsoftonline.com/{DIRECTORY_GUID}/.well-known/openid-configuration`
+
+Don't change an existing configuration serving SSO or the Microsoft Graph
+connector. If compatibility is unresolved, the administrators need to resolve it
+manually.
+
+Bring back their non-sensitive confirmation that the supported configuration is
+saved and any changed setup values. We'll recheck the affected setup before you
+repeat the request in this agent's Test pane.
+
+**End message.**
+
 **Claim attributes missing.** When the Entra administrator says the identifiers
 are not populated for every employee who will use this agent, pause the claim
 and show the following. Never populate directory attributes or audit employee

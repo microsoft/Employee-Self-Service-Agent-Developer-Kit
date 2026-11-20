@@ -1430,3 +1430,17 @@ def test_custom_claim_name_alone_is_gated_in_docs(profile: str) -> None:
         if path.name != "guide-servicenow-oidc.md":
             assert "--claim-setup-confirmed" in text, path.name
         assert "clarifying card" in text, path.name
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_v2_metadata_url_diagnosis_is_routed_in_docs(profile: str) -> None:
+    root = _SOLUTION / "src" / "skills" / "connect"
+    actions = root / f"servicenow-da-{profile}" / "actions"
+    for path in (
+        actions / "guide-servicenow-oidc.md",
+        actions / "test-connection.md",
+        root / "servicenow" / "entry.md",
+    ):
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert "metadata-url-handoff" in text, path.name
+        assert "generic failure" in text, path.name

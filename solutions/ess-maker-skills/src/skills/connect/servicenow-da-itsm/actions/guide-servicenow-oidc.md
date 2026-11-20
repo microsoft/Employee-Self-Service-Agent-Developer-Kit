@@ -64,6 +64,13 @@ Entra administrator's reply confirms the claim setup is complete. The standard `
 such confirmation. Only a recorded, confirmed claim makes the ServiceNow
 administrator message below necessary again.
 
+When the maker or an administrator reports the actual saved metadata URL and it
+contains `/v2.0`, run `metadata-url-handoff --metadata-url "<reported URL>"`
+and send its `chatMessage` verbatim (the "Metadata URL with `/v2.0` reported"
+Message in `servicenow/entry.md`). Use it only when the actual URL is given,
+never from a generic failure; it records nothing and never overwrites shared
+identity configuration.
+
 When the maker returns from a pause with an administrator reply outstanding,
 do not render the instructions again: follow the "Maker pauses for an
 administrator" messages in `servicenow/entry.md`, then record the reply below.

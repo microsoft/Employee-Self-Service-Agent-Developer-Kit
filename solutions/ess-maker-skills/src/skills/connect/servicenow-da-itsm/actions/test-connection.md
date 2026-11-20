@@ -52,7 +52,7 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-sl
   or an error? You can also tell us to finish without testing." Then map the
   maker's typed reply:
   - **Empty result:** run the same command with `--result empty`. Nothing is recorded and the test stays open; show the `message` field of the command output verbatim as an ordinary reply. Never record pass or fail for an empty result. The maker's next answer can still be pass, fail, or untested, so ask the result question again and return `ACTION_RESULT = "waiting"`.
-  - **Error:** record `--result fail` without inventing a failure category.
+  - **Error:** record `--result fail` without inventing a failure category. Only when the maker also reports the actual saved metadata URL and it contains `/v2.0`, run `metadata-url-handoff --metadata-url "<reported URL>"` and send its `chatMessage` verbatim; never infer that diagnosis from a generic failure.
   - **Finish without testing:** record `--result untested`, then show the `message` field of the command output verbatim as an ordinary reply. Do not claim the integration is connected or working, do not run final validation, and do not show the final success message. The test stays open, so the next Connect run resumes at the Test-pane request. The Test step is only reached after the earlier setup steps are complete, so no setup blocker is outstanding at this point.
 - If the maker replies in chat with only "Done" or an unclear answer instead of using the question, ask the same question again and do not record evidence.
 - While the question is unanswered, the test is not performed or the maker is

@@ -12820,6 +12820,14 @@ def build_parser() -> argparse.ArgumentParser:
     claim_parser.add_argument("--custom-claim", action="store_true")
     claim_parser.add_argument("--claim-name-given", action="store_true")
     claim_parser.add_argument("--servicenow-confirmed", action="store_true")
+    metadata_parser = subparsers.add_parser(
+        "metadata-url-handoff",
+        help=(
+            "Return the fixed reply when the administrator reports a /v2.0 "
+            "metadata URL; records nothing."
+        ),
+    )
+    metadata_parser.add_argument("--metadata-url", required=True)
 
     inspect_parser = subparsers.add_parser(
         "inspect",
@@ -13787,6 +13795,71 @@ def claim_confirmation_handoff(
 
 _STANDARD_USER_CLAIMS = frozenset({"email", "upn"})
 
+_V2_METADATA_URL_RE = re.compile(
+    r"^https://login\.microsoftonline\.com/"
+    r"(?P<tenant>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+    r"/v2\.0/\.well-known/openid-configuration/?$",
+    re.IGNORECASE,
+)
+
+_METADATA_URL_AFTER_REPLY = (
+    "When the maker returns, any message means they want to continue. Do not "
+    "ask a Yes/No question. Record only the administrators' non-sensitive "
+    "reply with the existing record-identity-direct commands, then recheck "
+    "the affected setup before the maker repeats the request in the Test "
+    "pane. Run this diagnosis only when the maker reported the actual "
+    "metadata URL; never infer it from a generic failure."
+)
+
+
+def metadata_url_handoff(metadata_url: str) -> dict[str, Any]:
+    """Fixed reply when the administrator reports a `/v2.0` metadata URL.
+
+    Only an actual reported URL of the Microsoft sign-in authority with a
+    `/v2.0` path is diagnosed. Nothing is recorded and no shared identity
+    configuration is changed; the administrators repair it manually.
+    """
+    match = _V2_METADATA_URL_RE.match(str(metadata_url).strip().strip("`<>"))
+    if match is None:
+        return {
+            "status": "no-diagnosis",
+            "decision": "no-v2-metadata-url",
+            "recordsNothing": True,
+            "note": (
+                "The reported value is not a /v2.0 metadata URL for this "
+                "connection, so this diagnosis does not apply. Do not treat "
+                "it as a known setup problem; continue the normal flow."
+            ),
+        }
+    supported = (
+        f"https://login.microsoftonline.com/{match.group('tenant')}"
+        "/.well-known/openid-configuration"
+    )
+    return {
+        "status": "metadata-url-review-required",
+        "decision": "metadata-url-review-required",
+        "recordsNothing": True,
+        "renderBlock": {
+            "kind": "waiting",
+            "text": (
+                "That metadata URL contains `/v2.0`, which is a known setup "
+                "problem for this connection.\n\n"
+                "Ask your ServiceNow administrator to review the saved URL "
+                "against the supported ESS metadata URL below, coordinating "
+                "compatibility with your Entra administrator before any "
+                f"repair:\n\n`{supported}`\n\n"
+                "Don't change an existing configuration serving SSO or the "
+                "Microsoft Graph connector. If compatibility is unresolved, "
+                "the administrators need to resolve it manually.\n\n"
+                "Bring back their non-sensitive confirmation that the "
+                "supported configuration is saved and any changed setup "
+                "values. We'll recheck the affected setup before you repeat "
+                "the request in this agent's Test pane."
+            ),
+        },
+        "afterReply": _METADATA_URL_AFTER_REPLY,
+    }
+
 
 def claim_setup_confirmation_required(claim_name: str) -> dict[str, Any]:
     """Reply for a custom claim name stated without its setup confirmation.
@@ -14067,6 +14140,8 @@ def main(argv: list[str] | None = None) -> int:
                 claim_name_given=args.claim_name_given,
                 servicenow_confirmed=args.servicenow_confirmed,
             )
+        elif args.command == "metadata-url-handoff":
+            result = metadata_url_handoff(args.metadata_url)
         else:
             context_kwargs: dict[str, Any] = {}
             if args.agent_id is not None or args.agent_slug is not None:
@@ -14301,6 +14376,7 @@ def main(argv: list[str] | None = None) -> int:
             "list-agents",
             "agent-chooser",
             "claim-confirmation-handoff",
+            "metadata-url-handoff",
         }:  # pragma: no cover
             raise ServiceNowConnectError("Unsupported command.")
     except (ServiceNowConnectError, AgentBuilderError, ValueError) as exc:
