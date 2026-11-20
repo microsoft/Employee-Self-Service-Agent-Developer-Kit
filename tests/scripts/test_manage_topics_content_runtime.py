@@ -144,6 +144,8 @@ def test_content_actions_require_an_alm_enrolled_development_target(monkeypatch,
     assert result["status"] == "blocked"
     assert "dev_alm_required" in result["blockers"]
     assert "Development" in result["userMessage"] and "ALM" in result["userMessage"]
+    # Diagnostics Topics stay on Dev; the blocker must not send makers to promote them to Test or Production.
+    assert "promotion" not in result["userMessage"]
     assert "No topics were changed" in result["userMessage"]
     backend.components.submit_state_payload.assert_not_called()
 

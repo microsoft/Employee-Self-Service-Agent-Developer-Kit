@@ -18,8 +18,8 @@ completed enable/disable or promise draft/published isolation.
 
 Add uses the same reviewed flow for sets with shipped content and requires a live
 Development agent enrolled in ALM; saved setup data alone does not satisfy that requirement.
-Nothing is published by this command. Use promotion for Test and Production;
-add never writes to those agents.
+Nothing is published by this command. Add never writes to Test or Production
+agents.
 
 ## Naming and compatibility
 
@@ -429,8 +429,10 @@ For an Add request containing `diagnostics`, give this notice with the review
 and before its approval question. It is required even if the maker skipped
 set selection. Do not add a second confirmation or change `approvalQuestion`.
 
-> Diagnostics Topics are an experimental aid for development and test agents.
-> The model writes the record; it is not an audit log. Without special settings
+> Diagnostics Topics are an experimental aid for Development agents only. While
+> the set is on, every answer that used a tool first calls the record topic, so
+> answers are slower. The model writes the record; it is not an audit log.
+> Without special settings
 > on the Copilot side, the record topic is rarely offered, so a report may have
 > no recorded search results. Report problems with Add, Enable or
 > Disable to the [kit's GitHub Issues](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/issues).
@@ -441,8 +443,9 @@ helper's recovery guidance instead of implying the set is ready.
 
 > After they are on, publish in Copilot Studio, then ask a
 > question followed by `/diagnose` in the same chat. Microsoft 365 Copilot may
-> take time to serve the new version; one test took 45 minutes. Disable the
-> set in Dev before promoting to Production.
+> take time to serve the new version; one test took 45 minutes. Promotion
+> carries the set's on/off state to the next agent, so disable it in Dev and
+> publish before any promotion.
 
 These instructions do not authorize Enable or publishing. Enable needs its
 own review and approval. The maker publishes in Copilot Studio.

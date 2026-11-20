@@ -26,7 +26,7 @@ _BLOCKERS = (
     ({"wrong_component_kind"}, "A topic schema name is taken by another component kind.",
      "Check the named component in Copilot Studio."),
     ({"dev_alm_required"}, "Add requires a Development agent enrolled in ALM.",
-     "Select the enrolled Development agent; use promotion for Test and Production."),
+     "Select the enrolled Development agent, then make a new request."),
     ({"review_unavailable", "review_invalid", "session_consumed"},
      "This review is unavailable or has already been used.",
      "Make a new request for a fresh review and approval."),

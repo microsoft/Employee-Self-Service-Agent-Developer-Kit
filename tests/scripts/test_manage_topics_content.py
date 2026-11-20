@@ -376,3 +376,18 @@ def test_shipped_topics_convert_to_adaptive_dialogs(stem):
     assert result["success"] is True, result
     assert result["elementType"] == "AdaptiveDialog"
     assert result["objectModel"]["$kind"] == "AdaptiveDialog"
+
+
+@pytest.mark.parametrize("document", [
+    REFERENCE / "content" / "diagnostics" / "README.md",
+    REFERENCE.parents[1] / "skills" / "manage-topics" / "SKILL.md",
+])
+def test_diagnostics_guidance_keeps_the_set_in_dev_only(document):
+    # Promotion copies each topic's on/off state, and the record topic slows every answer that used a tool,
+    # so the set must be off in Dev before any promotion, Test included.
+    text = " ".join(document.read_text(encoding="utf-8").replace(">", " ").split())
+    assert "development and test agents" not in text
+    assert "before promoting to Production" not in text
+    assert "Development agents only" in text
+    assert "slower" in text
+    assert "before any promotion" in text
