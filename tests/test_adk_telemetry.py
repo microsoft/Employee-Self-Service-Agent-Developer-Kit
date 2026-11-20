@@ -41,6 +41,10 @@ import adk_telemetry as adk
 from flightcheck import telemetry as _fc
 
 
+def test_topic_test_crash_telemetry_remains_registered():
+    assert adk.SCRIPT_ERROR_ENTRY_POINTS["topic_test"] == "topic_test"
+
+
 @pytest.mark.parametrize("script_id", adk.SCRIPT_ERROR_ENTRY_POINTS)
 def test_script_entry_point_observes_crash_without_changing_exception(script_id, monkeypatch, captured_post):
     """Execute the actual CLI guard with a failing main, without tenant operations."""
@@ -74,6 +78,10 @@ def test_script_entry_point_observes_crash_without_changing_exception(script_id,
     assert data["failure_line"] == 2
     assert data["agent_type"] == "declarative_agent"
     assert "customer content" not in json.dumps(events)
+    assert not any(
+        event["name"] == "adk.capability.use"
+        for event in _captured_events(captured_post)
+    )
 
 
 @pytest.mark.parametrize("failure", [OSError, ValueError])
