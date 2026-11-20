@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.39 (POC)
+
+- Enable Create and Update topic entry points and align their labels and walkthroughs with native DA Dev authoring. Saving does not activate or publish topics.
+
 ## 0.4.38 (POC)
 
 - Added **Post an announcement** to the guided Customization rail. The action

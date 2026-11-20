@@ -1,18 +1,18 @@
 # Create a topic
 
-A **topic** is one conversation your agent can handle — for example, "submit a time-off request" or "reset my password".
+Describe the conversation you want your agent to handle.
 
-When you click **Create a topic**, a chat opens where you describe what you want in plain English. The kit will:
+Complete setup, then click **Create a topic**. Copilot will:
 
-- Generate trigger phrases (the things employees might say).
-- Build the conversation flow and adaptive cards.
-- Wire up the integration to ServiceNow, Workday, or your custom system if needed.
-- Save everything to your local working copy.
+- Read relevant current topics and draft the requested conversation.
+- Show the selected agent and exact proposed content.
+- Ask whether to save, change the details, or cancel.
+- Save one inactive topic to the selected editable Dev agent and verify its saved content.
 
-Nothing is pushed to production yet — that comes later with the Push button.
+Saving does not activate or publish the topic or verify employee chat behavior. Use **Update a topic** to change a selected mapped topic while keeping its identity and active state.
 
-### Examples
+Related instruction changes have their own preview and approval. Existing integration dependencies need a supported contract; Power Automate authoring takes place outside ADK. Conversation testing depends on the installed bounded capability and topic readiness.
 
-> "When someone asks about their PTO balance, look it up in Workday and show how many days they have left this year."
+## Example
 
-> "Let employees submit IT tickets for laptop issues. Ask for the make/model, what's wrong, and urgency, then file the ticket in ServiceNow."
+> "When someone asks where the equipment policy is, show this approved answer and support link."

@@ -125,11 +125,11 @@ test('announcement tutorial explains agent scope without tenant-wide promises', 
     assert.ok(src.includes('all users of this agent'));
 });
 
-test('topic actions send explicit intent through the not-yet-available gates', () => {
+test('topic actions send explicit intent to the normal authoring owners', () => {
     const create = ACTIONS.find(a => a.id === 'create');
     const update = ACTIONS.find(a => a.id === 'update');
-    assert.strictEqual(create.label, 'Create a topic (Coming Soon)');
-    assert.strictEqual(update.label, 'Update a topic (Coming Soon)');
+    assert.strictEqual(create.label, 'Create a topic');
+    assert.strictEqual(update.label, 'Update a topic');
     assert.strictEqual(create.query, 'Create a topic');
     assert.strictEqual(update.query, 'Update a topic');
 });
@@ -302,17 +302,17 @@ test('view container is in activitybar (primary sidebar)', () => {
     assert.strictEqual(pkg.contributes.viewsContainers.activitybar[0].id, 'essMakerActions');
 });
 
-test('topic command titles are marked coming soon', () => {
+test('topic command titles expose the supported authoring actions', () => {
     const commands = new Map(pkg.contributes.commands.map(command => [
         command.command, command.title,
     ]));
     assert.strictEqual(
         commands.get('essMaker.runCreate'),
-        'ESS Maker: Create a topic (Coming Soon)',
+        'ESS Maker: Create a topic',
     );
     assert.strictEqual(
         commands.get('essMaker.runUpdate'),
-        'Agent Developer Kit: Modify a topic (Coming Soon)',
+        'Agent Developer Kit: Modify a topic',
     );
 });
 
@@ -338,7 +338,7 @@ test('activates during startup so the guided layout is ready before startup sett
 });
 
 test('package version matches the current Maker artifact release', () => {
-    assert.strictEqual(pkg.version, '0.4.38');
+    assert.strictEqual(pkg.version, '0.4.39');
     assert.ok(fs.existsSync(path.join(__dirname, `ess-maker-profile-${pkg.version}.vsix`)));
     assert.ok(!fs.existsSync(path.join(__dirname, 'ess-maker-profile-0.4.37.vsix')));
 });

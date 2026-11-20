@@ -209,3 +209,23 @@ class TestWriteManifest:
         assert "topics/B.mcs.yml" in lines
         # First line is a comment header.
         assert lines[0].startswith("#")
+
+
+def test_cli_hands_local_drafts_to_create_review(tmp_path, capsys):
+    _fake_samples(tmp_path)
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    manifest = tmp_path / "drafts.txt"
+
+    assert ioot.main([
+        "--all", "--samples-root", str(tmp_path),
+        "--agent-dir", str(agent), "--schema-name", "msdyn_myschema",
+        "--tenant", "example", "--manifest-out", str(manifest),
+    ]) == 0
+
+    output = capsys.readouterr().out
+    assert "No remote topics were created or published." in output
+    assert "normal Create review and approval" in output
+    assert "push.py" not in output
+    assert (agent / "topics" / "WorkdayGetUserProfile.mcs.yml").exists()
+    assert "topics/WorkdayGetUserProfile.mcs.yml" in manifest.read_text()

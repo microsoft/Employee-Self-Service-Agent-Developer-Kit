@@ -11,27 +11,27 @@ Show the user this menu of available commands:
 
 Here's what I can help you with:
 
-| Command | What it does |
-|---------|-------------|
-| `/planner` | Type Enter to plan an ESS rollout — grounded scenarios, tasks, and owners (works before setup) |
-| `/roles` | Assign a rollout role (Workday/ServiceNow admin) to a person so they can see and pick up their tasks |
-| `/landing-page` | Configure the branding and content employees see when they open the ESS agent |
-| `/org-announcements` | Create and manage announcements for the selected deployed ESS agent |
-| `/connect-workday` | Connect the active ESS HR agent to Workday |
-| `/connect` | Choose an available integration |
-| `/create` | Create a workflow or evaluation test set locally |
-| `/update` | Update a workflow or evaluation test set locally |
-| `/delete` | Show DA-GA deletion availability |
-| `/scan` | Type Enter to scan your agent for compile errors and fix them |
-| `/review` | Type Enter to review a topic or evaluation test sets tagged for review |
-| `/test` | Type Enter to drive deployed topics; DA-GA workflow diagnostics are not yet available |
-| `/evaluate` | Type Enter to create, update, tag, review, run, view results, or delete evaluation test sets |
-| `/run` | Type Enter to run evaluation test sets or view run results |
-| `/flightcheck` | Type Enter to validate local agent files |
-| `/push` | Show native DA-GA deployment availability |
-| `/backup-template-configs` | Back up hybrid Workday reference-data template configs |
-| `/restore-template-configs` | Restore hybrid Workday reference-data template configs |
-| `/troubleshoot` | Show DA-GA integration troubleshooting availability |
+| Command                     | What it does                                                                                         |
+| --------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `/planner`                  | Type Enter to plan an ESS rollout: grounded scenarios, tasks, and owners (works before setup)        |
+| `/roles`                    | Assign a rollout role (Workday/ServiceNow admin) to a person so they can see and pick up their tasks |
+| `/landing-page`             | Configure the branding and content employees see when they open the ESS agent                        |
+| `/org-announcements`        | Create and manage announcements for the selected deployed ESS agent                                  |
+| `/connect-workday`          | Connect the active ESS HR agent to Workday                                                           |
+| `/connect`                  | Choose an available integration                                                                      |
+| `/create`                   | Draft and approve a topic save, or separately author evaluation sets                                 |
+| `/update`                   | Read and approve a topic update, or separately edit evaluation sets                                  |
+| `/delete`                   | Deletion is not available for DA-GA agents in this release                                           |
+| `/scan`                     | Type Enter to scan your agent for compile errors and fix them                                        |
+| `/review`                   | Type Enter to review a topic or evaluation test sets tagged for review                               |
+| `/test`                     | Use installed bounded topic testing when ready; otherwise report acceptance pending                  |
+| `/evaluate`                 | Type Enter to create, update, tag, review, run, view results, or delete evaluation test sets         |
+| `/run`                      | Type Enter to run evaluation test sets or view run results                                           |
+| `/flightcheck`              | Type Enter to validate local agent files                                                             |
+| `/push`                     | Inspect pending changes and approve selected topic, instruction, or evaluation saves                 |
+| `/backup-template-configs`  | Back up hybrid Workday reference-data template configs                                               |
+| `/restore-template-configs` | Restore hybrid Workday reference-data template configs                                               |
+| `/troubleshoot`             | Show DA-GA integration troubleshooting availability                                                  |
 
 Tip: Switch to **Plan** mode (type `/plan`) if you'd like to brainstorm or discuss changes before making them.
 

@@ -2,7 +2,7 @@
   "name": "ess-maker-profile",
   "displayName": "ESS Maker",
   "description": "Guided, plain-English experience for customizing your Employee Self-Service agent. POC.",
-  "version": "0.4.38",
+  "version": "0.4.39",
   "publisher": "microsoft-ess",
   "private": true,
   "engines": {
@@ -29,7 +29,7 @@
       },
       {
         "command": "essMaker.runCreate",
-        "title": "ESS Maker: Create a topic (Coming Soon)",
+        "title": "ESS Maker: Create a topic",
         "category": "ESS Maker"
       },
       {
@@ -64,7 +64,7 @@
       },
       {
         "command": "essMaker.runUpdate",
-        "title": "Agent Developer Kit: Modify a topic (Coming Soon)",
+        "title": "Agent Developer Kit: Modify a topic",
         "category": "Agent Developer Kit"
       },
       {

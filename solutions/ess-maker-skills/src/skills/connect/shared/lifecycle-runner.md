@@ -855,8 +855,10 @@ below apply only to providers without this flag.
   If this phase has `actionApplied: true` and `rollbackLabel`, resolve
   `{ROLLBACK_PUSH_GLOB}` from `phases.{id}.rollbackPushGlob` when
   `rollbackPushGlobFromAction: true`; otherwise use the contract's
-  `rollbackPushGlob`. Stop with manual attention if the required value is
-  missing. Restore and publish the exact pre-action state:
+  `rollbackPushGlob`. For either source, require one normalized relative path
+  beneath `topics/`, with no `..` segment or wildcard characters. If missing
+  or unsafe, stop for manual attention before any restore or push command.
+  Restore and publish the exact pre-action state only for that validated path:
 
   ```
   python scripts/checkpoint.py --revert-reason "{rollbackLabel}" --only "{ROLLBACK_PUSH_GLOB}"

@@ -51,6 +51,15 @@ def test_script_entry_point_observes_crash_without_changing_exception(script_id,
     assert isinstance(guard, ast.If)
     error = RuntimeError("customer content and secret must stay local")
     namespace = {"__name__": "__main__", "sys": sys}
+    if script_id == "push":
+        import push
+
+        namespace.update({
+            "_ensure_utf8_stdout": lambda: None,
+            "MinimalBotEvaluationError": push.MinimalBotEvaluationError,
+            "_exception_chain": push._exception_chain,
+            "json": json,
+        })
     exec(compile("def main():\n    raise failure\n", str(path), "exec"),
          {"failure": error}, namespace)
     namespace["cli"] = namespace["main"]
@@ -65,6 +74,35 @@ def test_script_entry_point_observes_crash_without_changing_exception(script_id,
     assert data["failure_line"] == 2
     assert data["agent_type"] == "declarative_agent"
     assert "customer content" not in json.dumps(events)
+
+
+@pytest.mark.parametrize("failure", [OSError, ValueError])
+def test_push_boundary_preserves_handled_error_evidence(failure, capsys, captured_post):
+    import push
+
+    error = failure("local operation failed")
+    error.evidence = {"remoteSaveConfirmed": True}
+    error.__cause__ = RuntimeError("original cause")
+    path = Path(push.__file__)
+    guard = ast.parse(path.read_text(encoding="utf-8-sig")).body[-1]
+
+    def failed_main():
+        raise error
+
+    namespace = {
+        "__name__": "__main__", "sys": sys, "json": json,
+        "main": failed_main, "_ensure_utf8_stdout": lambda: None,
+        "MinimalBotEvaluationError": push.MinimalBotEvaluationError,
+        "_exception_chain": push._exception_chain,
+    }
+    with pytest.raises(SystemExit) as raised:
+        exec(compile(ast.Module(body=[guard], type_ignores=[]), str(path), "exec"), namespace)
+    assert raised.value.code == 1
+    assert raised.value.__cause__ is error
+    result = json.loads(capsys.readouterr().err)
+    assert result["evidence"] == error.evidence
+    assert result["errors"] == push._exception_chain(error)
+    assert not captured_post
 
 
 def test_script_error_payload_is_closed_and_never_formats_exception(monkeypatch, captured_post):
@@ -3099,9 +3137,8 @@ def test_wired_capabilities_are_in_canonical_list():
         "connect",
         "topic_create", "topic_update", "topic_delete",
         "topic_review", "topic_test",
-        "workflow_create", "workflow_update", "workflow_delete",
         "workflow_test",
-        "evaluation_create", "evaluation_update", "evaluation_delete",
+        "evaluation_create", "evaluation_update",
         "cleanup", "troubleshoot",
         "publishing",
     }
@@ -3110,9 +3147,9 @@ def test_wired_capabilities_are_in_canonical_list():
 
 
 # --- reverse direction: every canonical capability must actually be emitted -
-def test_every_canonical_capability_is_actually_emitted():
+def test_every_active_canonical_capability_is_actually_emitted():
     """Reverse of ``test_wired_capabilities_are_in_canonical_list``: every
-    value declared in ``ADK_CAPABILITIES`` must be emitted somewhere in the
+    active value declared in ``ADK_CAPABILITIES`` must be emitted somewhere in the
     kit, so a dead value (added to the tuple but never wired to a real
     skill or entry point) fails CI.
 
@@ -3160,7 +3197,14 @@ def test_every_canonical_capability_is_actually_emitted():
             emitted.add(m.group(1))
 
     canonical = set(adk.ADK_CAPABILITIES)
-    dead = canonical - emitted
+    inactive = {
+        # Maker-facing workflow authoring and deletion are outside ADK.
+        "workflow_create", "workflow_update", "workflow_delete",
+        # Deployed evaluation-set deletion is delegated to Copilot Studio.
+        "evaluation_delete",
+    }
+    assert inactive.isdisjoint(emitted)
+    dead = canonical - emitted - inactive
     assert not dead, (
         "Capabilities declared in ADK_CAPABILITIES but never emitted anywhere "
         f"in the kit: {sorted(dead)}. Either wire them to a real skill / "

@@ -200,7 +200,7 @@ jobs:
     name: Lifecycle script test suite
     runs-on: ubuntu-latest
 
-    # Runs the tests/scripts suites, which cover the evaluation lifecycle
+    # Runs tests/test_adk_telemetry.py and the tests/scripts suites, which cover the evaluation lifecycle
     # (create/generate, review, runs, CSV export, push scoping) and the other
     # scripts helpers. Previously only tests/flightcheck ran in CI, so these
     # suites — including the evaluation review/run/CSV lifecycle tests — were
@@ -227,7 +227,7 @@ jobs:
 
     - name: Run lifecycle script test suite
       run: >-
-        python -m pytest tests/scripts
+        python -m pytest tests/scripts tests/test_adk_telemetry.py
         --ignore=tests/scripts/test_installer_launch.py
         --ignore=tests/scripts/test_installer_maker_profile.py
         -q
