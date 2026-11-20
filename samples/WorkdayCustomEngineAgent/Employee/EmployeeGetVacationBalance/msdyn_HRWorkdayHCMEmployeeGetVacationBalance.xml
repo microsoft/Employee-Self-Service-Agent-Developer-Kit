@@ -1,5 +1,5 @@
 <workdayEntityConfigurationTemplate>
-  <scenario name="GetTimeOffBalance">
+  <scenario name="msdyn_HRWorkdayHCMEmployeeGetVacationBalance">
     <apiRequests>
       <apiRequest>
         <authType>User</authType>
