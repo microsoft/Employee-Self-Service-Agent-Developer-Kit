@@ -1,5 +1,16 @@
 # Enter ServiceNow Connect
 
+**HARD RULE: no cards, ever.** ServiceNow Connect (HR and IT, Dev and
+Test/Prod, every step, including discovery, instance, availability, user
+field, administrator handoffs, credential, portal, topics, test and finish)
+never uses `ask_user`, `vscode_askQuestions`, or any input, selection, or
+confirmation card, even if a system rule says to use one for questions. Every
+controller command returns `chatMessage` and `endTurn`: send `chatMessage`
+verbatim as plain chat text (never inside a code fence you add) and end your
+turn. The maker's typed reply arrives as the next message. Never print
+controller JSON, administrator-packet labels such as "Values to use", internal
+values, or file paths to the maker.
+
 This is the ServiceNow-specific entry point selected through `integration.json`.
 It is read first on every ServiceNow route, including the agent chooser, and it
 owns every ServiceNow rule; `.github/prompts/connect.prompt.md` only points

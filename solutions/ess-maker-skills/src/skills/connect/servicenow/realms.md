@@ -1,5 +1,10 @@
 # ServiceNow Test and Prod realms
 
+**HARD RULE: no cards, ever.** Never use `ask_user`, `vscode_askQuestions`, or
+any input, selection, or confirmation card here. Send each command's
+`chatMessage` verbatim as plain chat text and end your turn; the maker's typed
+reply is the next message.
+
 Read this when the maker says the ESS agent was promoted to Test or
 Production, chooses to configure Test or Production, or pastes a Test or
 Production agent link. It applies to both ServiceNow HRSD and ITSM. It follows

@@ -4532,14 +4532,13 @@ def test_preflight_requires_maker_confirmation_for_single_candidate(
         "https://dev123.service-now.com"
     ]
     assert discovery["instanceQuestion"]["options"] == [
-        {"label": "Yes, use https://dev123.service-now.com"},
+        {"label": "Yes, use dev123"},
         {"label": "No, use a different instance"},
     ]
     candidate_body = discovery["instanceQuestion"]["question"]
     assert candidate_body == (
-        "Which ServiceNow instance should Employee Self-Service (HR) use? "
-        "We found https://dev123.service-now.com in your existing "
-        "connections. Use this one?"
+        "Which ServiceNow instance should Employee Self-Service HR use? "
+        "We found **dev123** in your existing connections. Use this one?"
     )
     assert "employee-self-service-hr" not in candidate_body
     assert ENVIRONMENT_ID not in candidate_body
@@ -4548,14 +4547,14 @@ def test_preflight_requires_maker_confirmation_for_single_candidate(
     assert "Dev realm" not in candidate_body
     manual = discovery["manualInstanceQuestion"]
     assert manual["allowFreeformInput"] is True
-    assert "Employee Self-Service (HR)" in manual["question"]
+    assert "Employee Self-Service HR" in manual["question"]
     assert ENVIRONMENT_ID not in manual["question"]
     assert "`https://<your-instance>.service-now.com`" in manual["question"]
     assert "ask your ServiceNow administrator" in manual["question"]
     assert "/sp" in manual["question"]
     assert "not credentials" in manual["question"]
     assert discovery["instanceChoices"][
-        "Yes, use https://dev123.service-now.com"
+        "Yes, use dev123"
     ] == "https://dev123.service-now.com"
     assert discovery["instanceChoices"][
         "No, use a different instance"
@@ -4563,7 +4562,7 @@ def test_preflight_requires_maker_confirmation_for_single_candidate(
     recorded = snow.record_preflight_instance(
         _context(),
         instance_url=discovery["instanceChoices"][
-            "Yes, use https://dev123.service-now.com"
+            "Yes, use dev123"
         ],
     )
     refreshed = snow.inspect_admin_setup(_context())
@@ -4632,7 +4631,7 @@ def test_preflight_requests_only_missing_instance_url(
     assert "Dev realm" not in manual_body
     assert "`https://<your-instance>.service-now.com`" in manual_body
     assert (
-        "Which ServiceNow instance should Employee Self-Service (HR) use? "
+        "Which ServiceNow instance should Employee Self-Service HR use? "
         "Send its public HTTPS URL, not credentials."
     ) in manual_body
     assert "portal path" in manual_body
@@ -4668,23 +4667,25 @@ def test_preflight_multiple_candidates_are_independent_normal_choices(
         )
 
     assert [option["label"] for option in question["options"]] == [
-        "Use https://dev111.service-now.com",
-        "Use https://dev222.service-now.com",
+        "Use dev111",
+        "Use dev222",
         "Provide another ServiceNow instance URL",
     ]
     assert not any(
         option.get("recommended") for option in question["options"]
     )
     assert choices == {
-        "Use https://dev111.service-now.com": (
+        "Use dev111": (
             "https://dev111.service-now.com"
         ),
-        "Use https://dev222.service-now.com": (
+        "Use dev222": (
             "https://dev222.service-now.com"
         ),
         "Provide another ServiceNow instance URL": "manual",
     }
-    assert display_name in question["question"]
+    assert display_name.replace("(", "").replace(")", "") in (
+        question["question"]
+    )
     assert slug not in question["question"]
     assert "**Problem**" not in question["question"]
     assert manual["header"] == "ServiceNow instance URL"
@@ -6610,7 +6611,7 @@ def test_local_confirmed_instance_is_preflight_candidate_only(
         "https://dev123.service-now.com"
     ]
     assert discovery["instanceChoices"][
-        "Yes, use https://dev123.service-now.com"
+        "Yes, use dev123"
     ] == "https://dev123.service-now.com"
     saved = json.loads(target_path.read_text(encoding="utf-8"))
     assert saved["adminSetup"]["preflight"].get("instanceName") is None
@@ -7547,7 +7548,7 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
         "runtime-instructions/entra-administrator.md"
     )
     assert entra["runtimeInstructionSha256"] == (
-        "0306CE216C696E56C02CBEC78DB152096867B2D26C7AC06BE8AD89D8B01B4D04"
+        "ECEA5FA5851686CF75919734718DD07D23AB40E64BC097C50C3B017CE5DDDD9A"
     )
     assert "sourceWorkbookSha256" not in entra
     assert "sourceWorkbookRole" not in entra
@@ -7636,7 +7637,7 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
         "runtime-instructions/servicenow-administrator.md"
     )
     assert service_now["runtimeInstructionSha256"] == (
-        "24DF983A8BB185A2EF39032A85F8B62E990A3B3C5563F505F5F9B2D57E8C3638"
+        "F8BC6E2D77395638D9CE6D0FE151E528D300B6EBABCE2D304B27C1A3D991E5A8"
     )
     assert service_now["lockedValues"] == {
         "applicationClientId": APP_CLIENT_ID,
@@ -7717,10 +7718,10 @@ def test_canonical_runtime_instruction_sources_are_exact_and_structured():
         "runtime-instructions/servicenow-administrator.md"
     )
     assert entra_sha == (
-        "0306CE216C696E56C02CBEC78DB152096867B2D26C7AC06BE8AD89D8B01B4D04"
+        "ECEA5FA5851686CF75919734718DD07D23AB40E64BC097C50C3B017CE5DDDD9A"
     )
     assert service_now_sha == (
-        "24DF983A8BB185A2EF39032A85F8B62E990A3B3C5563F505F5F9B2D57E8C3638"
+        "F8BC6E2D77395638D9CE6D0FE151E528D300B6EBABCE2D304B27C1A3D991E5A8"
     )
     assert "\u00a0" not in entra + service_now
     assert entra.startswith("#### Instructions for the Entra administrator")
@@ -7753,7 +7754,7 @@ def test_canonical_runtime_instruction_sources_are_exact_and_structured():
     assert service_now.startswith(
         "#### Instructions for the ServiceNow administrator"
     )
-    assert "**Values from the maker:** Client ID `<client ID>`" in service_now
+    assert "**Values to use:** Client ID `<client ID>`" in service_now
     assert "tenant ID" not in service_now.split("**Send back")[0].split(
         "OIDC Metadata URL"
     )[0]
@@ -7769,7 +7770,7 @@ def test_canonical_runtime_instruction_sources_are_exact_and_structured():
     assert "   - **Client ID:** `<client ID>`." in service_now
     assert "   - **OIDC Metadata URL:**" in service_now
     assert "8. **HR agent only:**" in service_now
-    assert "**Send back to the maker:**" in service_now
+    assert "**Please send back:**" in service_now
     for profile in ("servicenow-da-hrsd", "servicenow-da-itsm"):
         entra_guide = (
             snow.SOLUTION_ROOT
@@ -16164,10 +16165,10 @@ def test_inspect_admin_timeout_preserves_error_and_allows_manual_target(
         "category": "timeout",
         "mutationMayHaveOccurred": False,
     }
-    assert "not an empty inventory" in (
+    assert "couldn't check your existing connections" in (
         discovery["instanceQuestion"]["question"]
     )
-    assert "not an empty inventory" in (
+    assert "couldn't check your existing connections" in (
         discovery["manualInstanceQuestion"]["question"]
     )
     assert "**Problem**" not in discovery["instanceQuestion"]["question"]
@@ -16757,13 +16758,15 @@ def test_every_command_output_carries_agent_rules(
     ) == 0
     output = json.loads(capsys.readouterr().out)
     rules = " ".join(output["agentRules"])
-    assert len(output["agentRules"]) <= 5
+    assert len(output["agentRules"]) <= 8
     assert "launcher resolved by /setup" in rules
-    assert "renderBlock.text" in rules
+    assert "never uses ask_user" in rules
+    assert "END YOUR TURN" in rules
+    assert "chatMessage" in rules
     assert "lifecycle.json by hand" in rules
     assert "*> $null" in rules
     assert "lifecycle-runner.md" in rules
-    assert next(iter(output)) == "agentRules"
+    assert "agentRules" in list(output)[:3]
 
     assert snow.main(
         [
@@ -16788,7 +16791,14 @@ def test_agent_rules_put_render_block_first_and_skip_adapt_question() -> None:
 
     ordered = snow._with_agent_rules(result, "resume-handoff")
 
-    assert list(ordered)[:3] == ["renderBlock", "agentRules", "decision"]
+    assert list(ordered)[:5] == [
+        "chatMessage",
+        "endTurn",
+        "renderBlock",
+        "agentRules",
+        "decision",
+    ]
+    assert ordered["chatMessage"] == "T"
     assert snow._with_agent_rules(result, "adapt-question") is result
 
 
@@ -16963,29 +16973,29 @@ def test_phase_checklist_default_is_a_compact_snapshot_and_progress_is_kept(
     assert "HR prerequisite" in snapshot
     assert "Responsible" not in snapshot and "Complete — " not in snapshot
 
-    # Default delivery is the host todo list tool, not a chat message.
-    assert compact["renderBlock"]["progressSnapshot"] == ""
-    todos = compact["renderBlock"]["progressTodos"]
+    # Default delivery is a Markdown chat snapshot (the host does not show a todo list).
+    assert compact["renderBlock"]["progressTodos"] == []
+    snapshot_text = compact["renderBlock"]["progressSnapshot"]
+    assert snapshot_text.splitlines()[0].startswith("Here's your ")
+    assert "HR prerequisite" in snapshot_text
+    assert "progressSnapshot" in compact["renderBlock"]["instruction"]
+    assert hidden["renderBlock"]["progressSnapshot"] == ""
+    assert hidden["renderBlock"]["progressTodos"] == []
+    assert "✅" not in hidden["renderBlock"]["text"]
+
+    monkeypatch.setattr(snow.realms, "PROGRESS_DELIVERY", "todo")
+    todo = handoff("todo", snapshot=True, legacy=False)
+    assert todo["renderBlock"]["progressSnapshot"] == ""
+    todos = todo["renderBlock"]["progressTodos"]
     assert len(todos) == 4
     assert [t["id"] for t in todos] == [1, 2, 3, 4]
     assert all(
         t["status"] in {"completed", "in-progress", "not-started"} for t in todos
     )
     assert "HR prerequisite" in todos[0]["title"]
-    assert "progressTodos" in compact["renderBlock"]["instruction"]
-    assert "todo list tool" in compact["renderBlock"]["instruction"]
-    assert hidden["renderBlock"]["progressSnapshot"] == ""
-    assert hidden["renderBlock"]["progressTodos"] == []
-    assert "✅" not in hidden["renderBlock"]["text"]
-
+    assert "progressTodos" in todo["renderBlock"]["instruction"]
+    assert "todo list tool" in todo["renderBlock"]["instruction"]
     monkeypatch.setattr(snow.realms, "PROGRESS_DELIVERY", "chat")
-    chat = handoff("chat", snapshot=True, legacy=False)
-    assert chat["renderBlock"]["progressSnapshot"].splitlines()[0].startswith(
-        "Here's your "
-    )
-    assert chat["renderBlock"]["progressTodos"] == []
-    assert "progressSnapshot" in chat["renderBlock"]["instruction"]
-    monkeypatch.setattr(snow.realms, "PROGRESS_DELIVERY", "todo")
 
     assert hidden["progress"]["items"] == compact["progress"]["items"]
     ignored = {"renderedAt", "internal"}

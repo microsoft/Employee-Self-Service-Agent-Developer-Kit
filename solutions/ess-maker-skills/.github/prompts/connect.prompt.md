@@ -5,6 +5,8 @@ description: "Connect Workday or another supported integration"
 
 # Connect
 
+**HARD RULE for ServiceNow (HR and IT, Dev and Test/Prod, every step).** ServiceNow Connect never uses `ask_user`, `vscode_askQuestions`, or any input, selection, or confirmation card, even when another instruction says to use one for questions. Every command returns `chatMessage`: send it verbatim as plain chat text and end your turn. The maker's typed reply arrives as the next message; map it with `match-reply`. Never print controller JSON, administrator-packet labels, internal values, or file paths to the maker.
+
 **ServiceNow route — read first.** When the selected integration is ServiceNow (including the agent-chooser path, before routing, choosing an agent, or running any command), read and follow `src/skills/connect/servicenow/entry.md` before any action.
 
 **Entry routing comes first.** Missing setup does not stop integration selection.

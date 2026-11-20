@@ -189,7 +189,12 @@ def test_servicenow_connect_docs_suppress_flightcheck_health_table() -> None:
 def test_connect_prompt_keeps_only_a_servicenow_routing_line() -> None:
     prompt_path = _SOLUTION / ".github" / "prompts" / "connect.prompt.md"
     lines = prompt_path.read_text(encoding="utf-8").splitlines()
-    servicenow_lines = [line for line in lines if "servicenow" in line.casefold()]
+    servicenow_lines = [
+        line
+        for line in lines
+        if "servicenow" in line.casefold()
+        and not line.startswith("**HARD RULE for ServiceNow")
+    ]
 
     assert len(servicenow_lines) == 1
     routing = servicenow_lines[0]
@@ -1003,7 +1008,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "Don't send any secret" in entra_admin
     assert "Enable JTI claim verification:** off" in snow_admin
     assert "`/v2.0` URL" in snow_admin
-    assert "Send back to the maker" in snow_admin
+    assert "Please send back" in snow_admin
     assert "--stage servicenow" in oidc
     assert "`Expected result`" not in oidc
     assert "choose `Not yet`" not in oidc

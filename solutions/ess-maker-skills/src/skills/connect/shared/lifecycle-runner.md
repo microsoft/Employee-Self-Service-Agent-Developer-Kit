@@ -304,6 +304,10 @@ business-group acknowledgement.
 
 ### Other providers
 
+ServiceNow never reaches this section: its plan, availability, and start
+questions come from the controller as plain chat text (`chatMessage`), and it
+never asks the generic start-confirmation card.
+
 Skip this section only when the state file has `attested: true` and
 `acceptedContractRevision` equals the current contract revision. A contract
 revision change must show the new complete plan before a newly introduced

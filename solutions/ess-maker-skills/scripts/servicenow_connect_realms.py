@@ -893,15 +893,18 @@ as its own chat message. Nothing is pinned by the host. Set False to hide it.
 Recorded stages, statuses, and resume logic never depend on this switch.
 """
 
-PROGRESS_DELIVERY = "todo"
+PROGRESS_DELIVERY = "chat"
 """How a visible progress list reaches the maker.
 
-``"todo"`` (default): the render block carries ``progressTodos``, a structured
-list the agent writes into the host's todo list tool, which keeps one list that
-is updated in place. No Markdown progress message is posted in this mode.
-``"chat"``: the render block carries ``progressSnapshot`` instead, an ordinary
-Markdown list the agent posts as its own chat message each time. Both modes use
-the same status data and never change resume logic.
+``"chat"`` (default): the render block carries ``progressSnapshot``, an ordinary
+Markdown list the agent posts as its own chat message at the start, at each
+phase change, when blocked, and at the final handoff. The VS Code agent host
+does not display the agent's todo list to the maker, so this is the only form
+the maker reliably sees.
+``"todo"``: the render block carries ``progressTodos`` instead, a structured
+list for a host todo list tool that keeps one list updated in place. Only use
+it on a host that renders that tool. Both modes use the same status data and
+never change resume logic.
 """
 
 _SNAPSHOT_STATUS = {
