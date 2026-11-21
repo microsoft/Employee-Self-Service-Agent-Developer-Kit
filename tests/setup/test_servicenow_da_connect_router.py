@@ -1462,3 +1462,15 @@ def test_target_change_notice_is_routed_in_shared_docs() -> None:
     for name in ("entry.md", "realms.md"):
         text = " ".join((root / name).read_text(encoding="utf-8").split())
         assert "target-change-handoff" in text, name
+
+
+def test_test_failure_handoff_is_routed_in_docs() -> None:
+    root = _SOLUTION / "src" / "skills" / "connect"
+    for path in (
+        root / "servicenow" / "entry.md",
+        root / "servicenow-da-hrsd" / "actions" / "test-connection.md",
+        root / "servicenow-da-itsm" / "actions" / "test-connection.md",
+    ):
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert "test-failure-handoff" in text, path.name
+        assert "shared identity failure" in text, path.name

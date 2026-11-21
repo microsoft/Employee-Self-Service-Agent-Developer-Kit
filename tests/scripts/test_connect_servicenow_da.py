@@ -17721,3 +17721,104 @@ def test_dev_opening_stays_generic_without_another_connected_agent(
         )
         assert "We'll connect" in snow._dev_opening_text(context, None)
     assert other_context["agent"]["id"] != context["agent"]["id"]
+
+
+_SAVED_MAPPING_STATE = {
+    "evidence": {
+        "identityMapping": {
+            "tokenClaimName": "email",
+            "serviceNowUserField": "email",
+        }
+    }
+}
+
+
+@pytest.mark.parametrize(
+    ("profile", "audience", "other", "records", "record"),
+    [
+        ("itsm", "IT", "HR", "tickets", "ticket"),
+        ("hrsd", "HR", "IT", "cases", "case"),
+    ],
+)
+def test_test_failure_without_evidence_asks_for_the_specific_error(
+    profile: str, audience: str, other: str, records: str, record: str
+) -> None:
+    with snow.product_profile_context(profile):
+        result = snow.test_failure_handoff(_SAVED_MAPPING_STATE)
+        wrapped = snow._with_agent_rules(result, "test-failure-handoff")
+    assert result["recordsNothing"] is True
+    assert result["decision"] == "test-failure-information-required"
+    assert wrapped["endTurn"] is True
+    assert "pendingCard" not in wrapped and "nextCommand" not in wrapped
+    assert wrapped["chatMessage"] == (
+        f"{audience} didn't return the expected {records}. We'll check the "
+        f"{audience} setup information already supplied to narrow down the "
+        "problem.\n\n"
+        "If more information is needed, we'll ask for the specific error or "
+        f"result\u2014not the whole {other} setup history.\n\n"
+        "We haven't identified the cause yet.\n\n"
+        "Did the Test pane show an error, an empty result, or something "
+        "else? If there was an error, send only its text without "
+        f"{record} contents, employee identifiers, tokens, or other secrets."
+    )
+    assert "Never infer a shared identity failure" in result["afterReply"]
+    assert "Yes/No" not in wrapped["chatMessage"]
+
+
+def test_test_failure_names_a_mismatch_only_when_evidence_differs() -> None:
+    with snow.product_profile_context("itsm"):
+        mismatch = snow.test_failure_handoff(
+            _SAVED_MAPPING_STATE, "employee_id", "employee_number"
+        )
+        same = snow.test_failure_handoff(_SAVED_MAPPING_STATE, "EMAIL", "Email")
+        no_mapping = snow.test_failure_handoff(
+            {"evidence": {}}, "employee_id", "employee_number"
+        )
+        with pytest.raises(snow.ServiceNowConnectError):
+            snow.test_failure_handoff(_SAVED_MAPPING_STATE, "employee_id")
+        with pytest.raises(snow.ServiceNowConnectError):
+            snow.test_failure_handoff(
+                _SAVED_MAPPING_STATE, "employee_id", "a secret value"
+            )
+    assert mismatch["decision"] == "identity-mapping-review-required"
+    text = mismatch["renderBlock"]["text"]
+    assert text == (
+        "IT didn't return the expected tickets. We'll check the IT setup "
+        "information already supplied to narrow down the problem.\n\n"
+        "The supplied evidence shows a mismatch between the sign-in claim "
+        "and ServiceNow user field.\n\n"
+        "Ask your ServiceNow administrator to review the mismatch with your "
+        "Entra administrator and confirm a supported mapping that accounts "
+        "for the shared setup's existing uses. Don't change an existing "
+        "OIDC configuration serving SSO or the Microsoft Graph connector.\n\n"
+        "Bring back their non-sensitive confirmation that the configuration "
+        "is saved and supports IT, the exact User Claim and User Field, and "
+        "any changed registration or claim values. If a custom claim "
+        "changed, also bring back its completed-setup confirmation for the "
+        "intended employees.\n\n"
+        "We'll recheck the affected setup before you repeat the IT request "
+        "in this agent's Test pane."
+    )
+    assert "any message means they want to continue" in mismatch["afterReply"]
+    assert mismatch["recordsNothing"] is True
+    for fallback in (same, no_mapping):
+        assert fallback["decision"] == "test-failure-information-required"
+        assert "We haven't identified the cause yet." in fallback["renderBlock"]["text"]
+
+
+def test_test_failure_command_runs_after_context_without_a_card(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(snow, "ACTIVE_AGENT_NAME", None)
+    context, _, profile = _recording_setup(monkeypatch, tmp_path, "itsm")
+    previous = snow.ACTIVE_PROFILE
+    try:
+        with snow.product_profile_context(profile):
+            result = snow.test_failure_handoff(snow._load_lifecycle_state(context))
+    finally:
+        snow.ACTIVE_PROFILE = previous
+    assert result["renderBlock"]["text"].startswith(
+        "IT didn't return the expected tickets."
+    )

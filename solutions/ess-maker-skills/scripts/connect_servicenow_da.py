@@ -12908,6 +12908,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--target",
         help="Friendly name of the new environment or agent (never an ID or URL).",
     )
+    test_failure_parser = subparsers.add_parser(
+        "test-failure-handoff",
+        help=(
+            "Fixed reply when this agent's Test pane request fails although "
+            "another ESS agent worked with the same connection; records "
+            "nothing."
+        ),
+    )
+    test_failure_parser.add_argument("--reported-claim")
+    test_failure_parser.add_argument("--reported-user-field")
     service_areas_parser = subparsers.add_parser(
         "empty-service-areas-handoff",
         help=(
@@ -14039,6 +14049,120 @@ def target_change_handoff(
     }
 
 
+_TEST_FAILURE_AFTER_REPLY_UNKNOWN = (
+    "End your turn after sending the message; this is a plain chat "
+    "question, not a card. Map the maker's typed reply: an error, record "
+    "record-test --result fail without a failure category; an empty result, "
+    "record-test --result empty (for an empty HR service-area list, run "
+    "empty-service-areas-handoff instead); a reported saved metadata URL "
+    "containing /v2.0, run metadata-url-handoff with that exact URL; a claim "
+    "and User Field the administrators supplied, run this command again with "
+    "--reported-claim and --reported-user-field. Never infer a shared "
+    "identity failure, missing consent or a /v2.0 URL from a generic "
+    "failure, and never ask for more than what is still missing."
+)
+_TEST_FAILURE_AFTER_REPLY_MISMATCH = (
+    "When the maker returns, any message means they want to continue. Do "
+    "not ask a Yes/No question. Record only the administrators' "
+    "non-sensitive reply with the existing record-identity-direct "
+    "commands. If a custom claim changed, run claim-confirmation-handoff "
+    "--custom-claim (add --claim-name-given when the name was supplied) and "
+    "ask only for the missing confirmations. Do not change an existing "
+    "OIDC configuration serving SSO or the Microsoft Graph connector. Then "
+    "recheck the affected setup before the maker repeats the request in "
+    "the Test pane."
+)
+
+
+def test_failure_handoff(
+    state: dict[str, Any] | None,
+    reported_claim: str | None = None,
+    reported_user_field: str | None = None,
+) -> dict[str, Any]:
+    """Fixed reply when this agent's test fails although another agent worked.
+
+    The reply never assumes a shared identity failure. A claim and User Field
+    mismatch is named only when the supplied claim and User Field differ from
+    the saved mapping; otherwise the maker is asked for the specific error or
+    result. Nothing is recorded.
+    """
+    copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
+    audience = copy_["audience"]
+    other = "IT" if audience == "HR" else "HR"
+    opening = (
+        f"{audience} didn't return the expected {copy_['records']}. We'll "
+        f"check the {audience} setup information already supplied to narrow "
+        "down the problem."
+    )
+    more_info = (
+        "If more information is needed, we'll ask for the specific error or "
+        f"result\u2014not the whole {other} setup history."
+    )
+    mismatch = False
+    if reported_claim is not None or reported_user_field is not None:
+        if not reported_claim or not reported_user_field:
+            raise ServiceNowConnectError(
+                "Pass both --reported-claim and --reported-user-field."
+            )
+        claim = _safe_identity_name(reported_claim, "user_claim")
+        field = _safe_identity_name(reported_user_field, "user_field")
+        evidence = state.get("evidence") if isinstance(state, dict) else None
+        saved = (
+            evidence.get("identityMapping") if isinstance(evidence, dict) else None
+        )
+        if isinstance(saved, dict):
+            saved_claim = str(saved.get("tokenClaimName") or "").casefold()
+            saved_field = str(saved.get("serviceNowUserField") or "").casefold()
+            mismatch = bool(saved_claim and saved_field) and (
+                claim.casefold() != saved_claim
+                or field.casefold() != saved_field
+            )
+    if mismatch:
+        text = "\n\n".join(
+            [
+                opening,
+                "The supplied evidence shows a mismatch between the sign-in "
+                "claim and ServiceNow user field.",
+                "Ask your ServiceNow administrator to review the mismatch "
+                "with your Entra administrator and confirm a supported "
+                "mapping that accounts for the shared setup's existing "
+                "uses. Don't change an existing OIDC configuration serving "
+                "SSO or the Microsoft Graph connector.",
+                "Bring back their non-sensitive confirmation that the "
+                f"configuration is saved and supports {audience}, the exact "
+                "User Claim and User Field, and any changed registration or "
+                "claim values. If a custom claim changed, also bring back "
+                "its completed-setup confirmation for the intended "
+                "employees.",
+                "We'll recheck the affected setup before you repeat the "
+                f"{audience} request in this agent's Test pane.",
+            ]
+        )
+        decision = "identity-mapping-review-required"
+        after_reply = _TEST_FAILURE_AFTER_REPLY_MISMATCH
+    else:
+        text = "\n\n".join(
+            [
+                opening,
+                more_info,
+                "We haven't identified the cause yet.",
+                "Did the Test pane show an error, an empty result, or "
+                "something else? If there was an error, send only its text "
+                f"without {copy_['record']} contents, employee identifiers, "
+                "tokens, or other secrets.",
+            ]
+        )
+        decision = "test-failure-information-required"
+        after_reply = _TEST_FAILURE_AFTER_REPLY_UNKNOWN
+    return {
+        "status": "test-failure-reply",
+        "decision": decision,
+        "recordsNothing": True,
+        "renderBlock": {"kind": "waiting", "text": text},
+        "afterReply": after_reply,
+    }
+
+
 def metadata_url_handoff(metadata_url: str) -> dict[str, Any]:
     """Fixed reply when the administrator reports a `/v2.0` metadata URL.
 
@@ -14600,6 +14724,12 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "target-change-handoff":
             result = target_change_handoff(context, args.change, args.target)
+        elif args.command == "test-failure-handoff":
+            result = test_failure_handoff(
+                _load_lifecycle_state(context),
+                args.reported_claim,
+                args.reported_user_field,
+            )
         elif args.command in REALM_COMMANDS:
             result = run_realm_command(context, args)
         elif args.command not in {

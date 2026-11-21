@@ -658,6 +658,69 @@ agent's Test pane and tell us whether the service areas appear.
 
 **End message.**
 
+**Another agent worked, this one's test failed.** When the maker says another
+ESS agent (HR or IT) worked with this connection but this agent's Test pane
+request did not return the expected results, get the Message from the
+controller instead of writing it: run
+`python scripts/connect_servicenow_da.py --provider {PROVIDER} test-failure-handoff`,
+send `chatMessage` verbatim as the whole reply, and follow `endTurn` and
+`afterReply`. The command records nothing and is a plain chat question: no card,
+no Yes/No. Never assume a shared identity failure merely because this agent's
+request failed. Add `--reported-claim "<claim>" --reported-user-field "<field>"`
+only when the administrators' reply or the maker's evidence actually names the
+claim and User Field; the controller names the mismatch only when they differ
+from the saved mapping, and otherwise asks for the specific error or result. Ask
+only for what is still missing, and never for the other agent's whole setup
+history. Missing consent or a `/v2.0` metadata URL is named only when a
+supported check or an actual reported URL shows it (use `metadata-url-handoff`
+for the URL); never infer either from a generic failure. When the maker
+returns, any message means they want to continue: record only the
+administrators' non-sensitive reply, recheck the affected setup, then ask the
+maker to repeat the request in the Test pane. The Message without identity
+evidence is:
+
+**Message:**
+
+IT didn't return the expected tickets. We'll check the IT setup information
+already supplied to narrow down the problem.
+
+If more information is needed, we'll ask for the specific error or result—not
+the whole HR setup history.
+
+We haven't identified the cause yet.
+
+Did the Test pane show an error, an empty result, or something else? If there
+was an error, send only its text without ticket contents, employee identifiers,
+tokens, or other secrets.
+
+**End message.**
+
+With evidence that the claim and User Field differ from the saved mapping, the
+reply continues after its first paragraph with:
+
+**Message:**
+
+The supplied evidence shows a mismatch between the sign-in claim and ServiceNow
+user field.
+
+Ask your ServiceNow administrator to review the mismatch with your Entra
+administrator and confirm a supported mapping that accounts for the shared
+setup's existing uses. Don't change an existing OIDC configuration serving SSO
+or the Microsoft Graph connector.
+
+Bring back their non-sensitive confirmation that the configuration is saved and
+supports IT, the exact User Claim and User Field, and any changed registration
+or claim values. If a custom claim changed, also bring back its completed-setup
+confirmation for the intended employees.
+
+We'll recheck the affected setup before you repeat the IT request in this
+agent's Test pane.
+
+**End message.**
+
+For the HR agent the same message is used with HR and IT swapped and "cases" for
+"tickets".
+
 **Claim attributes missing.** When the Entra administrator says the identifiers
 are not populated for every employee who will use this agent, pause the claim
 and show the following. Never populate directory attributes or audit employee
