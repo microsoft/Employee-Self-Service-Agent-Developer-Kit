@@ -144,18 +144,24 @@ beginDialog:
 
     - kind: BeginDialog
       id: get_leave_balance
-      displayName: Get Leave Balance
+      displayName: Read leave balances through the SOAP adapter
       input:
         binding:
-          parameters: ="{""params"":[{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """},{""key"":""{As_Of_Effective_Date}"",""value"":""" & Text(Topic.AsOfEffectiveDate, "yyyy-MM-dd") & """}]}"
+          requestParametersJson: |-
+            =JSON({
+              Employee_ID: Global.ESS_UserContext_Employee_Id,
+              As_Of_Effective_Date: Text(Topic.AsOfEffectiveDate, "yyyy-MM-dd")
+            }, JSONFormat.Compact)
           scenarioName: msdyn_WorkdayHCMRuntimeEmployeeGetVacationBalance
 
-      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemReadSOAPExecution
       output:
         binding:
-          errorResponse: Topic.balanceErrorResponse
+          connectorStatus: Topic.balanceConnectorStatus
+          errorMessage: Topic.balanceErrorResponse
+          failureReason: Topic.balanceFailureReason
           isSuccess: Topic.balanceIsSuccess
-          workdayResponse: Topic.balanceResponse
+          responseJson: Topic.balanceResponse
 
     - kind: ParseValue
       id: parse_balance
@@ -270,7 +276,6 @@ beginDialog:
                     {
                       type: "Container",
                       style: "emphasis",
-                      bleed: true,
                       items: [
                         {
                           type: "TextBlock",
@@ -611,6 +616,41 @@ beginDialog:
         - id: should_continue_building
           condition: =DateValue(Topic.currentDate) <= DateValue(Topic.endDate)
           actions:
+            - kind: BeginDialog
+              id: submit_time_off_date
+              displayName: Submit time off date through the SOAP adapter
+              input:
+                binding:
+                  requestParametersJson: |-
+                    =JSON({
+                      Employee_ID: Global.ESS_UserContext_Employee_Id,
+                      timeoff_Date: Topic.currentDate,
+                      timeoff_Time_Off_Type: Topic.timeOffType,
+                      timeoff_Hours_Per_Day: Topic.hoursPerDay,
+                      timeoff_Comment: Topic.timeOffComment,
+                      timeoff_Reason: Topic.resolvedReasonID
+                    }, JSONFormat.Compact)
+                  scenarioName: msdyn_WorkdayHCMRuntimeEmployeeEnterTimeOff_MultiDay
+
+              dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemWriteSOAPExecution
+              output:
+                binding:
+                  connectorStatus: Topic.connectorStatus
+                  errorMessage: Topic.errorResponse
+                  failureReason: Topic.failureReason
+                  isSuccess: Topic.isSuccess
+                  responseJson: Topic.workdayResponse
+
+            - kind: ConditionGroup
+              id: stop_date_loop_on_failure
+              conditions:
+                - id: date_submission_failed
+                  condition: =Topic.isSuccess = false
+                  actions:
+                    - kind: GotoAction
+                      id: goto_result_on_date_failure
+                      actionId: init_last_error
+
             # Append date to list (with comma separator if not first)
             - kind: SetVariable
               id: append_date
@@ -634,29 +674,8 @@ beginDialog:
       variable: Topic.totalDays
       value: =Topic.newIterator
 
+    # Legacy behavior removed:
     # Make single API call - Plugin will build XML entries from date list
-    - kind: BeginDialog
-      id: execute_workday_multiday
-      displayName: Submit Multi-Day Time Off Request
-      input:
-        binding:
-          parameters: |-
-            ="{""params"":[" &
-            "{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """}," &
-            "{""key"":""{timeoff_Dates}"",""value"":""" & Topic.dateList & """}," &
-            "{""key"":""{timeoff_Time_Off_Type}"",""value"":""" & Topic.timeOffType & """}," &
-            "{""key"":""{timeoff_Hours_Per_Day}"",""value"":""" & Topic.hoursPerDay & """}," &
-            "{""key"":""{timeoff_Comment}"",""value"":""" & Topic.timeOffComment & """}," &
-            "{""key"":""{timeoff_Reason}"",""value"":""" & Topic.resolvedReasonID & """}" &
-            "]}"
-          scenarioName: msdyn_WorkdayHCMRuntimeEmployeeEnterTimeOff_MultiDay
-
-      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
-      output:
-        binding:
-          errorResponse: Topic.errorResponse
-          isSuccess: Topic.isSuccess
-          workdayResponse: Topic.workdayResponse
 
     # Parse error message for display
     - kind: SetVariable

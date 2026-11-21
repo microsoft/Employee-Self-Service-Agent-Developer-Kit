@@ -42,18 +42,37 @@ beginDialog:
 
     - kind: BeginDialog
       id: Gt044B
-      displayName: Redirect to Workday Get Common Execution
+      displayName: Read direct-report company codes through the SOAP adapter
       input:
         binding:
-          parameters: ="{""params"":[{""key"":""{ManagerOrgId}"",""value"":""" & Global.ESS_UserContext_ManagerOrganizationId & """},{""key"":""{As_Of_Effective_Date}"",""value"":"""& Text(Today(), "yyyy-MM-dd") &"""}]}"
           scenarioName: msdyn_WorkdayHCMRuntimeManagerDirectCompanyCode
+          requestParametersJson: |-
+            =JSON({
+              ManagerOrgId: Global.ESS_UserContext_ManagerOrganizationId,
+              As_Of_Effective_Date: Text(Today(), "yyyy-MM-dd")
+            }, JSONFormat.Compact)
 
-      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemReadSOAPExecution
       output:
         binding:
-          errorResponse: Topic.errorResponse
+          connectorStatus: Topic.connectorStatus
+          errorMessage: Topic.errorResponse
+          failureReason: Topic.failureReason
           isSuccess: Topic.isSuccess
-          workdayResponse: Topic.workdayResponse
+          responseJson: Topic.workdayResponse
+
+    - kind: ConditionGroup
+      id: checkManagerCompanyCodeSuccess
+      conditions:
+        - id: managerCompanyCodeFailed
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendManagerCompanyCodeError
+              activity: I encountered an error retrieving your team's company code information. Please try again later or contact support.
+
+            - kind: EndDialog
+              id: endManagerCompanyCodeOnError
 
     - kind: ParseValue
       id: aIxWzK
@@ -121,12 +140,15 @@ beginDialog:
               displayName: Filter for the given EmployeeName
               variable: Topic.workdayResponseTable
               value: |
-                =Filter(
-                    Topic.workdayResponseTable,
-                    FirstName = Topic.EmployeeName Or 
-                    LastName = Topic.EmployeeName Or 
-                    Concatenate(FirstName, " ", LastName) = Topic.EmployeeName Or 
-                    Concatenate(LastName, " ", FirstName) = Topic.EmployeeName
+                =With(
+                    {requestedName: Lower(Trim(Topic.EmployeeName))},
+                    Filter(
+                        Topic.workdayResponseTable,
+                        Lower(Trim(FirstName)) = requestedName Or
+                        Lower(Trim(LastName)) = requestedName Or
+                        Lower(Trim(Concatenate(FirstName, " ", LastName))) = requestedName Or
+                        Lower(Trim(Concatenate(LastName, " ", FirstName))) = requestedName
+                    )
                 )
 
             - kind: ConditionGroup
@@ -138,8 +160,8 @@ beginDialog:
                   actions:
                     - kind: SendActivity
                       id: SN9frD
-                      displayName: Respond with no access message
-                      activity: It looks like you don't have access to this information. Try making a new request.
+                      displayName: Respond with no matching direct report
+                      activity: I couldn't find {Topic.EmployeeName} among the direct reports returned by Workday. Verify the employee name and try again.
 
                     - kind: SetVariable
                       id: setVariable_wd0UBE

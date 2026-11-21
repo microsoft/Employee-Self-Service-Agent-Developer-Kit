@@ -46,18 +46,37 @@ beginDialog:
 
     - kind: BeginDialog
       id: jJpz3n
-      displayName: Redirect to Workday Get Common Execution
+      displayName: Read direct-report cost centers through the SOAP adapter
       input:
         binding:
-          parameters: ="{""params"":[{""key"":""{ManagerOrgId}"",""value"":""" & Global.ESS_UserContext_ManagerOrganizationId & """},{""key"":""{As_Of_Effective_Date}"",""value"":"""& Text(Today(), "yyyy-MM-dd") &"""}]}"
-          scenarioName: ="msdyn_WorkdayHCMRuntimeManagerDirectCostCenter"
+          scenarioName: msdyn_WorkdayHCMRuntimeManagerDirectCostCenter
+          requestParametersJson: |-
+            =JSON({
+              ManagerOrgId: Global.ESS_UserContext_ManagerOrganizationId,
+              As_Of_Effective_Date: Text(Today(), "yyyy-MM-dd")
+            }, JSONFormat.Compact)
 
-      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemReadSOAPExecution
       output:
         binding:
-          errorResponse: Topic.errorResponse
+          connectorStatus: Topic.connectorStatus
+          errorMessage: Topic.errorResponse
+          failureReason: Topic.failureReason
           isSuccess: Topic.isSuccess
-          workdayResponse: Topic.workdayResponse
+          responseJson: Topic.workdayResponse
+
+    - kind: ConditionGroup
+      id: checkManagerCostCenterSuccess
+      conditions:
+        - id: managerCostCenterFailed
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendManagerCostCenterError
+              activity: I encountered an error retrieving your team's cost center information. Please try again later or contact support.
+
+            - kind: EndDialog
+              id: endManagerCostCenterOnError
 
     - kind: ParseValue
       id: aXVFNu
@@ -78,17 +97,11 @@ beginDialog:
               properties:
                 Value: String
 
-          LegalNameData:
+          Name:
             type:
               kind: Table
               properties:
-                Name_Detail_Data:
-                  type:
-                    kind: Record
-                    properties:
-                      "@Formatted_Name": String
-                      First_Name: String
-                      Last_Name: String
+                Value: String
 
           WorkerID:
             type:
@@ -105,12 +118,16 @@ beginDialog:
       value: |-
         =ForAll(
             Sequence(CountRows(Topic.workdayResponseRecord.WorkerID)),
-            {
-                FirstName: Last(FirstN(Topic.workdayResponseRecord.LegalNameData, Value)).Name_Detail_Data.First_Name,
-                LastName: Last(FirstN(Topic.workdayResponseRecord.LegalNameData, Value)).Name_Detail_Data.Last_Name,
-                CostCenterCode: Last(FirstN(Topic.workdayResponseRecord.CostCenterCode, Value)).Value,
-                CostCenterName: Last(FirstN(Topic.workdayResponseRecord.CostCenterName, Value)).Value
-            }
+            With(
+                {employeeName: Last(FirstN(Topic.workdayResponseRecord.Name, Value)).Value},
+                {
+                    Name: employeeName,
+                    FirstName: First(Split(employeeName, " ")).Value,
+                    LastName: Last(Split(employeeName, " ")).Value,
+                    CostCenterCode: Last(FirstN(Topic.workdayResponseRecord.CostCenterCode, Value)).Value,
+                    CostCenterName: Last(FirstN(Topic.workdayResponseRecord.CostCenterName, Value)).Value
+                }
+            )
         )
 
     - kind: ConditionGroup
@@ -124,7 +141,18 @@ beginDialog:
               id: setVariable_njPUra
               displayName: Filter for the given EmployeeName
               variable: Topic.workdayResponseTable
-              value: =Filter(Topic.workdayResponseTable,'FirstName' = Topic.EmployeeName Or 'LastName' = Topic.EmployeeName Or Concatenate('FirstName', " ", 'LastName') = Topic.EmployeeName Or Concatenate('LastName', " ", 'FirstName') = Topic.EmployeeName)
+              value: |-
+                =With(
+                    {requestedName: Lower(Trim(Topic.EmployeeName))},
+                    Filter(
+                        Topic.workdayResponseTable,
+                        Lower(Trim(Name)) = requestedName Or
+                        Lower(Trim(FirstName)) = requestedName Or
+                        Lower(Trim(LastName)) = requestedName Or
+                        Lower(Trim(Concatenate(FirstName, " ", LastName))) = requestedName Or
+                        Lower(Trim(Concatenate(LastName, " ", FirstName))) = requestedName
+                    )
+                )
 
             - kind: ConditionGroup
               id: conditionGroup_tAWzhS
@@ -135,8 +163,8 @@ beginDialog:
                   actions:
                     - kind: SendActivity
                       id: sendActivity_3owxH6
-                      displayName: Respond with no access message
-                      activity: It looks like you don't have access to this information. Try making a new request.
+                      displayName: Respond with no matching direct report
+                      activity: I couldn't find {Topic.EmployeeName} among the direct reports returned by Workday. Verify the employee name and try again.
 
                     - kind: SetVariable
                       id: setVariable_wd0UBE
@@ -171,3 +199,4 @@ outputType:
           CostCenterName: String
           FirstName: String
           LastName: String
+          Name: String

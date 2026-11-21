@@ -54,18 +54,37 @@ beginDialog:
 
     - kind: BeginDialog
       id: 7Va4UU
-      displayName: Redirect to Workday Get Common Execution
+      displayName: Read direct-report job taxonomy through the SOAP adapter
       input:
         binding:
-          parameters: ="{""params"":[{""key"":""{ManagerOrgId}"",""value"":""" & Global.ESS_UserContext_ManagerOrganizationId & """},{""key"":""{As_Of_Effective_Date}"",""value"":"""& Text(Today(), "yyyy-MM-dd") &"""}]}"
           scenarioName: msdyn_WorkdayHCMRuntimeManagerJobTaxonomy
+          requestParametersJson: |-
+            =JSON({
+              ManagerOrgId: Global.ESS_UserContext_ManagerOrganizationId,
+              As_Of_Effective_Date: Text(Today(), "yyyy-MM-dd")
+            }, JSONFormat.Compact)
 
-      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemReadSOAPExecution
       output:
         binding:
-          errorResponse: Topic.errorResponse
+          connectorStatus: Topic.connectorStatus
+          errorMessage: Topic.errorResponse
+          failureReason: Topic.failureReason
           isSuccess: Topic.isSuccess
-          workdayResponse: Topic.workdayResponse
+          responseJson: Topic.workdayResponse
+
+    - kind: ConditionGroup
+      id: checkManagerJobTaxonomySuccess
+      conditions:
+        - id: managerJobTaxonomyFailed
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendManagerJobTaxonomyError
+              activity: I encountered an error retrieving your team's job information. Please try again later or contact support.
+
+            - kind: EndDialog
+              id: endManagerJobTaxonomyOnError
 
     - kind: ParseValue
       id: mq6jr0
@@ -80,7 +99,7 @@ beginDialog:
               properties:
                 Value: String
 
-          FirstName:
+          Name:
             type:
               kind: Table
               properties:
@@ -99,12 +118,6 @@ beginDialog:
                 Value: String
 
           JobTitle:
-            type:
-              kind: Table
-              properties:
-                Value: String
-
-          LastName:
             type:
               kind: Table
               properties:
@@ -135,16 +148,29 @@ beginDialog:
       value: |-
         =ForAll(
             Sequence(CountRows(Topic.WorkdayResponseRecord.WorkerID)),
-            {
-                FirstName: Last(FirstN(Topic.WorkdayResponseRecord.FirstName, Value)).Value,
-                LastName: Last(FirstN(Topic.WorkdayResponseRecord.LastName, Value)).Value,
-                JobTitle: Last(FirstN(Topic.WorkdayResponseRecord.JobTitle, Value)).Value,
-                BusinessTitle: Last(FirstN(Topic.WorkdayResponseRecord.BusinessTitle, Value)).Value,
-                JobProfile: Last(FirstN(Topic.WorkdayResponseRecord.JobProfile, Value)).Value,
-                JobFamily: LookUp(Global.JobFamilyLookupTable,
-                            ID = Last(FirstN(Topic.WorkdayResponseRecord.JobFamilyId, Value)).Value
-                        ).Referenced_Object_Descriptor
-            }
+            With(
+                {
+                    employeeName: Last(FirstN(Topic.WorkdayResponseRecord.Name, Value)).Value,
+                    jobFamilyId: Last(FirstN(Topic.WorkdayResponseRecord.JobFamilyId, Value)).Value
+                },
+                {
+                    Name: employeeName,
+                    FirstName: First(Split(employeeName, " ")).Value,
+                    LastName: Last(Split(employeeName, " ")).Value,
+                    JobTitle: Last(FirstN(Topic.WorkdayResponseRecord.JobTitle, Value)).Value,
+                    BusinessTitle: Last(FirstN(Topic.WorkdayResponseRecord.BusinessTitle, Value)).Value,
+                    JobProfile: Last(FirstN(Topic.WorkdayResponseRecord.JobProfile, Value)).Value,
+                    JobFamily: With(
+                        {
+                            jobFamilyDescriptor: LookUp(
+                                Global.JobFamilyLookupTable,
+                                ID = jobFamilyId
+                            ).Referenced_Object_Descriptor
+                        },
+                        If(IsBlank(jobFamilyDescriptor), jobFamilyId, jobFamilyDescriptor)
+                    )
+                }
+            )
         )
 
     - kind: ConditionGroup
@@ -158,13 +184,17 @@ beginDialog:
               id: setVariable_z1fKB1
               displayName: Filter for the given EmployeeName
               variable: Topic.workdayResponseTable
-              value: |
-                =Filter(
-                    Topic.workdayResponseTable,
-                    FirstName = Topic.EmployeeName Or 
-                    LastName = Topic.EmployeeName Or 
-                    Concatenate(FirstName, " ", LastName) = Topic.EmployeeName Or 
-                    Concatenate(LastName, " ", FirstName) = Topic.EmployeeName
+              value: |-
+                =With(
+                    {requestedName: Lower(Trim(Topic.EmployeeName))},
+                    Filter(
+                        Topic.workdayResponseTable,
+                        Lower(Trim(Name)) = requestedName Or
+                        Lower(Trim(FirstName)) = requestedName Or
+                        Lower(Trim(LastName)) = requestedName Or
+                        Lower(Trim(Concatenate(FirstName, " ", LastName))) = requestedName Or
+                        Lower(Trim(Concatenate(LastName, " ", FirstName))) = requestedName
+                    )
                 )
 
             - kind: ConditionGroup
@@ -176,8 +206,8 @@ beginDialog:
                   actions:
                     - kind: SendActivity
                       id: sendActivity_m8xRtz
-                      displayName: Respond with no access message
-                      activity: It looks like you don't have access to this information. Try making a new request.
+                      displayName: Respond with no matching direct report
+                      activity: I couldn't find {Topic.EmployeeName} among the direct reports returned by Workday. Verify the employee name and try again.
 
                     - kind: SetVariable
                       id: setVariable_wd0UBE
@@ -214,3 +244,4 @@ outputType:
           JobProfile: String
           JobTitle: String
           LastName: String
+          Name: String

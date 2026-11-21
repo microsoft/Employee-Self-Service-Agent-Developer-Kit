@@ -24,18 +24,36 @@ beginDialog:
   actions:
     - kind: BeginDialog
       id: jJpz3n
-      displayName: Redirect to Workday Get Common Execution
+      displayName: Read manager reportees through the SOAP adapter
       input:
         binding:
-          parameters: ="{""params"":[{""key"":""{Manager_Org_ID}"",""value"":""" & Global.ESS_UserContext_ManagerOrganizationId & """}]}"
           scenarioName: msdyn_WorkdayHCMRuntimeManagerReportees
+          requestParametersJson: |-
+            =JSON({
+              Manager_Org_ID: Global.ESS_UserContext_ManagerOrganizationId
+            }, JSONFormat.Compact)
 
-      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemReadSOAPExecution
       output:
         binding:
-          errorResponse: Topic.errorResponse
+          connectorStatus: Topic.connectorStatus
+          errorMessage: Topic.errorResponse
+          failureReason: Topic.failureReason
           isSuccess: Topic.isSuccess
-          workdayResponse: Topic.workdayResponse
+          responseJson: Topic.workdayResponse
+
+    - kind: ConditionGroup
+      id: checkManagerReporteesSuccess
+      conditions:
+        - id: managerReporteesFailed
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendManagerReporteesError
+              activity: I encountered an error retrieving your team's time in position information. Please try again later or contact support.
+
+            - kind: EndDialog
+              id: endManagerReporteesOnError
 
     - kind: ParseValue
       id: aXVFNu

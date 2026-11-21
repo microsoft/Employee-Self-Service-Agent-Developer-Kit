@@ -22,18 +22,24 @@ beginDialog:
   actions:
     - kind: BeginDialog
       id: getAddress_BeginDialog
-      displayName: Get Current Residential Address
+      displayName: Read current residential addresses through the SOAP adapter
       input:
         binding:
-          parameters: ="{""params"":[{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """},{""key"":""{As_Of_Effective_Date}"",""value"":"""& Text(Now(), "yyyy-MM-dd") &"""}]}"
           scenarioName: msdyn_WorkdayHCMRuntimeEmployeeGetResidentialAddress
+          requestParametersJson: |-
+            =JSON({
+              Employee_ID: Global.ESS_UserContext_Employee_Id,
+              As_Of_Effective_Date: Text(Now(), "yyyy-MM-dd")
+            }, JSONFormat.Compact)
 
-      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemReadSOAPExecution
       output:
         binding:
-          errorResponse: Topic.errorResponse
+          connectorStatus: Topic.connectorStatus
+          errorMessage: Topic.errorResponse
+          failureReason: Topic.failureReason
           isSuccess: Topic.isSuccess
-          workdayResponse: Topic.workdayResponse
+          responseJson: Topic.workdayResponse
 
     - kind: ConditionGroup
       id: checkGetSuccess
@@ -609,34 +615,61 @@ beginDialog:
           actions:
             - kind: BeginDialog
               id: addAddress_BeginDialog
-              displayName: Add New Residential Address
+              displayName: Add new residential address through the SOAP adapter
               input:
                 binding:
-                  parameters: ="{""params"":[{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """},{""key"":""{Event_Effective_Date}"",""value"":"""& Text(Now(), "yyyy-MM-dd") &"""},{""key"":""{Country_Code}"",""value"":""" & Topic.newCountry & """},{""key"":""{State_Province_Code}"",""value"":""" & Topic.newStateProvince & """},{""key"":""{Address_Line_1}"",""value"":""" & Topic.newAddressLine1 & """},{""key"":""{Address_Line_2}"",""value"":""" & If(IsBlank(Topic.newAddressLine2), "", Topic.newAddressLine2) & """},{""key"":""{City}"",""value"":""" & Topic.newCity & """},{""key"":""{Postal_Code}"",""value"":""" & Topic.newPostalCode & """},{""key"":""{Is_Primary}"",""value"":""" & If(Topic.newIsPrimary = "true", "true", "false") & """}]}"
                   scenarioName: msdyn_WorkdayHCMRuntimeEmployeeAddResidentialAddress
+                  requestParametersJson: |-
+                    =JSON({
+                      Employee_ID: Global.ESS_UserContext_Employee_Id,
+                      Event_Effective_Date: Text(Now(), "yyyy-MM-dd"),
+                      Country_Code: Topic.newCountry,
+                      State_Province_Code: Topic.newStateProvince,
+                      Address_Line_1: Topic.newAddressLine1,
+                      Address_Line_2: If(IsBlank(Topic.newAddressLine2), "", Topic.newAddressLine2),
+                      City: Topic.newCity,
+                      Postal_Code: Topic.newPostalCode,
+                      Is_Primary: If(Topic.newIsPrimary = "true", "true", "false")
+                    }, JSONFormat.Compact)
 
-              dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+              dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemWriteSOAPExecution
               output:
                 binding:
-                  errorResponse: Topic.updateErrorResponse
+                  connectorStatus: Topic.updateConnectorStatus
+                  errorMessage: Topic.updateErrorResponse
+                  failureReason: Topic.updateFailureReason
                   isSuccess: Topic.updateIsSuccess
-                  workdayResponse: Topic.updateWorkdayResponse
+                  responseJson: Topic.updateWorkdayResponse
 
       elseActions:
         - kind: BeginDialog
           id: updateAddress_BeginDialog
-          displayName: Update Residential Address
+          displayName: Update residential address through the SOAP adapter
           input:
             binding:
-              parameters: ="{""params"":[{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """},{""key"":""{Event_Effective_Date}"",""value"":"""& Text(Now(), "yyyy-MM-dd") &"""},{""key"":""{Address_ID}"",""value"":""" & Topic.selectedAddressID & """},{""key"":""{Country_Code}"",""value"":""" & Topic.newCountry & """},{""key"":""{State_Province_Code}"",""value"":""" & Topic.newStateProvince & """},{""key"":""{Address_Line_1}"",""value"":""" & Topic.newAddressLine1 & """},{""key"":""{Address_Line_2}"",""value"":""" & If(IsBlank(Topic.newAddressLine2), "", Topic.newAddressLine2) & """},{""key"":""{City}"",""value"":""" & Topic.newCity & """},{""key"":""{Postal_Code}"",""value"":""" & Topic.newPostalCode & """},{""key"":""{Is_Primary}"",""value"":""" & If(Topic.newIsPrimary = "true", "true", "false") & """}]}"
               scenarioName: msdyn_WorkdayHCMRuntimeEmployeeUpdateResidentialAddress
+              requestParametersJson: |-
+                =JSON({
+                  Employee_ID: Global.ESS_UserContext_Employee_Id,
+                  Event_Effective_Date: Text(Now(), "yyyy-MM-dd"),
+                  Address_ID: Topic.selectedAddressID,
+                  Country_Code: Topic.newCountry,
+                  State_Province_Code: Topic.newStateProvince,
+                  Address_Line_1: Topic.newAddressLine1,
+                  Address_Line_2: If(IsBlank(Topic.newAddressLine2), "", Topic.newAddressLine2),
+                  City: Topic.newCity,
+                  Postal_Code: Topic.newPostalCode,
+                  Is_Primary: If(Topic.newIsPrimary = "true", "true", "false")
+                }, JSONFormat.Compact)
 
-          dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+          dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemWriteSOAPExecution
           output:
             binding:
-              errorResponse: Topic.updateErrorResponse
+              connectorStatus: Topic.updateConnectorStatus
+              errorMessage: Topic.updateErrorResponse
+              failureReason: Topic.updateFailureReason
               isSuccess: Topic.updateIsSuccess
-              workdayResponse: Topic.updateWorkdayResponse
+              responseJson: Topic.updateWorkdayResponse
 
     - kind: ConditionGroup
       id: checkUpdateSuccess

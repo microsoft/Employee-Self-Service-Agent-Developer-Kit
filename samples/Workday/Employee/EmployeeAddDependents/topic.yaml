@@ -51,7 +51,7 @@ beginDialog:
       id: checkRelationshipTypes
       conditions:
         - id: relationshipTypesUninitialized
-          condition: =IsBlank(Global.RelatedPersonRelationshipLookupTable)
+          condition: =IsBlank(Global.RelatedPersonRelationshipLookupTable) || IsEmpty(Global.RelatedPersonRelationshipLookupTable) || CountIf(Global.RelatedPersonRelationshipLookupTable, IsBlank(ID) || IsBlank(Referenced_Object_Descriptor) || Referenced_Object_Descriptor = ID) > 0
           displayName: If relationship type picklist is uninitialized
           actions:
             - kind: BeginDialog
@@ -62,20 +62,40 @@ beginDialog:
                   referenceDataKey: Related_Person_Relationship_ID
               dialog: gptagent_copilotforemployeeselfservicehr.topic.GetReferenceData
 
+    - kind: SetVariable
+      id: prepareRelationshipTypeChoices
+      displayName: Prepare relationship type choices
+      variable: Topic.relationshipTypeChoices
+      value: |-
+        =ForAll(
+          Global.RelatedPersonRelationshipLookupTable As Relationship,
+          {
+            title: Text(Relationship.Referenced_Object_Descriptor),
+            value: Text(Relationship.ID)
+          }
+        )
+
     # Step 2: Fetch existing dependents
     - kind: BeginDialog
       id: getDependents_BeginDialog
-      displayName: Get Current Dependents
+      displayName: Read current dependents through the SOAP adapter
       input:
         binding:
-          parameters: ="{""params"":[{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """},{""key"":""{As_Of_Effective_Date}"",""value"":"""& Text(Now(), "yyyy-MM-dd") &"""}]}"
           scenarioName: msdyn_WorkdayHCMRuntimeEmployeeGetDependents
-      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+          requestParametersJson: |-
+            =JSON({
+              Employee_ID: Global.ESS_UserContext_Employee_Id,
+              As_Of_Effective_Date: Text(Now(), "yyyy-MM-dd")
+            }, JSONFormat.Compact)
+
+      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemReadSOAPExecution
       output:
         binding:
-          errorResponse: Topic.errorResponse
+          connectorStatus: Topic.connectorStatus
+          errorMessage: Topic.errorResponse
+          failureReason: Topic.failureReason
           isSuccess: Topic.isSuccess
-          workdayResponse: Topic.workdayResponse
+          responseJson: Topic.workdayResponse
 
     - kind: ConditionGroup
       id: checkGetSuccess
@@ -171,7 +191,7 @@ beginDialog:
                 LastName: Last(FirstN(Topic.dependentsRecord.LastName, Value)).Value,
                 DateOfBirth: Last(FirstN(Topic.dependentsRecord.DateOfBirth, Value)).Value,
                 Gender: Last(FirstN(Topic.dependentsRecord.Gender, Value)).Value,
-                RelationshipType: LookUp(Global.RelatedPersonRelationshipLookupTable, ID = Last(FirstN(Topic.dependentsRecord.RelationshipTypeID, Value)).Value).Referenced_Object_Descriptor,
+                RelationshipType: LookUp(Topic.relationshipTypeChoices, value = Last(FirstN(Topic.dependentsRecord.RelationshipTypeID, Value)).Value).title,
                 RelationshipTypeID: Last(FirstN(Topic.dependentsRecord.RelationshipTypeID, Value)).Value,
                 IsFullTimeStudent: Last(FirstN(Topic.dependentsRecord.IsFullTimeStudent, Value)).Value = "1",
                 IsDisabled: Last(FirstN(Topic.dependentsRecord.IsDisabled, Value)).Value = "1"
@@ -248,7 +268,7 @@ beginDialog:
                     isRequired: true,
                     errorMessage: "Please select a relationship.",
                     placeholder: "Select relationship",
-                    choices: ForAll(Global.RelatedPersonRelationshipLookupTable, { title: ThisRecord.Referenced_Object_Descriptor, value: ThisRecord.ID })
+                    choices: Topic.relationshipTypeChoices
                 },
                 {
                     type: "Input.ChoiceSet",
@@ -329,17 +349,29 @@ beginDialog:
     # Step 10: Call Add Dependent API
     - kind: BeginDialog
       id: addDependent_BeginDialog
-      displayName: Add Dependent to Workday
+      displayName: Add dependent through the SOAP adapter
       input:
         binding:
-          parameters: ="{""params"":[{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """},{""key"":""{First_Name}"",""value"":""" & Topic.firstName & """},{""key"":""{Last_Name}"",""value"":""" & Topic.lastName & """},{""key"":""{Date_Of_Birth}"",""value"":""" & Topic.dateOfBirth & """},{""key"":""{Gender}"",""value"":""" & Topic.gender & """},{""key"":""{Relationship_Type}"",""value"":""" & Topic.relationshipTypeId & """},{""key"":""{Country_Code}"",""value"":""" & Topic.country & """}]}"
           scenarioName: msdyn_WorkdayHCMRuntimeEmployeeAddDependent
-      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+          requestParametersJson: |-
+            =JSON({
+              Employee_ID: Global.ESS_UserContext_Employee_Id,
+              First_Name: Trim(Topic.firstName),
+              Last_Name: Trim(Topic.lastName),
+              Date_Of_Birth: Topic.dateOfBirth,
+              Gender: Topic.gender,
+              Relationship_Type: Trim(Topic.relationshipTypeId),
+              Country_Code: Topic.country
+            }, JSONFormat.Compact)
+
+      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemWriteSOAPExecution
       output:
         binding:
-          errorResponse: Topic.addErrorResponse
+          connectorStatus: Topic.addConnectorStatus
+          errorMessage: Topic.addErrorResponse
+          failureReason: Topic.addFailureReason
           isSuccess: Topic.addIsSuccess
-          workdayResponse: Topic.addWorkdayResponse
+          responseJson: Topic.addWorkdayResponse
 
     # Step 11: Show result
     - kind: ConditionGroup
@@ -383,7 +415,7 @@ beginDialog:
                               { title: "Name", value: Topic.firstName & " " & Topic.lastName },
                               { title: "Date of birth", value: Topic.dateOfBirth },
                               { title: "Gender", value: Topic.gender },
-                              { title: "Relationship to employee", value: LookUp(Global.RelatedPersonRelationshipLookupTable, ID = Topic.relationshipType).Referenced_Object_Descriptor },
+                              { title: "Relationship to employee", value: LookUp(Topic.relationshipTypeChoices, value = Topic.relationshipType).title },
                               { title: "Other dependents", value: Topic.otherDependentsList }
                             ]
                           }
