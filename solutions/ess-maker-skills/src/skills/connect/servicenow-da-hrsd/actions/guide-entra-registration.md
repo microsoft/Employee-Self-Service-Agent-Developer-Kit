@@ -13,6 +13,12 @@ read scopes, initialize a Graph client, or query the application. The Entra
 administrator owns the cloud checks; Connect validates only the returned local
 handoff, target binding, and confirmation receipt.
 
+When the lifecycle state carries `existingIdentity` (the maker said ESS should
+reuse an existing Knowledge, single sign-on, or Microsoft Graph sign-in setup),
+`identity-direct-handoff` returns the compatibility-review handoff. Send it
+verbatim; the setup steps in it are reference only and ESS never changes the
+shared sign-in configuration. See `existing-identity-handoff` in `entry.md`.
+
 Read `adminSetup.phaseHandoffs.entra-registration` first. If it is already
 `completed` or `reused` and stored checkpoint results are empty or all in the
 phase's `completionStatuses`, rerun

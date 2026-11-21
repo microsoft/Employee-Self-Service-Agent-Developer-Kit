@@ -1464,6 +1464,22 @@ def test_target_change_notice_is_routed_in_shared_docs() -> None:
         assert "target-change-handoff" in text, name
 
 
+def test_existing_identity_handoff_is_routed_in_shared_docs() -> None:
+    root = _SOLUTION / "src" / "skills" / "connect"
+    entry = " ".join((root / "servicenow" / "entry.md").read_text(encoding="utf-8").split())
+    assert "existing-identity-handoff" in entry
+    assert "never detect, ask about, or inspect existing Entra or OIDC configuration" in entry
+    for profile in ("hrsd", "itsm"):
+        for name in ("guide-entra-registration.md", "guide-servicenow-oidc.md"):
+            text = " ".join(
+                (root / f"servicenow-da-{profile}" / "actions" / name)
+                .read_text(encoding="utf-8")
+                .split()
+            )
+            assert "existingIdentity" in text, (profile, name)
+            assert "existing-identity-handoff" in text, (profile, name)
+
+
 def test_test_failure_handoff_is_routed_in_docs() -> None:
     root = _SOLUTION / "src" / "skills" / "connect"
     for path in (

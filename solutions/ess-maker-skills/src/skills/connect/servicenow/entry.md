@@ -603,6 +603,56 @@ repeat the request in this agent's Test pane.
 
 **End message.**
 
+**Existing sign-in setup (Knowledge, single sign-on, or Microsoft Graph).** When
+the maker says ESS should reuse an existing ServiceNow Knowledge, single
+sign-on, or Microsoft Graph sign-in setup, in the first message or later, run
+`python scripts/connect_servicenow_da.py --provider {PROVIDER} existing-identity-handoff --existing {knowledge|sso|graph}`
+before anything else and send `chatMessage` verbatim. The maker's statement
+supplies the context: never detect, ask about, or inspect existing Entra or
+OIDC configuration. The command records only a non-identity marker
+(`existingIdentity`) in the lifecycle state, so every later administrator
+message keeps the compatibility-review wording instead of the standard setup
+wording: the Entra and ServiceNow handoffs from `identity-direct-handoff`, the
+connection guidance, the waiting reminder, and the final messages are already
+switched by the marker and must be sent verbatim. The administrators confirm
+compatibility first. The setup steps in their handoffs are reference only, and
+ESS never changes the shared sign-in configuration. After their confirmation
+the normal flow continues. Never fall back to the standard wording partway
+through, and never write these messages yourself.
+
+When a later reply matches one of these situations, run the same command with
+`--situation <name>`, send `chatMessage` verbatim, end the turn for a waiting
+reply, and follow `afterReply`. None of them shows a card or a Yes/No question,
+and none records identity values:
+
+- `setup-incomplete`, `setup-complete`: basic ADK setup is not finished, then
+  finished.
+- `entra-incomplete`, `client-id-only`, `two-client-ids`: the Entra
+  administrator's reply is incomplete, gives only a Client ID, or names two
+  registrations.
+- `servicenow-incomplete`, `servicenow-fields-unnamed`: the ServiceNow
+  administrator's reply is incomplete or does not name the User Claim and
+  User Field.
+- `coexistence-conflict`, `replace-configuration`, `different-registration`:
+  the administrators report a conflict, ask to replace the existing
+  configuration, or report a different registration. Never authorize
+  replacing a configuration that serves SSO or Graph.
+- `custom-claim`, `resolution-missing-mapping`: a custom claim or an agreed
+  resolution is missing its mapping confirmation.
+- `knowledge-connector`, `existing-connection`, `connection-disconnected`:
+  the maker offers the existing Knowledge or SSO connection, names a
+  connection, or the connection is not connected. Pass `--connection-name
+  "<name the maker used>"` when one was named.
+- `missing-consent`: only when a supported check shows missing consent, never
+  from a generic failure.
+- `metadata-url --metadata-url "<the URL the maker reports>"`: the same
+  `/v2.0` diagnosis as `metadata-url-handoff`, in the compatibility-review
+  wording.
+- `waiting`, `resumed`, `blocked-finish`: the maker asks for status, comes
+  back, or tries to finish while a confirmation is outstanding.
+- `hr-prerequisite-self-confirmed` (HR agent only): the maker confirms the
+  HR prerequisite without the administrator's reply.
+
 **Target changes (environment, agent, instance, tenant, or signed-in user).**
 When the maker switches to another environment or agent, or says the instance,
 tenant, or signed-in user is different, get the Message from the controller

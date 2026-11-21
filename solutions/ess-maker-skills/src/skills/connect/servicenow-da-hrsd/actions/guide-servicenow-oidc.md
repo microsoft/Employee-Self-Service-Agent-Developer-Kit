@@ -9,6 +9,12 @@ provider registration, metadata, claim mapping, and user checks.
 
 Never create or patch ServiceNow security objects.
 
+When the lifecycle state carries `existingIdentity` (the maker said ESS should
+reuse an existing Knowledge, single sign-on, or Microsoft Graph sign-in setup),
+`identity-direct-handoff` returns the compatibility-review handoff. Send it
+verbatim; the setup steps in it are reference only and ESS never changes the
+shared sign-in configuration. See `existing-identity-handoff` in `entry.md`.
+
 Read `adminSetup.phaseHandoffs.servicenow-oidc` first. If it is already
 `completed` or `reused` and stored checkpoint results are empty or all in the
 phase's `completionStatuses`, rerun

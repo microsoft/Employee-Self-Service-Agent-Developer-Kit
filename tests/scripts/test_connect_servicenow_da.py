@@ -17822,3 +17822,311 @@ def test_test_failure_command_runs_after_context_without_a_card(
     assert result["renderBlock"]["text"].startswith(
         "IT didn't return the expected tickets."
     )
+
+
+def _existing_identity_context(monkeypatch, tmp_path, profile, other=None):
+    monkeypatch.setattr(snow, "ACTIVE_AGENT_NAME", None)
+    if other:
+        other_context, _, other_profile = _recording_setup(
+            monkeypatch, tmp_path, other
+        )
+        with snow.product_profile_context(other_profile):
+            other_state = snow._load_lifecycle_state(other_context)
+            other_state["adminSetup"]["phaseHandoffs"] = {
+                "entra-registration": {
+                    "status": "completed",
+                    "evidence": {
+                        "clientId": "11111111-1111-4111-8111-111111111111"
+                    },
+                }
+            }
+            snow._write_lifecycle_state(other_context, other_state)
+    context, _, selected = _recording_setup(monkeypatch, tmp_path, profile)
+    context["environment"]["display_name"] = "Example Dev"
+    with snow.product_profile_context(selected):
+        state = snow._load_lifecycle_state(context)
+        state.setdefault("adminSetup", {}).setdefault("preflight", {})[
+            "instanceName"
+        ] = "dev123456"
+        snow._write_lifecycle_state(context, state)
+    return context, selected
+
+
+@pytest.mark.parametrize(
+    ("profile", "agent", "purpose", "article", "audience"),
+    [
+        (
+            "itsm",
+            "Employee Self-Service IT",
+            "create and track their own ServiceNow IT tickets",
+            "an",
+            "IT",
+        ),
+        (
+            "hrsd",
+            "Employee Self-Service HR",
+            "manage their own ServiceNow HR cases",
+            "an",
+            "HR",
+        ),
+    ],
+)
+def test_existing_identity_opening_uses_s3_text_and_records_only_a_marker(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    agent: str,
+    purpose: str,
+    article: str,
+    audience: str,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, profile)
+    with snow.product_profile_context(selected):
+        result = snow.existing_identity_handoff(context, "knowledge")
+        wrapped = snow._with_agent_rules(result, "existing-identity-handoff")
+        state = snow._load_lifecycle_state(context)
+        resumed = snow.resume_handoff(context, executed_actions=frozenset())
+    text = result["renderBlock"]["text"]
+    assert text.startswith(f"We'll connect **{agent}** in **Example Dev** so employees can ")
+    assert (
+        "Your administrators will confirm whether ESS can use the existing "
+        "sign-in setup alongside Knowledge. The Knowledge connection itself "
+        "isn't the connection ESS needs.\n\n"
+        "We won't change the shared sign-in configuration. After "
+        f"administrator confirmation, we'll configure the ESS connection and "
+        f"test {article} {audience} request with your account.\n\n"
+        "**ServiceNow instance:** https://dev123456.service-now.com\n\n"
+        "We're checking whether your account can configure this agent in "
+        "Example Dev before setup begins."
+    ) in text
+    assert state["existingIdentity"]["kind"] == "knowledge"
+    assert set(state["existingIdentity"]) == {"kind", "recordedAt"}
+    assert state["openingShown"]
+    assert result["recordsIdentityValues"] is False
+    assert result["changesSharedConfiguration"] is False
+    assert wrapped["endTurn"] is False
+    assert "resume-handoff" in wrapped["nextCommand"]
+    assert "pendingCard" not in wrapped
+    assert "We'll connect" not in resumed["renderBlock"]["text"].split("\n\n")[0]
+
+
+@pytest.mark.parametrize(
+    ("kind", "phrase", "retest"),
+    [
+        ("sso", "alongside single sign-on", "Existing single sign-on wasn't retested."),
+        (
+            "graph",
+            "alongside the Microsoft Graph connector",
+            "The Microsoft Graph connector wasn't retested.",
+        ),
+    ],
+)
+def test_existing_identity_kinds_reuse_the_same_boundary_wording(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    kind: str,
+    phrase: str,
+    retest: str,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(selected):
+        result = snow.existing_identity_handoff(context, kind)
+        final = snow._dev_final_message("Example Dev", kind)
+    assert phrase in result["renderBlock"]["text"]
+    assert "We won't change the shared sign-in configuration." in result[
+        "renderBlock"
+    ]["text"]
+    assert final.endswith(retest)
+
+
+def test_existing_identity_disclosure_after_opening_returns_only_the_notice(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(selected):
+        snow.resume_handoff(context, executed_actions=frozenset())
+        later = snow.existing_identity_handoff(context, "knowledge")
+        state = snow._load_lifecycle_state(context)
+    text = later["renderBlock"]["text"]
+    assert text.startswith("Your administrators will confirm whether ESS can use")
+    assert "We'll connect" not in text
+    assert state["existingIdentity"]["kind"] == "knowledge"
+
+
+def test_existing_identity_second_agent_keeps_the_s3_opening(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(
+        monkeypatch, tmp_path, "itsm", other="hrsd"
+    )
+    with snow.product_profile_context(selected):
+        text = snow.existing_identity_handoff(context, "knowledge")["renderBlock"][
+            "text"
+        ]
+    assert text.startswith("We'll connect **Employee Self-Service IT**")
+    assert "already uses ServiceNow" not in text
+
+
+@pytest.mark.parametrize("profile", ["itsm", "hrsd"])
+def test_existing_identity_mode_switches_both_admin_packets_to_compatibility_review(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, profile)
+    with snow.product_profile_context(selected):
+        _ack_identity_availability(context, stage="entra")
+        before = snow.identity_direct_handoff(context, stage="entra")
+        snow.existing_identity_handoff(context, "knowledge")
+        entra = snow.identity_direct_handoff(context, stage="entra")
+        snow.record_identity_direct(
+            context,
+            stage="entra",
+            client_id=APP_CLIENT_ID,
+            claim_name="employee_id",
+            user_field=None,
+            confirmed=True,
+        )
+        _ack_identity_availability(context, stage="servicenow")
+        oidc = snow.identity_direct_handoff(context, stage="servicenow")
+    entra_text = entra["ordinaryReply"]["text"]
+    oidc_text = oidc["ordinaryReply"]["text"]
+    assert before["ordinaryReply"]["text"] != entra_text
+    assert "Review compatibility before setup" in entra_text
+    assert "not a request to create or overwrite shared configuration" in entra_text
+    assert "already uses ServiceNow Knowledge" in entra_text
+    assert entra["runtimeInstructionSha256"] == before["runtimeInstructionSha256"]
+    assert oidc_text.startswith(
+        "The Entra administrator has confirmed the registration for ESS, "
+        "including its Client ID, tenant ID, and custom claim `employee_id`."
+    )
+    assert "compatibility" in oidc_text
+    assert "Setup reference" in oidc_text
+    assert "employee_id" in oidc_text
+
+
+def test_existing_identity_marker_is_never_cleared_by_later_identity_steps(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(selected):
+        snow.existing_identity_handoff(context, "knowledge")
+        snow.existing_identity_handoff(context, "knowledge", "waiting")
+        _ack_identity_availability(context, stage="entra")
+        snow.identity_direct_handoff(context, stage="entra")
+        snow.resume_handoff(context, executed_actions=frozenset())
+        state = snow._load_lifecycle_state(context)
+    assert snow._existing_identity_kind(state) == "knowledge"
+
+
+_EXISTING_SITUATIONS_WITH_TEXT = {
+    "setup-incomplete": "waiting",
+    "setup-complete": None,
+    "entra-incomplete": "waiting",
+    "client-id-only": "waiting",
+    "two-client-ids": "waiting",
+    "servicenow-incomplete": "waiting",
+    "servicenow-fields-unnamed": "waiting",
+    "coexistence-conflict": "waiting",
+    "replace-configuration": "waiting",
+    "waiting": "waiting",
+    "resumed": None,
+    "resolution-missing-mapping": "waiting",
+    "different-registration": "waiting",
+    "custom-claim": "waiting",
+    "knowledge-connector": "waiting",
+    "existing-connection": None,
+    "connection-disconnected": "waiting",
+    "missing-consent": "waiting",
+    "blocked-finish": None,
+    "hr-prerequisite-self-confirmed": "waiting",
+}
+
+
+@pytest.mark.parametrize("situation", sorted(_EXISTING_SITUATIONS_WITH_TEXT))
+@pytest.mark.parametrize("profile", ["itsm", "hrsd"])
+def test_existing_identity_recovery_messages_are_fixed_text_without_cards(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    situation: str,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, profile)
+    if situation == "hr-prerequisite-self-confirmed" and profile != "hrsd":
+        with snow.product_profile_context(selected):
+            with pytest.raises(snow.ServiceNowConnectError):
+                snow.existing_identity_handoff(context, "knowledge", situation)
+        return
+    with snow.product_profile_context(selected):
+        result = snow.existing_identity_handoff(
+            context, "knowledge", situation, connection_name="Example connection"
+        )
+        wrapped = snow._with_agent_rules(result, "existing-identity-handoff")
+    text = result["renderBlock"]["text"]
+    assert text.strip()
+    assert "pendingCard" not in wrapped
+    assert "Yes/No" not in text
+    assert result["recordsIdentityValues"] is False
+    assert result["changesSharedConfiguration"] is False
+    for banned in ("record-", "--", "state file", ".json", "ask_user"):
+        assert banned not in text
+    if _EXISTING_SITUATIONS_WITH_TEXT[situation] == "waiting":
+        assert wrapped["endTurn"] is True
+        assert result["afterReply"]
+
+
+def test_existing_identity_metadata_url_reuses_the_v2_validation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    url = (
+        "https://login.microsoftonline.com/22222222-2222-4222-8222-222222222222"
+        "/v2.0/.well-known/openid-configuration"
+    )
+    with snow.product_profile_context(selected):
+        result = snow.existing_identity_handoff(
+            context, "knowledge", "metadata-url", metadata_url=url
+        )
+        unrelated = snow.existing_identity_handoff(
+            context, "knowledge", "metadata-url", metadata_url="not a url"
+        )
+        wrapped = snow._with_agent_rules(result, "existing-identity-handoff")
+    assert "contains `/v2.0`" in result["renderBlock"]["text"]
+    assert unrelated["decision"] == "no-v2-metadata-url"
+    assert "renderBlock" not in unrelated
+    assert wrapped["endTurn"] is True
+    assert "any message means they want to continue" in result["afterReply"]
+
+
+def test_existing_identity_mode_changes_later_progress_wording(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(selected):
+        generic = snow._dev_test_ready_message()
+        existing = snow._dev_test_ready_message("knowledge")
+        untested = snow._dev_untested_message("knowledge")
+        waiting = snow._existing_waiting_text()
+    assert "the integration will remain untested" in generic
+    assert "the ESS integration will remain untested" in existing
+    assert untested.startswith("**The ESS setup steps are finished")
+    assert waiting.startswith(
+        "We're waiting for your administrators to confirm a compatible setup for"
+    )
+
+
+def test_existing_identity_command_requires_context_and_valid_choices(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(selected):
+        with pytest.raises(snow.ServiceNowConnectError):
+            snow.existing_identity_handoff(context, "unknown")
+        with pytest.raises(snow.ServiceNowConnectError):
+            snow.existing_identity_handoff(context, "knowledge", "unknown")
