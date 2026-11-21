@@ -17649,3 +17649,75 @@ def test_target_change_notice_is_fixed_for_every_change_kind() -> None:
     assert "resume-handoff" in wrapped["nextCommand"]
     assert "pendingCard" not in wrapped
     assert "Do not reuse evidence from the earlier target" in wrapped["afterReply"]
+
+
+@pytest.mark.parametrize(
+    ("profile", "other", "agent", "audience", "purpose"),
+    [
+        (
+            "itsm",
+            "hrsd",
+            "Employee Self-Service IT",
+            "IT",
+            "ServiceNow IT tickets",
+        ),
+        ("hrsd", "itsm", "Employee Self-Service HR", "HR", "HR cases"),
+    ],
+)
+def test_dev_opening_for_second_agent_uses_reuse_wording(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    other: str,
+    agent: str,
+    audience: str,
+    purpose: str,
+) -> None:
+    monkeypatch.setattr(snow, "ACTIVE_AGENT_NAME", None)
+    other_context, _, other_profile = _recording_setup(monkeypatch, tmp_path, other)
+    with snow.product_profile_context(other_profile):
+        other_state = snow._load_lifecycle_state(other_context)
+        other_state["adminSetup"]["phaseHandoffs"] = {
+            "entra-registration": {
+                "status": "completed",
+                "evidence": {"clientId": "11111111-1111-4111-8111-111111111111"},
+            }
+        }
+        snow._write_lifecycle_state(other_context, other_state)
+    context, _, selected = _recording_setup(monkeypatch, tmp_path, profile)
+    context["environment"]["display_name"] = "Contoso Dev"
+    with snow.product_profile_context(selected):
+        assert snow._other_agent_already_connected(
+            context, snow._load_lifecycle_state(context)
+        )
+        text = snow.resume_handoff(context, executed_actions=frozenset())[
+            "renderBlock"
+        ]["text"]
+
+    assert text.startswith(
+        f"We'll add **{agent}** in **Contoso Dev** so employees can create "
+        f"and track their own {purpose}.\n\n"
+        f"Your administrators will confirm whether {audience} can use the "
+        f"existing sign-in setup. Then we'll select a connection, configure "
+        f"{audience}'s portal and topics, and test an {audience} request "
+        "with your account.\n\n"
+    )
+    assert (
+        f"We're checking whether your account can configure {agent} in "
+        "Contoso Dev before setup begins."
+    ) in text
+    assert "We'll connect" not in text
+
+
+def test_dev_opening_stays_generic_without_another_connected_agent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    other_context, _, _ = _recording_setup(monkeypatch, tmp_path, "hrsd")
+    context, _, profile = _recording_setup(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(profile):
+        assert not snow._other_agent_already_connected(
+            context, snow._load_lifecycle_state(context)
+        )
+        assert "We'll connect" in snow._dev_opening_text(context, None)
+    assert other_context["agent"]["id"] != context["agent"]["id"]

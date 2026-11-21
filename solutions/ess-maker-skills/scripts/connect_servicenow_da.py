@@ -10452,6 +10452,57 @@ _DEV_OPENING_PURPOSE = {
 }
 
 
+def _other_agent_already_connected(
+    context: dict[str, Any],
+    state: dict[str, Any] | None,
+) -> bool:
+    """True when another ESS agent in this environment has recorded shared setup.
+
+    Uses the same local lifecycle records as the shared-configuration reuse
+    offer: same tenant, environment and ring, a different agent, a completed
+    shared-identity phase, and the same ServiceNow instance when this run has
+    already recorded one.
+    """
+    target_setup = state.get("adminSetup") if isinstance(state, dict) else None
+    target_preflight = (
+        target_setup.get("preflight") if isinstance(target_setup, dict) else None
+    )
+    target_instance = (
+        target_preflight.get("instanceName")
+        if isinstance(target_preflight, dict)
+        else None
+    )
+    try:
+        target_instance = (
+            normalize_instance_name(target_instance)
+            if isinstance(target_instance, str) and target_instance.strip()
+            else None
+        )
+    except ServiceNowConnectError:
+        target_instance = None
+    for source in _local_compatible_agent_states(context):
+        setup = source["state"].get("adminSetup")
+        if not isinstance(setup, dict) or setup.get("authMode") != AUTH_MODE:
+            continue
+        if not any(
+            _completed_handoff(setup, phase) is not None
+            for phase in ("entra-registration", "servicenow-oidc")
+        ):
+            continue
+        preflight = setup.get("preflight")
+        source_instance = (
+            preflight.get("instanceName") if isinstance(preflight, dict) else None
+        )
+        if target_instance and source_instance:
+            try:
+                if normalize_instance_name(str(source_instance)) != target_instance:
+                    continue
+            except ServiceNowConnectError:
+                continue
+        return True
+    return False
+
+
 def _dev_opening_text(
     context: dict[str, Any],
     state: dict[str, Any] | None,
@@ -10460,14 +10511,28 @@ def _dev_opening_text(
     environment = _recorded_environment_name(context)
     in_bold = f" in **{environment}**" if environment else ""
     in_plain = f" in {environment}" if environment else ""
-    lines = [
-        f"We'll connect **{_spec_agent_name()}** to ServiceNow{in_bold} so "
-        f"employees can {_DEV_OPENING_PURPOSE[ACTIVE_PROFILE.key]}.",
-        "",
-        "You'll need help from your ServiceNow and Microsoft Entra "
-        "administrators. We'll confirm their setup, create the connection "
-        "in Copilot Studio, then test it with your account.",
-    ]
+    reuse = _other_agent_already_connected(context, state)
+    copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
+    if reuse:
+        lines = [
+            f"We'll add **{_spec_agent_name()}**{in_bold} so employees can "
+            f"{_DEV_OPENING_PURPOSE[ACTIVE_PROFILE.key]}.",
+            "",
+            f"Your administrators will confirm whether {copy_['audience']} "
+            "can use the existing sign-in setup. Then we'll select a "
+            f"connection, configure {copy_['audience']}'s portal and topics, "
+            f"and test {copy_['article']} {copy_['audience']} request with "
+            "your account.",
+        ]
+    else:
+        lines = [
+            f"We'll connect **{_spec_agent_name()}** to ServiceNow{in_bold} so "
+            f"employees can {_DEV_OPENING_PURPOSE[ACTIVE_PROFILE.key]}.",
+            "",
+            "You'll need help from your ServiceNow and Microsoft Entra "
+            "administrators. We'll confirm their setup, create the connection "
+            "in Copilot Studio, then test it with your account.",
+        ]
     setup = state.get("adminSetup") if isinstance(state, dict) else None
     preflight = setup.get("preflight") if isinstance(setup, dict) else None
     instance = (
@@ -10489,7 +10554,8 @@ def _dev_opening_text(
     lines.extend(
         [
             "",
-            "We're checking whether your account can configure this agent"
+            "We're checking whether your account can configure "
+            f"{_spec_agent_name() if reuse else 'this agent'}"
             f"{in_plain} before setup begins.",
         ]
     )
