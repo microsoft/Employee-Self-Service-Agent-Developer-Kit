@@ -102,8 +102,9 @@ instructions.
 Before Entra availability, honor a returned
 `status: shared-identity-reuse-required` and its `preActionHandoff`. This is a
 local zero-write pre-action for the current selected target provider and
-agent. For `source-selection-required`, ask one label-only candidate question
-and rerun `shared-reuse-handoff --source-key <internal-source-key>`. For
+agent. Several sources are asked one Yes/No question at a time: after a **No**
+with `moreCandidates` true, the decline is recorded and `shared-reuse-handoff`
+is rerun for the next source. For
 `question-required`, pass its canonical question through the active question
 adapter. Translate **Yes** to the existing target-scoped
 `record-shared-reuse ... --decision accept` and **No** to
@@ -598,16 +599,18 @@ for checklist items inside that phase. On resume, accept the one phase return,
 run the phase's complete verification set, and only then advance.
 
 The ServiceNow Entra action has one bounded pre-handoff exception when its
-producer returns `handoffMode: identity-requirement`: show that routing-only
-Maker question before any administrator instructions are shown. Its
-options identify only the intended user identifier type; they are not `Completed`/`Not yet` admin
-evidence. Pass the returned question to the question tool unchanged: its
-options are label-only. Use the separate `identityRequirementChoices`
-envelope mapping to translate the selected label to the recorder's CLI choice;
-never add `value` or another unsupported option field. A specific answer may
-persist only the scoped routing intent, then
+producer returns `handoffMode: identity-requirement`: ask that routing-only
+Maker question before any administrator instructions are shown. It is a plain
+chat question with a typed answer, not a card, because the identifier types
+cannot be expressed as Yes/No; never render Email/UPN/Pay ID options. The
+question identifies only the intended user identifier type; the answer is not
+`Completed`/`Not yet` admin evidence. Use the separate
+`identityRequirementChoices` envelope mapping to translate the typed answer to
+the recorder's CLI choice; never add `value` or another unsupported option
+field. A specific answer may persist only the scoped routing intent, then
 the caller reruns the producer and shows the normal admin instructions and
-completion question. `Not sure` returns waiting, writes no receipt, and
+completion question. An answer that names no identifier type (for example
+`Not sure`) returns waiting, writes no receipt, and
 shows no administrator instructions. This clarification must not set
 `actionApplied`, mark the phase done, confirm claim emission, or replace the later admin completion
 question. Once a valid scoped requirement receipt exists, do not ask the

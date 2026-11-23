@@ -249,13 +249,18 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert "must not persist or ask separate questions" in runner
     assert "`handoffMode: identity-requirement`" in runner
     assert "routing-only Maker question" in runner_normalized
-    assert "they are not `Completed`/`Not yet` admin evidence" in (
+    assert "plain chat question with a typed answer, not a card" in (
         runner_normalized
     )
-    assert "options are label-only" in runner_normalized
+    assert "the answer is not `Completed`/`Not yet` admin evidence" in (
+        runner_normalized
+    )
+    assert "never render Email/UPN/Pay ID options" in runner_normalized
     assert "`identityRequirementChoices`" in runner
     assert "never add `value`" in runner_normalized
-    assert "`Not sure` returns waiting, writes no receipt" in runner_normalized
+    assert "`Not sure`) returns waiting, writes no receipt" in (
+        runner_normalized
+    )
     assert "must not set `actionApplied`" in runner_normalized
     assert "`resumeActionWhenIncomplete` is `true`" in runner
     assert "historical facts,\nnot authorization" in runner
