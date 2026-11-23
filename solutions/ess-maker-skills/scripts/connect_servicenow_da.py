@@ -9296,13 +9296,23 @@ def portal_url_confirmation(
         typed_url,
         expected_instance_name=instance_name,
     )
+    header = f"Is {normalized_url} the employee portal URL?"
+    question = f"You entered **{normalized_url}** as the employee portal URL."
+    if _existing_identity_kind(state):
+        copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
+        header = (
+            f"Is {normalized_url} the portal employees should use for "
+            f"{copy_['audience']} {copy_['records']}?"
+        )
+        question = (
+            f"Is **{normalized_url}** the portal employees should use for "
+            f"{copy_['audience']} {copy_['records']}?"
+        )
     return {
         "schemaVersion": "servicenow.portal-url-confirmation.v1",
         "portalUrl": normalized_url,
-        "header": f"Is {normalized_url} the employee portal URL?",
-        "question": (
-            f"You entered **{normalized_url}** as the employee portal URL."
-        ),
+        "header": header,
+        "question": question,
         "options": [
             {"label": "Yes"},
             {"label": "No"},
@@ -10753,20 +10763,34 @@ def _dev_test_ready_message(existing_kind: str | None = None) -> str:
     )
 
 
-def _dev_test_clarifying_question() -> str:
+def _dev_test_clarifying_question(existing_kind: str | None = None) -> str:
     copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
-    return (
-        f"What did the request return—your expected {copy_['records']}, an "
-        "empty result, or an error? No need to share "
-        f"{copy_['record']} contents."
+    ask = (
+        f"What did the request return\u2014your expected {copy_['records']}, "
+        "an empty result, or an error? "
     )
+    if existing_kind:
+        return (
+            f"{ask}Don't share {copy_['record']} contents, employee "
+            "identifiers, tokens, or other secrets."
+        )
+    return f"{ask}No need to share {copy_['record']} contents."
 
 
-def _dev_empty_result_message() -> str:
+def _dev_empty_result_message(existing_kind: str | None = None) -> str:
     copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
+    if existing_kind:
+        why = (
+            "it doesn't confirm that the agent can retrieve your real "
+            f"{copy_['audience']} data."
+        )
+    else:
+        why = (
+            "an empty result alone doesn't show whether the agent can "
+            f"retrieve your {copy_['audience']} data."
+        )
     return (
-        "An empty result alone doesn't show whether the agent can retrieve "
-        f"your {copy_['audience']} data.\n\n"
+        f"That matches what you expected, but {why}\n\n"
         "Try a supported request for ServiceNow data you know exists for "
         "your account, then tell us whether the result matches. You can "
         "also finish without testing."
@@ -12410,18 +12434,25 @@ def record_test_attestation(
         raise ServiceNowConnectError(
             "Unsupported privacy-safe Test pane prompt category."
         )
-    if result == "empty":
+    if result in {"empty", "unclear"}:
         if failure_category is not None:
             raise ServiceNowConnectError(
                 "An empty-result answer cannot have a failure category."
+                if result == "empty"
+                else "An unclear answer cannot have a failure category."
             )
-        # An empty result is not evidence: nothing is recorded and the Test
-        # step stays open.
+        # Neither answer is evidence: nothing is recorded and the Test step
+        # stays open.
+        existing_kind = _existing_identity_kind(_realm_dev_state(context))
         return {
             "status": "open",
-            "result": "empty",
+            "result": result,
             "recorded": False,
-            "message": _dev_empty_result_message(),
+            "message": (
+                _dev_empty_result_message(existing_kind)
+                if result == "empty"
+                else _dev_test_clarifying_question(existing_kind)
+            ),
         }
     if result not in {"pass", "fail", "untested"}:
         raise ServiceNowConnectError(
@@ -13571,7 +13602,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     test_parser.add_argument(
         "--result",
-        choices=("pass", "fail", "untested", "empty"),
+        choices=("pass", "fail", "untested", "empty", "unclear"),
         required=True,
     )
     test_parser.add_argument(
@@ -14286,10 +14317,19 @@ def target_change_handoff(
                 "the earlier account",
             ),
         }[change]
+    if _existing_identity_kind(_realm_dev_state(context)):
+        closing = (
+            f"We won't assume that the connection or test evidence from "
+            f"{earlier} applies there."
+        )
+    else:
+        closing = (
+            f"We won't reuse evidence from {earlier} without those checks."
+        )
     text = (
         f"{headline} We'll check your permission for **{subject}** and which "
         "earlier setup information still applies.\n\n"
-        f"We won't reuse evidence from {earlier} without those checks."
+        f"{closing}"
     )
     return {
         "status": "target-change-notice",
@@ -14369,6 +14409,9 @@ _EXISTING_IDENTITY_SITUATIONS = (
     "metadata-url",
     "blocked-finish",
     "hr-prerequisite-self-confirmed",
+    "topic-off",
+    "binding-missing",
+    "retry-after-fix",
 )
 
 _EXISTING_AFTER_REPLY_CONTINUE = (
@@ -14402,6 +14445,11 @@ _EXISTING_AFTER_REPLY_PREREQUISITE = (
     "When the maker replies, record the administrator's reply with the "
     "existing plugin-prerequisite commands and continue with "
     "resume-handoff."
+)
+_EXISTING_AFTER_REPLY_TEST = (
+    "When the maker reports the Test pane result, record it with "
+    "record-test (--result pass, fail, untested, empty, or unclear). Do "
+    "not restart administrator setup or change the Knowledge connector."
 )
 
 
@@ -15424,6 +15472,29 @@ def _existing_identity_message(
             waiting,
             _EXISTING_AFTER_REPLY_CONTINUE,
         )
+    if situation == "topic-off":
+        return (
+            f"A ServiceNow {audience} topic needed for this request is off. "
+            "We'll turn on that built-in topic and leave unrelated topics "
+            "unchanged.",
+            info,
+            "",
+        )
+    if situation == "binding-missing":
+        return (
+            f"**{agent}** isn't linked to the selected ServiceNow "
+            "connection. We'll link this agent to it and keep the "
+            "completed administrator setup.",
+            info,
+            "",
+        )
+    if situation == "retry-after-fix":
+        return (
+            f"Try the {audience} request again in the Test pane and tell "
+            "us whether it returns the expected data.",
+            waiting,
+            _EXISTING_AFTER_REPLY_TEST,
+        )
     if situation == "hr-prerequisite-self-confirmed":
         if not ACTIVE_PROFILE.requires_hr_core:
             raise ServiceNowConnectError(
@@ -15922,29 +15993,181 @@ _TEST_FAILURE_AFTER_REPLY_MISMATCH = (
 )
 
 
+def _custom_claim_mode(state: dict[str, Any] | None) -> bool:
+    """True when the saved User Claim is a custom claim, such as payroll."""
+    evidence = state.get("evidence") if isinstance(state, dict) else None
+    mapping = (
+        evidence.get("identityMapping") if isinstance(evidence, dict) else None
+    )
+    claim = (
+        mapping.get("tokenClaimName") if isinstance(mapping, dict) else None
+    )
+    return (
+        isinstance(claim, str)
+        and bool(claim.strip())
+        and claim.strip().casefold() not in _STANDARD_USER_CLAIMS
+    )
+
+
+def _test_failure_variant(
+    context: dict[str, Any] | None,
+    state: dict[str, Any] | None,
+) -> str:
+    """Spec flow of a failed test: existing, second, payroll, or first.
+
+    The other agent is named only when it is actually connected (the lookup
+    needs the context) and the existing-identity wording only when that
+    marker is set; a generic failure never implies either.
+    """
+    if _existing_identity_kind(state):
+        return "existing"
+    if context is not None and _other_agent_already_connected(context, state):
+        return "second"
+    if _custom_claim_mode(state):
+        return "payroll"
+    return "first"
+
+
+def _test_failure_texts(
+    variant: str,
+) -> tuple[str, str | None, list[str], list[str]]:
+    """(opening, more info, unknown paragraphs, mismatch paragraphs)."""
+    copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
+    audience = copy_["audience"]
+    record = copy_["record"]
+    secrets_ask = (
+        "If there was an error, send only its text without "
+        f"{record} contents, employee identifiers, tokens, or other secrets."
+    )
+    unknown = [
+        "We haven't identified the cause yet.",
+        "Did the Test pane show an error, an empty result, or something "
+        f"else? {secrets_ask}",
+    ]
+    repeat = (
+        f"We'll recheck the affected setup before you repeat the {audience} "
+        "request in this agent's Test pane."
+    )
+    if variant == "payroll":
+        return (
+            "That doesn't match the result you expected. We'll check the "
+            "available setup information before asking you for anything "
+            "else.",
+            None,
+            [
+                "We can't identify the cause from the information available "
+                "yet.",
+                "Did the Test pane show an error or only an empty result? "
+                f"{secrets_ask}",
+            ],
+            [
+                "The supplied evidence shows that the payroll claim value "
+                "doesn't match the confirmed ServiceNow user field.",
+                "Ask your ServiceNow administrator to review the matching "
+                "field with your Entra administrator, who owns the emitted "
+                "identifier. Bring back confirmation of the corrected saved "
+                "mapping or completed claim setup, depending on what they "
+                "changed.",
+                "Include the exact saved User Claim and User Field, any "
+                "changed registration or claim values, and the completed "
+                "custom-claim setup confirmation if it changed. Don't send "
+                "employee identifiers or secrets.",
+                f"{repeat} Unrelated healthy work stays in place.",
+            ],
+        )
+    if variant == "existing":
+        return (
+            f"{audience} didn't return the expected {copy_['records']}. "
+            f"We'll check the {audience} setup information already "
+            "supplied to narrow down the problem.",
+            "If more information is needed, we'll ask for the specific "
+            "result or error\u2014not the whole setup history.",
+            unknown,
+            [
+                "The supplied evidence shows that the sign-in claim value "
+                "doesn't match the confirmed ServiceNow user field.",
+                "Ask your ServiceNow administrator to review the mismatch "
+                "with the Entra administrator and confirm a supported "
+                "mapping that accounts for the existing integration.",
+                "Bring back their non-sensitive confirmation that the "
+                "configuration is saved and supports ESS, its exact **User "
+                "Claim** and **User Field**, and any changed registration or "
+                "claim values. If a custom claim changed, also bring back "
+                "its completed-setup confirmation for the intended "
+                "employees.",
+                repeat,
+            ],
+        )
+    if variant == "second":
+        other = "IT" if audience == "HR" else "HR"
+        return (
+            f"{audience} didn't return the expected {copy_['records']}. "
+            f"We'll check the {audience} setup information already "
+            "supplied to narrow down the problem.",
+            "If more information is needed, we'll ask for the specific "
+            f"error or result\u2014not the whole {other} setup history.",
+            unknown,
+            [
+                "The supplied evidence shows a mismatch between the "
+                "sign-in claim and ServiceNow user field.",
+                "Ask your ServiceNow administrator to review the mismatch "
+                "with your Entra administrator and confirm a supported "
+                "mapping that accounts for the shared setup's existing "
+                "uses. Don't change an existing OIDC configuration serving "
+                "SSO or the Microsoft Graph connector.",
+                "Bring back their non-sensitive confirmation that the "
+                f"configuration is saved and supports {audience}, the exact "
+                "User Claim and User Field, and any changed registration or "
+                "claim values. If a custom claim changed, also bring back "
+                "its completed-setup confirmation for the intended "
+                "employees.",
+                repeat,
+            ],
+        )
+    return (
+        f"The request didn't return the expected {copy_['records']}. We'll "
+        "check the setup information already supplied to narrow down the "
+        "problem.",
+        "If more information is needed, we'll ask for the specific error "
+        "or result\u2014not the whole setup history.",
+        unknown,
+        [
+            "The supplied identity-mapping evidence shows that the token "
+            "claim and ServiceNow user field don't match, so ServiceNow "
+            "can't identify the signed-in employee.",
+            "Ask your ServiceNow administrator to review the mismatch with "
+            "your Entra administrator and confirm a supported mapping that "
+            "accounts for any existing uses. Don't change an existing OIDC "
+            "configuration serving SSO or the Microsoft Graph connector.",
+            "Bring back their non-sensitive confirmation that the supported "
+            "configuration is saved, its exact User Claim and User Field, "
+            "and any changed registration or claim values. If the custom "
+            "claim changed, bring back confirmation that its setup is "
+            "complete for the intended employees.",
+            "We'll recheck the affected setup before you repeat the request "
+            "in this agent's Test pane.",
+        ],
+    )
+
+
 def test_failure_handoff(
     state: dict[str, Any] | None,
     reported_claim: str | None = None,
     reported_user_field: str | None = None,
+    context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Fixed reply when this agent's test fails although another agent worked.
+    """Fixed reply when a Test pane request did not return the expected data.
 
-    The reply never assumes a shared identity failure. A claim and User Field
-    mismatch is named only when the supplied claim and User Field differ from
-    the saved mapping; otherwise the maker is asked for the specific error or
-    result. Nothing is recorded.
+    The wording follows the spec flow: first agent, second agent (the other
+    agent is named only when it is connected, which needs the context),
+    existing identity, or custom claim. The reply never assumes a shared
+    identity failure. A claim and User Field mismatch is named only when the
+    supplied claim and User Field differ from the saved mapping; otherwise
+    the maker is asked for the specific error or result. Nothing is recorded.
     """
-    copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
-    audience = copy_["audience"]
-    other = "IT" if audience == "HR" else "HR"
-    opening = (
-        f"{audience} didn't return the expected {copy_['records']}. We'll "
-        f"check the {audience} setup information already supplied to narrow "
-        "down the problem."
-    )
-    more_info = (
-        "If more information is needed, we'll ask for the specific error or "
-        f"result\u2014not the whole {other} setup history."
+    variant = _test_failure_variant(context, state)
+    opening, more_info, unknown_paragraphs, mismatch_paragraphs = (
+        _test_failure_texts(variant)
     )
     mismatch = False
     if reported_claim is not None or reported_user_field is not None:
@@ -15966,39 +16189,12 @@ def test_failure_handoff(
                 or field.casefold() != saved_field
             )
     if mismatch:
-        text = "\n\n".join(
-            [
-                opening,
-                "The supplied evidence shows a mismatch between the sign-in "
-                "claim and ServiceNow user field.",
-                "Ask your ServiceNow administrator to review the mismatch "
-                "with your Entra administrator and confirm a supported "
-                "mapping that accounts for the shared setup's existing "
-                "uses. Don't change an existing OIDC configuration serving "
-                "SSO or the Microsoft Graph connector.",
-                "Bring back their non-sensitive confirmation that the "
-                f"configuration is saved and supports {audience}, the exact "
-                "User Claim and User Field, and any changed registration or "
-                "claim values. If a custom claim changed, also bring back "
-                "its completed-setup confirmation for the intended "
-                "employees.",
-                "We'll recheck the affected setup before you repeat the "
-                f"{audience} request in this agent's Test pane.",
-            ]
-        )
+        text = "\n\n".join([opening, *mismatch_paragraphs])
         decision = "identity-mapping-review-required"
         after_reply = _TEST_FAILURE_AFTER_REPLY_MISMATCH
     else:
         text = "\n\n".join(
-            [
-                opening,
-                more_info,
-                "We haven't identified the cause yet.",
-                "Did the Test pane show an error, an empty result, or "
-                "something else? If there was an error, send only its text "
-                f"without {copy_['record']} contents, employee identifiers, "
-                "tokens, or other secrets.",
-            ]
+            [opening, *([more_info] if more_info else []), *unknown_paragraphs]
         )
         decision = "test-failure-information-required"
         after_reply = _TEST_FAILURE_AFTER_REPLY_UNKNOWN
@@ -17048,6 +17244,7 @@ def main(argv: list[str] | None = None) -> int:
                 _load_lifecycle_state(context),
                 args.reported_claim,
                 args.reported_user_field,
+                context=context,
             )
         elif (
             args.command == "validation-notice"

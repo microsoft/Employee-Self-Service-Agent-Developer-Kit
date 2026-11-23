@@ -10181,8 +10181,9 @@ def test_record_test_empty_result_records_nothing_and_never_passes(
         )
 
         assert result["message"] == (
-            "An empty result alone doesn't show whether the agent can "
-            f"retrieve your {audience} data.\n\n"
+            "That matches what you expected, but an empty result alone "
+            f"doesn't show whether the agent can retrieve your {audience} "
+            "data.\n\n"
             "Try a supported request for ServiceNow data you know exists "
             "for your account, then tell us whether the result matches. "
             "You can also finish without testing."
@@ -10190,6 +10191,22 @@ def test_record_test_empty_result_records_nothing_and_never_passes(
         assert result["status"] == "open"
         assert result["recorded"] is False
         assert state_path.read_bytes() == before
+        unclear = snow.record_test_attestation(
+            context,
+            prompt_category=prompt_category,
+            result="unclear",
+            failure_category=None,
+        )
+        assert unclear["message"] == snow._dev_test_clarifying_question()
+        assert unclear["recorded"] is False
+        assert state_path.read_bytes() == before
+        with pytest.raises(snow.ServiceNowConnectError, match="unclear"):
+            snow.record_test_attestation(
+                context,
+                prompt_category=prompt_category,
+                result="unclear",
+                failure_category="unexpected",
+            )
         saved = json.loads(state_path.read_text(encoding="utf-8"))
         assert "test" not in saved.get("evidence", {})
         assert not snow._manual_evidence_current(saved, test_phase)
@@ -10520,6 +10537,35 @@ def test_dev_test_follow_up_question_follows_spec(
     assert question == (
         f"What did the request return—your expected {records}, an empty "
         f"result, or an error? No need to share {record} contents."
+    )
+
+
+@pytest.mark.parametrize(
+    ("profile", "audience", "records", "record"),
+    (
+        ("hrsd", "HR", "cases", "case"),
+        ("itsm", "IT", "tickets", "ticket"),
+    ),
+)
+def test_existing_identity_test_follow_ups_follow_spec(
+    profile: str,
+    audience: str,
+    records: str,
+    record: str,
+) -> None:
+    with snow.product_profile_context(profile):
+        question = snow._dev_test_clarifying_question("knowledge")
+        empty = snow._dev_empty_result_message("knowledge")
+
+    assert question == (
+        f"What did the request return—your expected {records}, an empty "
+        f"result, or an error? Don't share {record} contents, employee "
+        "identifiers, tokens, or other secrets."
+    )
+    assert empty.startswith(
+        "That matches what you expected, but it doesn't confirm that the "
+        f"agent can retrieve your real {audience} data.\n\n"
+        "Try a supported request"
     )
 
 
@@ -18195,14 +18241,14 @@ _SAVED_MAPPING_STATE = {
 
 
 @pytest.mark.parametrize(
-    ("profile", "audience", "other", "records", "record"),
+    ("profile", "audience", "records", "record"),
     [
-        ("itsm", "IT", "HR", "tickets", "ticket"),
-        ("hrsd", "HR", "IT", "cases", "case"),
+        ("itsm", "IT", "tickets", "ticket"),
+        ("hrsd", "HR", "cases", "case"),
     ],
 )
 def test_test_failure_without_evidence_asks_for_the_specific_error(
-    profile: str, audience: str, other: str, records: str, record: str
+    profile: str, audience: str, records: str, record: str
 ) -> None:
     with snow.product_profile_context(profile):
         result = snow.test_failure_handoff(_SAVED_MAPPING_STATE)
@@ -18212,21 +18258,114 @@ def test_test_failure_without_evidence_asks_for_the_specific_error(
     assert wrapped["endTurn"] is True
     assert "pendingCard" not in wrapped and "nextCommand" not in wrapped
     assert wrapped["chatMessage"] == (
-        f"{audience} didn't return the expected {records}. We'll check the "
-        f"{audience} setup information already supplied to narrow down the "
-        "problem.\n\n"
+        f"The request didn't return the expected {records}. We'll check the "
+        "setup information already supplied to narrow down the problem.\n\n"
         "If more information is needed, we'll ask for the specific error or "
-        f"result\u2014not the whole {other} setup history.\n\n"
+        "result\u2014not the whole setup history.\n\n"
         "We haven't identified the cause yet.\n\n"
         "Did the Test pane show an error, an empty result, or something "
         "else? If there was an error, send only its text without "
         f"{record} contents, employee identifiers, tokens, or other secrets."
     )
+    assert audience not in wrapped["chatMessage"]
     assert "Never infer a shared identity failure" in result["afterReply"]
     assert "Yes/No" not in wrapped["chatMessage"]
 
 
-def test_test_failure_names_a_mismatch_only_when_evidence_differs() -> None:
+def test_test_failure_never_names_the_other_agent_without_a_connection() -> None:
+    for profile in ("itsm", "hrsd"):
+        with snow.product_profile_context(profile):
+            result = snow.test_failure_handoff(_SAVED_MAPPING_STATE)
+        text = result["renderBlock"]["text"]
+        assert "HR setup history" not in text
+        assert "IT setup history" not in text
+        assert "Knowledge" not in text
+
+
+@pytest.mark.parametrize(
+    ("profile", "audience", "other", "records"),
+    [("itsm", "IT", "HR", "tickets"), ("hrsd", "HR", "IT", "cases")],
+)
+def test_test_failure_names_the_other_agent_only_when_it_is_connected(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    audience: str,
+    other: str,
+    records: str,
+) -> None:
+    other_profile = "hrsd" if profile == "itsm" else "itsm"
+    context, selected = _existing_identity_context(
+        monkeypatch, tmp_path, profile, other_profile
+    )
+    with snow.product_profile_context(selected):
+        state = snow._load_lifecycle_state(context)
+        result = snow.test_failure_handoff(state, context=context)
+    assert result["renderBlock"]["text"].startswith(
+        f"{audience} didn't return the expected {records}. We'll check the "
+        f"{audience} setup information already supplied to narrow down the "
+        "problem.\n\n"
+        "If more information is needed, we'll ask for the specific error or "
+        f"result\u2014not the whole {other} setup history."
+    )
+
+
+@pytest.mark.parametrize(
+    ("profile", "audience", "records", "record"),
+    [("itsm", "IT", "tickets", "ticket"), ("hrsd", "HR", "cases", "case")],
+)
+def test_test_failure_existing_identity_uses_the_knowledge_variant(
+    profile: str, audience: str, records: str, record: str
+) -> None:
+    state = {**_SAVED_MAPPING_STATE, "existingIdentity": {"kind": "knowledge"}}
+    with snow.product_profile_context(profile):
+        result = snow.test_failure_handoff(state)
+    assert result["renderBlock"]["text"] == (
+        f"{audience} didn't return the expected {records}. We'll check the "
+        f"{audience} setup information already supplied to narrow down the "
+        "problem.\n\n"
+        "If more information is needed, we'll ask for the specific result "
+        "or error\u2014not the whole setup history.\n\n"
+        "We haven't identified the cause yet.\n\n"
+        "Did the Test pane show an error, an empty result, or something "
+        "else? If there was an error, send only its text without "
+        f"{record} contents, employee identifiers, tokens, or other secrets."
+    )
+
+
+@pytest.mark.parametrize(
+    ("profile", "records"), [("hrsd", "cases"), ("itsm", "tickets")]
+)
+def test_test_failure_custom_claim_uses_the_payroll_variant(
+    profile: str, records: str
+) -> None:
+    state = {
+        "evidence": {
+            "identityMapping": {
+                "tokenClaimName": "employee_id_claim",
+                "serviceNowUserField": "employee_number",
+            }
+        }
+    }
+    with snow.product_profile_context(profile):
+        unknown = snow.test_failure_handoff(state)
+        mismatch = snow.test_failure_handoff(
+            state, "employee_id_claim", "user_name"
+        )
+    text = unknown["renderBlock"]["text"]
+    assert text.startswith(
+        "That doesn't match the result you expected. We'll check the "
+        "available setup information before asking you for anything else.\n\n"
+        "We can't identify the cause from the information available yet.\n\n"
+        "Did the Test pane show an error or only an empty result? "
+    )
+    assert "tokens, or other secrets." in text
+    assert records not in text.split("\n\n")[0]
+    assert mismatch["decision"] == "identity-mapping-review-required"
+    assert "payroll claim value" in mismatch["renderBlock"]["text"]
+
+
+def test_test_failure_mismatch_text_for_the_first_agent() -> None:
     with snow.product_profile_context("itsm"):
         mismatch = snow.test_failure_handoff(
             _SAVED_MAPPING_STATE, "employee_id", "employee_number"
@@ -18243,22 +18382,16 @@ def test_test_failure_names_a_mismatch_only_when_evidence_differs() -> None:
             )
     assert mismatch["decision"] == "identity-mapping-review-required"
     text = mismatch["renderBlock"]["text"]
-    assert text == (
-        "IT didn't return the expected tickets. We'll check the IT setup "
-        "information already supplied to narrow down the problem.\n\n"
-        "The supplied evidence shows a mismatch between the sign-in claim "
-        "and ServiceNow user field.\n\n"
-        "Ask your ServiceNow administrator to review the mismatch with your "
-        "Entra administrator and confirm a supported mapping that accounts "
-        "for the shared setup's existing uses. Don't change an existing "
-        "OIDC configuration serving SSO or the Microsoft Graph connector.\n\n"
-        "Bring back their non-sensitive confirmation that the configuration "
-        "is saved and supports IT, the exact User Claim and User Field, and "
-        "any changed registration or claim values. If a custom claim "
-        "changed, also bring back its completed-setup confirmation for the "
-        "intended employees.\n\n"
-        "We'll recheck the affected setup before you repeat the IT request "
-        "in this agent's Test pane."
+    assert text.startswith(
+        "The request didn't return the expected tickets. We'll check the "
+        "setup information already supplied to narrow down the problem.\n\n"
+        "The supplied identity-mapping evidence shows that the token claim "
+        "and ServiceNow user field don't match, so ServiceNow can't "
+        "identify the signed-in employee."
+    )
+    assert text.endswith(
+        "We'll recheck the affected setup before you repeat the request in "
+        "this agent's Test pane."
     )
     assert "any message means they want to continue" in mismatch["afterReply"]
     assert mismatch["recordsNothing"] is True
@@ -18281,7 +18414,7 @@ def test_test_failure_command_runs_after_context_without_a_card(
     finally:
         snow.ACTIVE_PROFILE = previous
     assert result["renderBlock"]["text"].startswith(
-        "IT didn't return the expected tickets."
+        "The request didn't return the expected tickets."
     )
 
 
@@ -18882,6 +19015,9 @@ _EXISTING_SITUATIONS_WITH_TEXT = {
     "missing-consent": "waiting",
     "blocked-finish": None,
     "hr-prerequisite-self-confirmed": "waiting",
+    "topic-off": None,
+    "binding-missing": None,
+    "retry-after-fix": "waiting",
 }
 
 
@@ -18939,6 +19075,97 @@ def test_existing_identity_metadata_url_reuses_the_v2_validation(
     assert "renderBlock" not in unrelated
     assert wrapped["endTurn"] is True
     assert "any message means they want to continue" in result["afterReply"]
+
+
+@pytest.mark.parametrize(
+    ("profile", "agent", "audience"),
+    [
+        ("itsm", "Employee Self-Service IT", "IT"),
+        ("hrsd", "Employee Self-Service HR", "HR"),
+    ],
+)
+def test_existing_identity_incomplete_setup_messages_follow_spec(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    agent: str,
+    audience: str,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, profile)
+    with snow.product_profile_context(selected):
+        topic = snow.existing_identity_handoff(context, "knowledge", "topic-off")
+        binding = snow.existing_identity_handoff(
+            context, "knowledge", "binding-missing"
+        )
+        retry = snow.existing_identity_handoff(
+            context, "knowledge", "retry-after-fix"
+        )
+    assert topic["renderBlock"]["text"] == (
+        f"A ServiceNow {audience} topic needed for this request is off. "
+        "We'll turn on that built-in topic and leave unrelated topics "
+        "unchanged."
+    )
+    assert binding["renderBlock"]["text"] == (
+        f"**{agent}** isn't linked to the selected ServiceNow connection. "
+        "We'll link this agent to it and keep the completed administrator "
+        "setup."
+    )
+    assert retry["renderBlock"]["text"] == (
+        f"Try the {audience} request again in the Test pane and tell us "
+        "whether it returns the expected data."
+    )
+    assert "record-test" in retry["afterReply"]
+
+
+@pytest.mark.parametrize(
+    ("profile", "audience", "records"),
+    [("itsm", "IT", "tickets"), ("hrsd", "HR", "cases")],
+)
+def test_existing_identity_portal_confirmation_asks_the_spec_question(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    audience: str,
+    records: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, path = _write_shared_target_state(
+        tmp_path,
+        profile=profile,
+        agent_id=AGENT_ID,
+        agent_slug="employee-self-service-hr",
+        instance_name="dev123",
+    )
+    state = json.loads(path.read_text(encoding="utf-8"))
+    state["existingIdentity"] = {"kind": "knowledge"}
+    path.write_text(json.dumps(state), encoding="utf-8")
+    with snow.product_profile_context(profile):
+        result = snow.portal_url_confirmation(
+            context, "dev123.service-now.com/sp"
+        )
+    assert result["question"] == (
+        "Is **https://dev123.service-now.com/sp** the portal employees "
+        f"should use for {audience} {records}?"
+    )
+    assert result["options"] == PORTAL_CONFIRMATION_OPTIONS
+
+
+def test_target_change_notice_for_existing_identity_uses_the_spec_line(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(selected):
+        generic = snow.target_change_handoff(context, "environment", "Dev 2")
+        snow.existing_identity_handoff(context, "knowledge")
+        existing = snow.target_change_handoff(context, "environment", "Dev 2")
+    assert generic["renderBlock"]["text"].endswith(
+        "without those checks."
+    )
+    assert existing["renderBlock"]["text"].endswith(
+        "We won't assume that the connection or test evidence from Example "
+        "Dev applies there."
+    )
 
 
 def test_existing_identity_mode_changes_later_progress_wording(

@@ -538,7 +538,7 @@ def test_servicenow_test_question_has_explicit_result_choices(
     doc = (
         _CONNECT / provider / "actions" / "test-connection.md"
     ).read_text(encoding="utf-8")
-    assert "--result <pass-fail-untested-or-empty>" in doc
+    assert "--result <pass-fail-untested-empty-or-unclear>" in doc
     assert "record `--result untested`" in doc
     assert "`--result empty`" in doc
     assert "Required prompt" in doc and "do not add a \"Required prompt\"" in doc

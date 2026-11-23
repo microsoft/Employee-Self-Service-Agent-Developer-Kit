@@ -673,6 +673,14 @@ and none records identity values:
   back, or tries to finish while a confirmation is outstanding.
 - `hr-prerequisite-self-confirmed` (HR agent only): the maker confirms the
   HR prerequisite without the administrator's reply.
+- `topic-off`, `binding-missing`, `retry-after-fix`: a supported check shows a
+  required built-in topic is off or the agent isn't linked to the selected
+  connection (never from a generic failure). Send the matching message, apply
+  only that targeted correction, keep the completed administrator setup and
+  the Knowledge connector unchanged, then send `retry-after-fix`. In this mode
+  the portal confirmation question reads "Is **{URL}** the portal employees
+  should use for {IT tickets|HR cases}?" and the URL is saved only after the
+  maker confirms.
 
 **Second ESS agent reusing this instance's sign-in setup.** When the other ESS
 ServiceNow agent (HR for IT, IT for HR) already completed sign-in setup in this
@@ -713,6 +721,10 @@ We won't reuse evidence from {Previous environment} without those checks.
 
 **End message.**
 
+When the existing sign-in setup marker is set, the last line is "We won't assume
+that the connection or test evidence from {Previous environment} applies
+there." The command applies it automatically.
+
 **HR service areas empty (HR agent only).** When the maker reports that the
 HR service-area list is empty (for example when creating an HR case), get the
 Message from the controller instead of writing it: run
@@ -744,9 +756,9 @@ agent's Test pane and tell us whether the service areas appear.
 
 **End message.**
 
-**Another agent worked, this one's test failed.** When the maker says another
-ESS agent (HR or IT) worked with this connection but this agent's Test pane
-request did not return the expected results, get the Message from the
+**The Test request didn't return the expected results.** When the maker says
+this agent's Test pane request did not return the expected results (including
+when another ESS agent or Knowledge still works), get the Message from the
 controller instead of writing it: run
 `python scripts/connect_servicenow_da.py --provider {PROVIDER} test-failure-handoff`,
 send `chatMessage` verbatim as the whole reply, and follow `endTurn` and
@@ -756,22 +768,25 @@ request failed. Add `--reported-claim "<claim>" --reported-user-field "<field>"`
 only when the administrators' reply or the maker's evidence actually names the
 claim and User Field; the controller names the mismatch only when they differ
 from the saved mapping, and otherwise asks for the specific error or result. Ask
-only for what is still missing, and never for the other agent's whole setup
-history. Missing consent or a `/v2.0` metadata URL is named only when a
-supported check or an actual reported URL shows it (use `metadata-url-handoff`
-for the URL); never infer either from a generic failure. When the maker
-returns, any message means they want to continue: record only the
-administrators' non-sensitive reply, recheck the affected setup, then ask the
-maker to repeat the request in the Test pane. The Message without identity
-evidence is:
+only for what is still missing, and never for the whole setup history. Missing
+consent or a `/v2.0` metadata URL is named only when a supported check or an
+actual reported URL shows it (use `metadata-url-handoff` for the URL); never
+infer either from a generic failure. When the maker returns, any message means
+they want to continue: record only the administrators' non-sensitive reply,
+recheck the affected setup, then ask the maker to repeat the request in the
+Test pane. The controller picks the variant itself and names the other agent
+(HR or IT) only when that agent is actually connected, uses the existing-identity
+wording when the marker is set, and uses the payroll wording when the saved
+User Claim is a custom claim. The first-agent Message without identity evidence
+is:
 
 **Message:**
 
-IT didn't return the expected tickets. We'll check the IT setup information
-already supplied to narrow down the problem.
+The request didn't return the expected tickets. We'll check the setup
+information already supplied to narrow down the problem.
 
 If more information is needed, we'll ask for the specific error or result—not
-the whole HR setup history.
+the whole setup history.
 
 We haven't identified the cause yet.
 
@@ -781,8 +796,20 @@ tokens, or other secrets.
 
 **End message.**
 
+When another agent is connected, the first paragraph names the agent
+("IT didn't return the expected tickets. We'll check the IT setup information
+already supplied to narrow down the problem.") and the second ends "not the
+whole HR setup history." With the existing sign-in setup marker, the second
+paragraph is "If more information is needed, we'll ask for the specific result
+or error—not the whole setup history." With a custom (payroll) User Claim, the
+Message is "That doesn't match the result you expected. We'll check the
+available setup information before asking you for anything else." followed by
+"We can't identify the cause from the information available yet." and "Did the
+Test pane show an error or only an empty result?" with the same secrets caveat.
+
 With evidence that the claim and User Field differ from the saved mapping, the
-reply continues after its first paragraph with:
+reply continues after its first paragraph with the mismatch text for the
+variant. For a second agent it is:
 
 **Message:**
 
