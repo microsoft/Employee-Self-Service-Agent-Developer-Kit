@@ -73,6 +73,11 @@ selected, attached, or prepared. Reuse it silently, without asking:
 - Otherwise, when the maker only named the agent, run plain `agent-chooser`
   without showing its `question`, and use the `prepared:{ID}` key of the one
   `agents` entry whose `name` exactly matches that name.
+- When the maker named no agent and wants a plain chat question instead of the
+  card, get it from
+  `python scripts/connect_servicenow_da.py --provider {PROVIDER} validation-notice --situation agent-chooser`
+  (see **Validation notices** below), send it verbatim, and map the reply to
+  one `prepared:{ID}` key.
 
 Continue only when the result is `status: ready`; then show the confirmation
 Message at the end of this section, with its **Choose a different agent**
@@ -1063,6 +1068,50 @@ We'll recheck the affected setup before continuing. Don't include employee
 identifiers or secrets.
 
 **End message.**
+
+**Validation notices (controller-emitted).** For the situations below, get
+the Message from the controller instead of writing it: run
+`python scripts/connect_servicenow_da.py --provider {PROVIDER} validation-notice --situation {SITUATION}`
+with the extra arguments listed, send `chatMessage` verbatim as the whole
+reply, and follow `endTurn` and `afterReply`. The command records nothing and
+shows no card or Yes/No. `--scenario {first-agent|second-agent|payroll}` is
+derived from the saved state (second agent when another ESS agent already
+uses the connection); pass `payroll` explicitly only for the HR payroll
+custom-claim flow. When the command errors because the spec defines no wording
+for that scenario, do not write one: name the actual blocker, its owner, and
+the exact outstanding action instead. A saved existing-identity marker routes
+the existing-identity situations to `existing-identity-handoff`; only the
+context-free situations below are shared.
+
+- `agent-chooser`: no saved state is needed. When the maker has not named an
+  agent, ask the plain question instead of the Choose agent card, then map the
+  reply to `agent-chooser --selection-key "prepared:{AGENT_ID}"` (or
+  `another-agent --agent-link`).
+- `instance-question` (first agent only): the plain question for the
+  ServiceNow instance URL; never accept credentials.
+- `knowledge-only-exit`: when the maker only wants ServiceNow Knowledge and no
+  ESS connection, send the message and end the turn. Start no setup and record
+  nothing.
+- `sso-conflict`: use this instead of the hand-written conflict Message above.
+  Never change or troubleshoot the existing SSO or Graph configuration.
+- `claim-contradiction` (add `--entra-claim` and `--servicenow-claim`, only
+  when the administrators' replies name different claims).
+- `blocked-finish` (add `--waiting-for servicenow`, or `--waiting-for
+  entra-claim` for payroll): when the maker asks to finish, or reports the
+  integration done, while required setup is incomplete. Claim neither success
+  nor completion. When a different blocker remains, name it instead.
+- `connection-disconnected` (add `--connection-name "<friendly name>"`, never
+  an ID or a URL) and `no-usable-connection` (second agent; the confirmed
+  Client ID and instance name must already be recorded).
+- `resource-uri-claim-name` (payroll; add `--claim-name "<claim>"`): only when
+  the maker's reply shows the connection's Resource URI is set to the claim
+  name.
+- `topic-off` and `agent-not-linked`: only after a supported check or the
+  maker's observed result shows it. Then run the topics or connection step and
+  `retry-request`.
+- `missing-consent`: only when a supported check identifies the missing
+  consent. Never infer it from a generic failure, and never claim a live-tenant
+  consent check ran when it did not.
 
 ## ServiceNow rules
 

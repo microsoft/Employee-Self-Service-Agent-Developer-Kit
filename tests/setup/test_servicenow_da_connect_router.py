@@ -1464,6 +1464,26 @@ def test_target_change_notice_is_routed_in_shared_docs() -> None:
         assert "target-change-handoff" in text, name
 
 
+def test_validation_notice_is_routed_in_entry_docs() -> None:
+    entry = " ".join(
+        (_SOLUTION / "src" / "skills" / "connect" / "servicenow" / "entry.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "validation-notice --situation" in entry
+    for situation in (
+        "agent-chooser",
+        "knowledge-only-exit",
+        "sso-conflict",
+        "claim-contradiction",
+        "blocked-finish",
+        "connection-disconnected",
+        "missing-consent",
+    ):
+        assert f"`{situation}`" in entry or f"`{situation} " in entry, situation
+    assert "Never infer it from a generic failure" in entry
+
+
 def test_existing_identity_handoff_is_routed_in_shared_docs() -> None:
     root = _SOLUTION / "src" / "skills" / "connect"
     entry = " ".join((root / "servicenow" / "entry.md").read_text(encoding="utf-8").split())
