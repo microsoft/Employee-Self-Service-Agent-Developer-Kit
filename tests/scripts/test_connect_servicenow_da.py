@@ -4554,27 +4554,44 @@ def test_preflight_multiple_candidates_are_independent_normal_choices(
             discovery_error=None,
         )
 
+    assert question["header"] == (
+        f"Should {display_name.replace('(', '').replace(')', '')} use the "
+        "ServiceNow instance dev111?"
+    )
     assert [option["label"] for option in question["options"]] == [
-        "dev111",
-        "dev222",
-        "Another instance",
+        "Yes",
+        "No",
     ]
     assert not any(
         option.get("recommended") for option in question["options"]
     )
     assert choices == {
-        "dev111": "https://dev111.service-now.com",
-        "dev222": "https://dev222.service-now.com",
-        "Another instance": "manual",
+        "Yes": "https://dev111.service-now.com",
+        "No": "next",
     }
-    spec_name = display_name.replace("(", "").replace(")", "")
-    assert question["header"] == (
-        f"Which ServiceNow instance should {spec_name} use?"
-    )
     assert slug not in question["question"]
     assert "**Problem**" not in question["question"]
-    assert manual["header"] == question["header"]
     assert "`https://<your-instance>.service-now.com`" in manual["question"]
+    assert manual["allowFreeformInput"] is True
+    assert "options" not in manual
+    with snow.product_profile_context(profile):
+        follow_ups = snow._instance_follow_up_questions(
+            candidates=["dev111", "dev222"],
+            discovery_error=None,
+        )
+    assert len(follow_ups) == 1
+    assert follow_ups[0]["question"]["header"] == (
+        f"Should {display_name.replace('(', '').replace(')', '')} use the "
+        "ServiceNow instance dev222?"
+    )
+    assert [o["label"] for o in follow_ups[0]["question"]["options"]] == [
+        "Yes",
+        "No",
+    ]
+    assert follow_ups[0]["choiceValues"] == {
+        "Yes": "https://dev222.service-now.com",
+        "No": "manual",
+    }
 
 
 def test_preflight_keeps_confirmed_instance_when_new_connection_appears(
@@ -4823,6 +4840,27 @@ def test_resolve_credential_requires_bounded_choice_for_multiple_exact(
     assert [candidate["label"] for candidate in choice["candidates"]] == [
         "ServiceNow A (Connected, option 1)",
         "ServiceNow B (Connected, option 2)",
+    ]
+    first_card = choice["question"]
+    assert first_card["header"] == (
+        "Use the ServiceNow connection ServiceNow A (Connected, option 1)?"
+    )
+    assert [option["label"] for option in first_card["options"]] == [
+        "Yes",
+        "No",
+    ]
+    assert choice["questionSelectionKey"] == (
+        choice["candidates"][0]["selectionKey"]
+    )
+    assert len(choice["followUpQuestions"]) == 1
+    follow_up = choice["followUpQuestions"][0]
+    assert follow_up["selectionKey"] == choice["candidates"][1]["selectionKey"]
+    assert follow_up["question"]["header"] == (
+        "Use the ServiceNow connection ServiceNow B (Connected, option 2)?"
+    )
+    assert [o["label"] for o in follow_up["question"]["options"]] == [
+        "Yes",
+        "No",
     ]
     serialized = json.dumps(choice)
     assert first_id not in serialized
@@ -5906,6 +5944,50 @@ def test_declined_entra_does_not_offer_dependent_oidc(
     assert second["decision"] == "already-recorded"
 
 
+def test_shared_reuse_asks_yes_no_about_each_source_in_turn(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    for slug, agent_id in (
+        ("hr-source-a", AGENT_ID),
+        ("hr-source-b", "00000000-0000-4000-8000-000000002224"),
+    ):
+        _write_shared_source_state(
+            tmp_path,
+            profile="hrsd",
+            agent_id=agent_id,
+            agent_slug=slug,
+            include_oidc=False,
+            include_credential=False,
+        )
+    context, _target_path = _write_shared_target_state(
+        tmp_path,
+        profile="itsm",
+        agent_id=OTHER_AGENT_ID,
+        agent_slug="employee-self-service-it",
+        instance_name="dev123",
+    )
+    with snow.product_profile_context("itsm"):
+        first = snow.shared_reuse_handoff(context)
+        assert first["decision"] == "question-required"
+        assert first["moreCandidates"] is True
+        assert [o["label"] for o in first["question"]["options"]] == [
+            "Yes",
+            "No",
+        ]
+        snow.apply_shared_configuration_reuse(
+            context,
+            source_key=first["candidate"]["sourceKey"],
+            decision="decline",
+        )
+        second = snow.shared_reuse_handoff(context)
+
+    assert second["decision"] == "question-required"
+    assert second["moreCandidates"] is False
+    assert second["candidate"]["sourceKey"] != first["candidate"]["sourceKey"]
+
+
 def test_identity_item_decision_history_preserves_prior_acceptance(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -6333,15 +6415,24 @@ def test_saved_portal_value_deduplicates_and_requires_value_selection(
     with snow.product_profile_context("itsm"):
         handoff = snow.portal_value_reuse_handoff(context)
 
-    assert handoff["decision"] == "source-selection-required"
-    assert len(handoff["candidates"]) == 2
-    employee = next(
-        candidate
-        for candidate in handoff["candidates"]
-        if candidate["portalUrl"].endswith("/employee")
-    )
+    assert handoff["decision"] == "question-required"
+    assert handoff["candidate"]["portalUrl"].endswith("/employee")
+    assert handoff["nextSourceKey"] is not None
+    assert [choice["label"] for choice in handoff["portalDecisionChoices"]] == [
+        "Yes",
+        "No",
+    ]
+    employee = handoff["candidate"]
     assert len(employee["sources"]) == 2
     assert len(employee["sourceLabels"]) == 2
+    with snow.product_profile_context("itsm"):
+        second = snow.portal_value_reuse_handoff(
+            context,
+            source_key=handoff["nextSourceKey"],
+        )
+    assert second["decision"] == "question-required"
+    assert second["candidate"]["portalUrl"].endswith("/esc")
+    assert second["nextSourceKey"] is None
 
 
 @pytest.mark.parametrize(
@@ -15281,19 +15372,21 @@ def test_agent_chooser_lists_prepared_agents_without_remote_discovery(
     assert result["status"] == "choice-required"
     assert result["agents"][0]["id"] == AGENT_ID
     assert result["agents"][0]["status"] == "prepared"
-    assert "prepared in this workspace" in result["question"]["question"]
     assert result["question"]["header"] == (
-        "Which agent should we connect to ServiceNow?"
+        "Connect Employee Self-Service (IT) to ServiceNow?"
     )
     assert result["question"]["allowFreeformInput"] is False
-    assert result["question"]["options"][0] == {
-        "label": "Employee Self-Service (IT)",
-        "selectionKey": f"prepared:{AGENT_ID}",
-    }
-    assert result["question"]["options"][-1] == {
-        "label": "Another agent",
-        "selectionKey": "another-agent",
-    }
+    assert result["question"]["options"] == [
+        {"label": "Yes", "selectionKey": f"prepared:{AGENT_ID}"},
+        {"label": "No", "selectionKey": "another-agent"},
+    ]
+    declined = snow.agent_chooser_handoff(
+        tmp_path,
+        selection_key="another-agent",
+    )
+    assert declined["status"] == "agent-link-required"
+    assert declined["question"]["allowFreeformInput"] is True
+    assert declined["question"]["options"] == []
     selected = snow.agent_chooser_handoff(
         tmp_path,
         selection_key=f"prepared:{AGENT_ID}",
@@ -15356,20 +15449,9 @@ def test_agent_chooser_offers_link_when_no_agent_is_prepared(
 
     result = snow.agent_chooser_handoff(tmp_path)
 
-    assert result["agents"] == []
-    assert result["question"]["options"] == [
-        {
-            "label": "Another agent",
-            "selectionKey": "another-agent",
-        }
-    ]
-    assert result["question"]["question"].startswith(
-        "No Employee Self-Service agents are prepared"
-    )
-    link_question = snow.agent_chooser_handoff(
-        tmp_path,
-        selection_key="another-agent",
-    )
+    assert result["status"] == "agent-link-required"
+    assert result["branch"] == "explicit-agent-link"
+    link_question = result
     assert link_question["question"] == {
         "header": "What is the Copilot Studio link for the agent?",
         "question": (
@@ -15517,8 +15599,8 @@ def test_agent_chooser_reports_setup_incomplete_for_pending_agent(
     assert result["stateChanged"] is False
     assert "no longer available" not in result["message"]
     listing = snow.agent_chooser_handoff(tmp_path)
-    assert listing["status"] == "choice-required"
-    assert listing["agents"] == []
+    assert listing["status"] == "agent-link-required"
+    assert listing["question"]["allowFreeformInput"] is True
     link = (
         "https://copilotstudio.test.microsoft.com/environments/"
         f"{ENVIRONMENT_ID}/bots/{AGENT_ID}"

@@ -3552,6 +3552,17 @@ def agent_chooser_handoff(
             unsupported_agents=unsupported_agents,
         )
     if selection_key is not None:
+        if selection_key.startswith("next-agent:"):
+            raw_index = selection_key.split(":", 1)[1]
+            if not raw_index.isdigit():
+                raise ServiceNowConnectError(
+                    "The agent selection is invalid. Choose again."
+                )
+            return _agent_candidate_result(
+                environment,
+                prepared_choices,
+                int(raw_index),
+            )
         if selection_key == "another-agent":
             return {
                 "schemaVersion": "servicenow.agent-chooser.v1",
@@ -3585,28 +3596,33 @@ def agent_chooser_handoff(
             )
         return _prepared_agent_result(prepared)
 
+    return _agent_candidate_result(environment, prepared_choices, 0)
+
+
+def _agent_candidate_result(
+    environment: dict[str, Any],
+    prepared_choices: list[dict[str, Any]],
+    index: int,
+) -> dict[str, Any]:
+    """Ask Yes/No about one prepared agent; No moves to the next candidate.
+
+    After the last candidate (or with none prepared) the typed agent-link
+    question is returned instead of a card.
+    """
+    if index >= len(prepared_choices):
+        return {
+            "schemaVersion": "servicenow.agent-chooser.v1",
+            "status": "agent-link-required",
+            "branch": "explicit-agent-link",
+            "question": _agent_link_question(),
+            "stateChanged": False,
+        }
     labels = _chooser_option_labels(prepared_choices)
-    options = [
-        {
-            "label": label,
-            "selectionKey": f"prepared:{choice['id']}",
-        }
-        for choice, label in zip(prepared_choices, labels)
-    ]
-    options.append(
-        {
-            "label": "Another agent",
-            "selectionKey": "another-agent",
-        }
-    )
-    question_text = (
-        "The listed agents are prepared in this workspace. This is not a "
-        "list of every agent in the environment."
-        if prepared_choices
-        else (
-            "No Employee Self-Service agents are prepared in this workspace. "
-            "Choose Another agent and paste its Copilot Studio link."
-        )
+    choice = prepared_choices[index]
+    no_key = (
+        f"next-agent:{index + 1}"
+        if index + 1 < len(prepared_choices)
+        else "another-agent"
     )
     return {
         "schemaVersion": "servicenow.agent-chooser.v1",
@@ -3614,10 +3630,21 @@ def agent_chooser_handoff(
         "branch": "choose-agent",
         "environmentId": environment.get("id"),
         "agents": prepared_choices,
+        "candidateIndex": index,
+        "candidateCount": len(prepared_choices),
         "question": {
-            "header": "Which agent should we connect to ServiceNow?",
-            "question": question_text,
-            "options": options,
+            "header": f"Connect {labels[index]} to ServiceNow?",
+            "question": (
+                "This agent is prepared in this workspace. This is not a "
+                "list of every agent in the environment."
+            ),
+            "options": [
+                {
+                    "label": "Yes",
+                    "selectionKey": f"prepared:{choice['id']}",
+                },
+                {"label": "No", "selectionKey": no_key},
+            ],
             "allowFreeformInput": False,
         },
         "stateChanged": False,
@@ -6065,42 +6092,69 @@ def _preflight_instance_question(
         "allowFreeformInput": True,
     }
     if candidates:
-        single = len(candidates) == 1
-        if single:
-            choices = {
-                "Yes": f"https://{candidates[0]}.service-now.com",
-                "No": "manual",
-            }
-            header = (
-                f"Should {agent_label} use the ServiceNow instance "
-                f"{candidates[0]}?"
-            )
-            explanation = (
-                f"We found **{candidates[0]}** in your existing "
-                f"connections.{error_text}"
-            )
-        else:
-            choices = {
-                candidate: f"https://{candidate}.service-now.com"
-                for candidate in candidates
-            }
-            choices["Another instance"] = "manual"
-            header = f"Which ServiceNow instance should {agent_label} use?"
-            explanation = (
-                "We found these instances in your existing "
-                f"connections.{error_text}"
-            )
-        question = {
-            "header": header,
-            "question": explanation,
-            "options": [
-                {"label": label}
-                for label in choices
-            ],
-            "allowFreeformInput": False,
-        }
+        question, choices = _instance_candidate_card(
+            agent_label=agent_label,
+            candidate=candidates[0],
+            error_text=error_text,
+            is_last=len(candidates) == 1,
+        )
         return question, choices, manual_question
     return manual_question, {}, manual_question
+
+
+def _instance_candidate_card(
+    *,
+    agent_label: str,
+    candidate: str,
+    error_text: str,
+    is_last: bool,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Yes/No card for one discovered instance.
+
+    **No** opens the manual question after the last candidate; otherwise it
+    moves to the next follow-up card.
+    """
+    choices = {
+        "Yes": f"https://{candidate}.service-now.com",
+        "No": "manual" if is_last else "next",
+    }
+    question = {
+        "header": (
+            f"Should {agent_label} use the ServiceNow instance {candidate}?"
+        ),
+        "question": (
+            f"We found **{candidate}** in your existing "
+            f"connections.{error_text}"
+        ),
+        "options": [{"label": label} for label in choices],
+        "allowFreeformInput": False,
+    }
+    return question, choices
+
+
+def _instance_follow_up_questions(
+    *,
+    candidates: list[str],
+    discovery_error: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    agent_label = _spec_agent_name()
+    error_text = ""
+    if discovery_error is not None:
+        error_text = (
+            "\n\nWe couldn't check your existing connections automatically. "
+            "You can still send the public ServiceNow address; we'll verify "
+            "it when the connection is created."
+        )
+    follow_ups = []
+    for index, candidate in enumerate(candidates[1:], start=1):
+        question, choices = _instance_candidate_card(
+            agent_label=agent_label,
+            candidate=candidate,
+            error_text=error_text,
+            is_last=index == len(candidates) - 1,
+        )
+        follow_ups.append({"question": question, "choiceValues": choices})
+    return follow_ups
 
 
 def _credential_selection_key(connection_id: str) -> str:
@@ -6129,6 +6183,33 @@ def _connection_matches_expected_credential(
         )
     except ServiceNowConnectError:
         return False
+
+
+def _credential_candidate_questions(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """One Yes/No question per healthy connection, asked in order.
+
+    **No** on a candidate moves to the next one; after the last **No** the
+    maker is asked in plain chat which connection to use.
+    """
+    return [
+        {
+            "selectionKey": candidate["selectionKey"],
+            "question": {
+                "header": f"Use the ServiceNow connection {candidate['label']}?",
+                "question": (
+                    "It already uses Microsoft Entra ID User Login with the "
+                    "required Resource URI and Instance Name. No new "
+                    "connection will be created. Make sure this agent's "
+                    "Connection Settings use the same connection."
+                ),
+                "options": [{"label": "Yes"}, {"label": "No"}],
+                "allowFreeformInput": False,
+            },
+        }
+        for candidate in candidates
+    ]
 
 
 def _credential_resolution(
@@ -6172,6 +6253,19 @@ def _credential_resolution(
             str(connection.get("connectionId") or ""),
         ),
     )
+    candidates = [
+        {
+            "selectionKey": _credential_selection_key(
+                str(connection["connectionId"])
+            ),
+            "label": (
+                f"{connection.get('displayName') or 'ServiceNow connection'} "
+                f"(Connected, option {index})"
+            ),
+        }
+        for index, connection in enumerate(healthy, start=1)
+        if connection.get("connectionId")
+    ]
     return {
         "expected": {
             "authMode": AUTH_MODE,
@@ -6180,19 +6274,7 @@ def _credential_resolution(
         },
         "healthyExactCount": len(healthy),
         "unhealthyExactCount": len(unhealthy),
-        "healthyExactCandidates": [
-            {
-                "selectionKey": _credential_selection_key(
-                    str(connection["connectionId"])
-                ),
-                "label": (
-                    f"{connection.get('displayName') or 'ServiceNow connection'} "
-                    f"(Connected, option {index})"
-                ),
-            }
-            for index, connection in enumerate(healthy, start=1)
-            if connection.get("connectionId")
-        ],
+        "healthyExactCandidates": candidates,
     }
 
 
@@ -6522,47 +6604,27 @@ def portal_value_reuse_handoff(
             "candidates": [],
         }
     if source_key is None and len(candidates) > 1:
-        choices = [
-            {
-                "label": candidate["portalUrl"],
-                "sourceKey": candidate["sourceKey"],
-            }
+        # No picker: ask Yes/No about the first candidate; **No** moves to
+        # `nextSourceKey` and only the last **No** records the decline.
+        source_key = candidates[0]["sourceKey"]
+    selected = next(
+        (
+            candidate
             for candidate in candidates
-        ]
-        return {
-            "schemaVersion": "servicenow.portal-value-reuse.v1",
-            "decision": "source-selection-required",
-            "candidates": copy.deepcopy(candidates),
-            "portalSourceChoices": choices,
-            "question": {
-                "header": "Which saved employee portal URL should we use?",
-                "question": (
-                    "Compatible employee portal URLs confirmed by an "
-                    "administrator were saved for other agents in this "
-                    "workspace."
-                ),
-                "options": [
-                    {"label": choice["label"]} for choice in choices
-                ],
-                "allowFreeformInput": False,
-            },
-        }
-    selected = (
-        candidates[0]
-        if source_key is None
-        else next(
-            (
-                candidate
-                for candidate in candidates
-                if candidate["sourceKey"] == source_key
-            ),
-            None,
-        )
+            if source_key is None or candidate["sourceKey"] == source_key
+        ),
+        None,
     )
     if selected is None:
         raise ServiceNowConnectError(
             "The selected saved portal URL source is stale or unavailable."
         )
+    selected_index = candidates.index(selected)
+    next_source_key = (
+        candidates[selected_index + 1]["sourceKey"]
+        if selected_index + 1 < len(candidates)
+        else None
+    )
     decision_choices = [
         {"label": "Yes", "decision": "accept"},
         {"label": "No", "decision": "decline"},
@@ -6571,6 +6633,7 @@ def portal_value_reuse_handoff(
         "schemaVersion": "servicenow.portal-value-reuse.v1",
         "decision": "question-required",
         "candidate": copy.deepcopy(selected),
+        "nextSourceKey": next_source_key,
         "portalDecisionChoices": decision_choices,
         "question": {
             "header": (
@@ -7071,23 +7134,8 @@ def shared_reuse_handoff(
             "decision": "already-recorded",
             "record": copy.deepcopy(prior),
         }
-    if source_key is None and len(candidates) > 1:
-        return {
-            "schemaVersion": "servicenow.shared-reuse-handoff.v1",
-            "decision": "source-selection-required",
-            "candidates": [
-                {
-                    "sourceKey": candidate["sourceKey"],
-                    "label": (
-                        f"{candidate['sourceProfile'].upper()} "
-                        f"{candidate['sourceAgentSlug']} "
-                        f"({len(candidate['items'])} reusable items)"
-                    ),
-                    "items": copy.deepcopy(candidate["items"]),
-                }
-                for candidate in candidates
-            ],
-        }
+    # No picker: the first candidate is asked as a Yes/No question. After a
+    # decline its items are filtered out, so a rerun asks the next candidate.
     if source_key is not None:
         candidates = [
             candidate
@@ -7128,6 +7176,7 @@ def shared_reuse_handoff(
         "schemaVersion": "servicenow.shared-reuse-handoff.v1",
         "decision": "question-required",
         "candidate": copy.deepcopy(candidate),
+        "moreCandidates": len(candidates) > 1,
         "reuseDecisionChoices": decision_choices,
         "question": {
             "header": (
@@ -7487,6 +7536,14 @@ def inspect_admin_setup(context: dict[str, Any]) -> dict[str, Any]:
         "instanceQuestion": instance_question,
         "manualInstanceQuestion": manual_instance_question,
         "instanceChoices": instance_choices,
+        "instanceFollowUps": (
+            _instance_follow_up_questions(
+                candidates=instance_candidates,
+                discovery_error=discovery_error,
+            )
+            if instance_name is None
+            else []
+        ),
         "discoveryError": discovery_error,
         "requiredPlugins": required_servicenow_prerequisites(
             setup["scope"],
@@ -7596,12 +7653,21 @@ def resolve_credential_completion(
             "evidence": evidence,
         }
     if len(healthy) > 1:
+        candidate_questions = _credential_candidate_questions(
+            resolution["healthyExactCandidates"]
+        )
         return {
             "status": "choice-required",
             "candidates": resolution["healthyExactCandidates"],
+            "question": candidate_questions[0]["question"],
+            "questionSelectionKey": candidate_questions[0]["selectionKey"],
+            "followUpQuestions": candidate_questions[1:],
             "message": (
                 "Multiple exact healthy ServiceNow connections are available. "
-                "Select one candidate by label."
+                "Ask the Yes/No question for the first connection. On Yes run "
+                "resolve-credential with its selection key; on No ask the "
+                "next follow-up question. After the last No, ask in chat "
+                "which connection to use or whether to create a new one."
             ),
         }
     unhealthy_exact = int(resolution.get("unhealthyExactCount") or 0)
@@ -11322,6 +11388,8 @@ def _pending_preflight_input(
         manual_question = None
     choices = discovery.get("instanceChoices")
     choices = choices if isinstance(choices, dict) else {}
+    follow_ups = discovery.get("instanceFollowUps")
+    follow_ups = follow_ups if isinstance(follow_ups, list) else []
     return {
         "schemaVersion": "servicenow.pending-input.v1",
         "kind": "instance-confirmation",
@@ -11329,6 +11397,7 @@ def _pending_preflight_input(
         "question": copy.deepcopy(question),
         "manualQuestion": copy.deepcopy(manual_question),
         "choiceValues": copy.deepcopy(choices),
+        "followUpQuestions": copy.deepcopy(follow_ups),
     }
 
 
@@ -11526,10 +11595,7 @@ def _shared_reuse_before_availability(
     ):
         return None, False
     handoff = shared_reuse_handoff(context)
-    if handoff.get("decision") in {
-        "question-required",
-        "source-selection-required",
-    }:
+    if handoff.get("decision") == "question-required":
         return handoff, True
     return handoff, False
 
@@ -11740,8 +11806,8 @@ def resume_handoff(
         ),
     }
     if (
-        isinstance(pre_action_handoff, dict)        and pre_action_handoff.get("decision")
-        in {"question-required", "source-selection-required"}
+        isinstance(pre_action_handoff, dict)
+        and pre_action_handoff.get("decision") == "question-required"
     ):
         result["status"] = "shared-identity-reuse-required"
         result["preActionHandoff"] = pre_action_handoff
@@ -14285,7 +14351,10 @@ def _pending_cards(value: Any) -> list[dict[str, Any]]:
                 found.append(node)
                 return
             for key, item in node.items():
-                if key == "canonicalQuestion" or str(key).startswith("manual"):
+                if (
+                    key in {"canonicalQuestion", "followUpQuestions"}
+                    or str(key).startswith("manual")
+                ):
                     continue
                 visit(item)
         elif isinstance(node, list):
