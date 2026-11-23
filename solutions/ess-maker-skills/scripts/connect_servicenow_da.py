@@ -1197,6 +1197,7 @@ def identity_direct_handoff(
     stage: str,
     captured_client_id: str | None = None,
     captured_user_field: str | None = None,
+    custom_identifier: bool = False,
 ) -> dict[str, Any]:
     if stage not in {"entra", "servicenow"}:
         raise ServiceNowConnectError(
@@ -1359,6 +1360,27 @@ def identity_direct_handoff(
             existing_kind,
             claim_name=claim_name if stage == "servicenow" else None,
         )
+    elif _custom_identifier_active(state, requested=custom_identifier):
+        instance_for_packet = normalize_instance_name(
+            expected_identity["instanceName"]
+        )
+        if stage == "entra":
+            packet_text = _custom_identifier_entra_packet(instance_for_packet)
+        else:
+            packet_text = _custom_identifier_servicenow_packet(
+                instance_name=instance_for_packet,
+                client_id=client_id,
+                tenant_id=_normalize_directory_tenant_id(
+                    expected_identity["tenantId"]
+                ),
+                claim_name=claim_name,
+            )
+        lead_in = _custom_identifier_lead_in(
+            stage,
+            claim_name=claim_name if stage == "servicenow" else None,
+        )
+        if custom_identifier:
+            _record_custom_identifier(context, state)
     elif second_agent := _second_agent_reuse(context, state):
         instance_for_packet = normalize_instance_name(
             expected_identity["instanceName"]
@@ -10913,6 +10935,13 @@ def _current_task_guidance(
                 client_id=client_id,
                 instance_name=instance_name,
             )
+        if _custom_identifier_active(state):
+            return _custom_identifier_connection_guidance(
+                context,
+                state,
+                client_id=client_id,
+                instance_name=instance_name,
+            )
         second_agent = _second_agent_reuse(context, state)
         if second_agent:
             return _second_agent_connection_guidance(
@@ -13204,6 +13233,16 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     direct_handoff_parser.add_argument(
+        "--custom-identifier",
+        action="store_true",
+        help=(
+            "The maker or administrators say ServiceNow identifies employees "
+            "by a custom identifier such as a payroll ID. Records only a "
+            "non-identity marker so later handoffs keep the custom-claim "
+            "wording."
+        ),
+    )
+    direct_handoff_parser.add_argument(
         "--client-id",
         help=(
             "Current-turn Application client ID already accepted by the "
@@ -14034,7 +14073,8 @@ def claim_confirmation_handoff(
     The Part 4 custom-claim instructions are sent only when the maker says a
     custom claim is wanted. The maker is never asked to pick a mapping, invent
     a claim name or fall back to email; only the missing confirmations are
-    requested.
+    requested. With a custom claim whose name is already given, spec S4-F's
+    fixed reply asks the Entra administrator to complete the custom-claim work.
     """
     if not custom_claim:
         return {
@@ -14053,26 +14093,17 @@ def claim_confirmation_handoff(
             },
             "afterReply": _CLAIM_CONFIRMATION_AFTER_REPLY,
         }
+    if claim_name_given:
+        return _custom_identifier_claim_planned_reply()
     paragraphs = [
         "We need the Entra administrator to confirm the custom claim before "
-        "ServiceNow can use it to identify employees."
+        "ServiceNow can use it to identify employees.",
+        "Ask them to complete the custom-claim work in Part 4 of their "
+        "instructions. Bring back the exact configured claim name and "
+        "confirmation that the setup is complete, including the "
+        "appropriate format and populated source attribute for every "
+        "intended employee.",
     ]
-    if claim_name_given:
-        paragraphs.append(
-            "Ask them to complete the custom-claim work in Part 4 of their "
-            "instructions. Bring back confirmation that the setup is complete, "
-            "including the appropriate format and populated source attribute "
-            "for every intended employee. You don't need to resend the claim "
-            "name."
-        )
-    else:
-        paragraphs.append(
-            "Ask them to complete the custom-claim work in Part 4 of their "
-            "instructions. Bring back the exact configured claim name and "
-            "confirmation that the setup is complete, including the "
-            "appropriate format and populated source attribute for every "
-            "intended employee."
-        )
     if not servicenow_confirmed:
         paragraphs.append(
             "Then ask your ServiceNow administrator to confirm that the "
@@ -15395,6 +15426,361 @@ def _existing_waiting_text() -> str:
     )
 
 
+def _custom_identifier_active(
+    state: dict[str, Any] | None,
+    *,
+    requested: bool = False,
+) -> bool:
+    """Spec S4: a custom employee identifier (for example a payroll ID).
+
+    True only when the caller just requested it or the maker's
+    custom-identifier marker is stored. A custom claim name alone does not
+    switch wording, so S1 flows with a custom claim stay unchanged. S3
+    existing-identity wording is handled before this.
+    """
+    if requested:
+        return True
+    return isinstance(state, dict) and isinstance(
+        state.get("customIdentifier"), dict
+    )
+
+
+def _record_custom_identifier(
+    context: dict[str, Any], state: dict[str, Any]
+) -> None:
+    """Persist only the non-identity marker; never an identifier value."""
+    if isinstance(state.get("customIdentifier"), dict):
+        return
+    state["customIdentifier"] = {"recordedAt": _utc_now()}
+    _write_lifecycle_state(context, state)
+
+
+def _custom_identifier_lead_in(
+    stage: str,
+    *,
+    claim_name: str | None = None,
+) -> str:
+    """Spec S4 steps 3-5: lead-ins before the custom-claim handoffs."""
+    audience = _product_audience()
+    if stage == "entra":
+        return (
+            "Send this message to your Entra administrator. It asks them to "
+            "confirm the sign-in setup and coordinate employee matching with "
+            "your ServiceNow administrator.\n\n"
+            "Bring back their setup confirmation, the **Client ID**, "
+            "**tenant ID**, and exact configured **custom claim name**, if "
+            "needed. Paste their non-sensitive reply or send those items "
+            "individually.\n\n"
+            "You don't need to choose the identifier or send anyone's "
+            "payroll ID. Don't include secrets."
+        )
+    claim = f"`{claim_name}`" if claim_name else "custom"
+    return (
+        f"We have the Client ID, tenant ID, and administrator-confirmed "
+        f"claim name {claim}.\n\n"
+        "Your administrators have confirmed that ServiceNow identifies "
+        "employees by payroll ID. Next, your ServiceNow administrator will "
+        f"confirm which user-record field matches the {claim} claim.\n\n"
+        "Send this to your ServiceNow administrator. Bring back confirmation "
+        f"that the saved configuration supports this {audience} setup, plus "
+        "the exact **User Claim** and **User Field**.\n\n"
+        "They choose the matching ServiceNow field; you don't need to work "
+        "it out. Don't send anyone's payroll ID."
+    )
+
+
+def _custom_identifier_claim_planned_reply() -> dict[str, Any]:
+    """Spec S4 alternate F: the custom claim is planned, not configured."""
+    return {
+        "status": "claim-confirmation-required",
+        "decision": "claim-confirmation-required",
+        "recordsNothing": True,
+        "renderBlock": {
+            "kind": "waiting",
+            "text": (
+                "We have the proposed name, but the custom claim isn't "
+                "confirmed as configured.\n\n"
+                "Ask your Entra administrator to complete the custom-claim "
+                "work in their message and return non-sensitive "
+                "confirmation that the setup is complete, plus the exact "
+                "configured claim name. We'll keep the Client ID and tenant "
+                "ID while we wait. Don't include employee identifiers or "
+                "secrets."
+            ),
+        },
+        "afterReply": _CLAIM_CONFIRMATION_AFTER_REPLY,
+    }
+
+
+_CUSTOM_ENTRA_SETUP_PARTS = (
+    "**Part 1: Register the app**\n\n"
+    "1. Sign in to the [Microsoft Entra admin center]"
+    "(https://entra.microsoft.com).\n"
+    "2. Go to **App registrations > New registration**.\n"
+    "3. Enter a purpose-specific name, such as **ESS ServiceNow sign-in**. "
+    "Keep the default account type and leave **Redirect URI** empty.\n"
+    "4. Select **Register**.\n"
+    "5. On **Overview**, copy the **Application (client) ID** and "
+    "**Directory (tenant) ID**.",
+    "**Part 2: Add user claims**\n\n"
+    "1. Select **Token configuration > Add optional claim**.\n"
+    "2. Select token type **Access**, then select **aud**, **email**, and "
+    "**upn**.\n"
+    "3. Select **Add**. If prompted to enable Microsoft Graph email and "
+    "profile permissions, select the check box and select **Add**.",
+    "**Part 3: Allow the Microsoft ServiceNow connector to sign users "
+    "in**\n\n"
+    "1. Select **Expose an API**.\n"
+    "2. Next to **Application ID URI**, select **Add**. Keep the generated "
+    "default URI\u2014`api://` followed by this app's Client "
+    "ID\u2014and select **Save**.\n"
+    "3. Select **Add a scope**. Set:\n"
+    "   - **Scope name:** `user_impersonation`\n"
+    "   - **Who can consent:** Admins and users\n"
+    "   - **Display names and descriptions:** wording identifying "
+    "ServiceNow access, such as **Access ServiceNow**\n"
+    "4. Select **Add scope**.\n"
+    "5. Select **Add a client application**. Enter Microsoft's ServiceNow "
+    "connector Client ID: `c26b24aa-7874-4e06-ad55-7d06b1f79b63`.\n"
+    "6. Select the `user_impersonation` scope and select **Add "
+    "application**.",
+)
+
+
+def _custom_identifier_entra_packet(instance_name: str) -> str:
+    """Spec S4 step 3: review sign-in and employee matching first."""
+    audience = _product_audience()
+    url = f"https://{instance_name}.service-now.com"
+    paragraphs = [
+        f"We're connecting **{_spec_agent_name()}** to **{url}**, so "
+        f"employees can {_existing_identity_purpose()} while signed in as "
+        "themselves.",
+        "This requires an app registration in Microsoft Entra ID that "
+        "ServiceNow trusts to identify users. You need the **Global "
+        "Administrator** or **Cloud Application Administrator** role.",
+        "**Review sign-in and employee matching**\n\n"
+        "1. Coordinate with the ServiceNow administrator to identify the "
+        "registration and employee identifier relevant to this instance. "
+        "Confirm whether a custom claim is needed and which ServiceNow "
+        "field will match it.\n"
+        "2. Review any applicable setup already used by another ESS agent, "
+        "ServiceNow Knowledge, or single sign-on. Confirm whether it "
+        "satisfies the ESS requirements below for this "
+        f"{audience} setup; do not repeat completed work or create another "
+        "registration solely because a custom identifier is used.\n"
+        "3. If a custom claim is required, confirm that the app emits it "
+        "under the exact agreed name, in a format appropriate to the "
+        "identifier, and that its source attribute is populated for every "
+        "intended employee.",
+        "ServiceNow allows only one OIDC configuration per Microsoft Entra "
+        "tenant. Decide whether an existing setup can be reused. Do not "
+        "treat the setup reference below as a request to change an "
+        "existing OIDC configuration serving SSO or the Microsoft Graph "
+        "connector.",
+        "Review [coexistence with the Microsoft Graph connector for "
+        f"ServiceNow]({_COEXISTENCE_LINK}). Any coexistence conflict needs "
+        "administrator-led manual resolution.",
+        "**Please send back:** confirmation that the registration is "
+        f"configured and supports this ESS {audience} setup, the "
+        "Application (client) ID, and Directory (tenant) ID. If a custom "
+        "claim is required, include its exact configured name and "
+        "confirmation that its setup is complete, including the "
+        "appropriate format and populated source attribute for every "
+        "intended employee. State whether the configuration was reused or "
+        "newly created.",
+        "**If the setup or compatibility is unresolved:** report what "
+        "remains unresolved instead of confirming completion. Agree on a "
+        "supported resolution with the ServiceNow administrator before "
+        "proceeding; the ESS connection skill cannot diagnose or resolve a "
+        "shared-configuration conflict.",
+        "**Do not send employee payroll values, passwords, client secrets, "
+        "tokens, or certificate material.**",
+        "**Setup reference\u2014only for administrator-agreed work**",
+        "Use these instructions only for work you and the ServiceNow "
+        "administrator determine is needed and supported. If the "
+        "requirements are already satisfied, confirm the applicable setup "
+        "without repeating the steps.",
+        *_CUSTOM_ENTRA_SETUP_PARTS,
+        "**Part 4: Only if ServiceNow identifies employees by something "
+        "other than email or UPN**\n\n"
+        "Coordinate with the ServiceNow administrator to identify the "
+        "value their user records use\u2014for example, a payroll ID.\n\n"
+        "1. Ensure that identifier is populated in a Microsoft Entra user "
+        "attribute for **every employee who will use ESS with "
+        "ServiceNow**. Populate it through HR provisioning, directory "
+        "sync, or directly on the user. Employees with an empty value "
+        "cannot be identified through that claim.\n"
+        "2. Configure this app to emit the attribute as a claim. Follow "
+        f"[Configure Microsoft Entra to emit the identity key]"
+        f"({_EMIT_IDENTITY_KEY_LINK}) and [Customize JWT claims]"
+        f"({_JWT_CLAIMS_LINK}).\n"
+        "3. Record the exact claim name. Use a format appropriate to the "
+        "identifier rather than the default email format.\n"
+        "4. If Entra returns an error after adding the claim, follow the "
+        "guidance for `acceptMappedClaims` on single-tenant apps or a "
+        "custom signing key.",
+        f"References: [ESS ServiceNow integration]({_ESS_INTEGRATION_LINK}) "
+        f"and [ServiceNow connector setup]({_CONNECTOR_SETUP_LINK}).",
+    ]
+    return "\n\n".join(paragraphs)
+
+
+def _custom_identifier_servicenow_packet(
+    *,
+    instance_name: str,
+    client_id: str,
+    tenant_id: str,
+    claim_name: str,
+) -> str:
+    """Spec S4 step 5: confirm the saved mapping for the custom claim."""
+    audience = _product_audience()
+    url = f"https://{instance_name}.service-now.com"
+    hr_access = (
+        [
+            "**HR access:** employees who use HR scenarios need one of the "
+            "ServiceNow roles `sn_hr_core.basic`, `sn_hr_core.manager`, or "
+            "`sn_hr_core.admin`."
+        ]
+        if ACTIVE_PROFILE.requires_hr_core
+        else []
+    )
+    paragraphs = [
+        f"We're connecting **{_spec_agent_name()}** to **{url}**, so "
+        f"employees can {_existing_identity_purpose()} while signed in as "
+        "themselves.",
+        "ServiceNow needs to trust Microsoft Entra sign-in and match each "
+        "employee to their ServiceNow user record. You need the `admin` or "
+        "`security_admin` role.",
+        "**Entra values confirmed for this ESS setup**\n\n"
+        f"- **Client ID:** `{client_id}`\n"
+        f"- **Tenant ID:** `{tenant_id}`\n"
+        f"- **Confirmed custom claim:** `{claim_name}`",
+        f"The Entra administrator has confirmed that `{claim_name}` carries "
+        "the payroll identifier used by ServiceNow.",
+        "**Review sign-in and employee matching**\n\n"
+        "1. Review any applicable saved configuration against the "
+        "confirmed Entra values. Do not infer its applicability from "
+        "another ESS agent, Knowledge, or SSO working.\n"
+        f"2. Confirm that User Claim `{claim_name}` maps to the actual "
+        "`sys_user` field holding the same payroll identifier. The claim "
+        "name alone does not establish which field to use.\n"
+        "3. If the saved configuration already satisfies this ESS "
+        f"{audience} setup alongside its existing uses, confirm reuse "
+        "without repeating completed steps.",
+        "**Preserve the existing configuration**\n\n"
+        "ServiceNow allows only one OIDC configuration per Microsoft Entra "
+        "tenant. If an existing configuration serves SSO or the Microsoft "
+        "Graph connector, **do not change it**.\n\n"
+        "Coordinate appropriate reuse or manual conflict resolution with "
+        "the Entra administrator. Review [coexistence guidance]"
+        f"({_COEXISTENCE_LINK}) and [ServiceNow Knowledge connector "
+        f"guidance]({_KNOWLEDGE_GUIDANCE_LINK}).",
+        "**Please send back:** confirmation that the configuration is saved "
+        f"and supports this ESS {audience} setup, the exact **User "
+        "Claim**, and the exact **User Field** selected. Confirm that the "
+        "field holds the same identifier supplied through the claim. State "
+        "whether the configuration was reused or newly created.",
+        "**If the mapping or compatibility is unresolved:** report what "
+        "remains unresolved instead of confirming completion. Resolve it "
+        "with the Entra administrator before proceeding; the ESS "
+        "connection skill will not change or resolve shared identity "
+        "configuration.",
+        "**Do not send employee payroll values or secrets.**",
+        "**Setup reference\u2014only for administrator-agreed work**",
+        "Use these instructions only for work you and the Entra "
+        "administrator determine is needed and supported. Do not apply "
+        "them as changes to an existing OIDC configuration serving SSO or "
+        "the Graph connector.",
+        f"1. Sign in to **{url}**.\n"
+        "2. From the profile menu, select **Elevate role**, select "
+        "`security_admin`, and select **Update**. If the **New** button is "
+        "missing later, check that the role is elevated.\n"
+        "3. Go to **All**, search for **OAuth**, and select **System OAuth "
+        "> Application Registry**.\n"
+        "4. Select **New > Configure an OIDC provider to verify ID "
+        "tokens**.\n"
+        "5. Complete the application registry form:\n"
+        "   - **Name:** a purpose-specific name, such as **ESS Microsoft "
+        "Entra ID**\n"
+        f"   - **Client ID:** `{client_id}`\n"
+        "   - **Client Secret:** any value; this field isn't used for this "
+        "configuration. Do not return it to the maker.\n"
+        "   - **Scope Restriction:** Broadly scoped\n"
+        "6. Beside **OAuth OIDC Provider Configuration**, select the "
+        "search icon, then **New**. Set:\n"
+        "   - **OIDC Provider:** a name for this tenant, such as "
+        "**Microsoft Entra ID \u2014 <your organization>**\n"
+        "   - **OIDC Metadata URL:** "
+        f"`https://login.microsoftonline.com/{tenant_id}/.well-known/"
+        "openid-configuration`\n"
+        "   - **OIDC Configuration Cache Life Span:** `120`\n"
+        "   - **Application:** Global, if shown\n"
+        f"   - **User Claim:** `{claim_name}`, the exact claim confirmed by "
+        "the Entra administrator\n"
+        "   - **User Field:** the actual `sys_user` field holding that "
+        "same payroll identifier for the employees using ESS\n"
+        "   - **Enable JTI claim verification:** off\n"
+        "7. Select **Submit**. Back on the application registry form, "
+        "confirm that the configuration is selected and select "
+        "**Submit**.",
+        "**Important:** Do not use the metadata URL containing `/v2.0` "
+        "from Entra's Endpoints page. Do not substitute `email` or `upn` "
+        "for the confirmed custom claim.",
+        *hr_access,
+        f"References: [ESS ServiceNow integration]({_ESS_INTEGRATION_LINK}) "
+        f"and [ServiceNow connector setup]({_CONNECTOR_SETUP_LINK}).",
+    ]
+    return "\n\n".join(paragraphs)
+
+
+def _custom_identifier_connection_guidance(
+    context: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    client_id: str | None,
+    instance_name: str,
+) -> str:
+    """Spec S4 steps 13-14: select or create the ESS connection."""
+    audience = _product_audience()
+    mapping = state.get("evidence", {}).get("identityMapping")
+    lead = ""
+    if (
+        isinstance(mapping, dict)
+        and mapping.get("serviceNowAdministratorConfirmed") is True
+    ):
+        claim = mapping.get("tokenClaimName")
+        field = mapping.get("serviceNowUserField")
+        if isinstance(claim, str) and claim and isinstance(field, str) and field:
+            lead = (
+                "Your ServiceNow administrator has confirmed the saved "
+                f"mapping: User Claim `{claim}` to User Field `{field}`.\n\n"
+            )
+    return (
+        lead
+        + "Next, select or create a ServiceNow connection for "
+        f"{_spec_agent_name()}. Then we'll configure and test {audience} "
+        "with your real ServiceNow data.\n\n"
+        "Use a supported ESS ServiceNow connection if one is available for "
+        "this setup; otherwise, create one. A custom employee identifier "
+        "doesn't automatically require a new connection. A ServiceNow "
+        "Knowledge connection uses a different connector and can't replace "
+        "the ESS connection.\n\n"
+        "In Copilot Studio:\n\n"
+        f"1. Open **{_display_agent_name(context)}** in "
+        f"**{_display_environment_name(context)}**.\n"
+        "2. Go to **Settings > Connection Settings > ServiceNow > "
+        "Connect**.\n"
+        "3. Select a supported ESS ServiceNow connection available for "
+        "this agent, or select **Create new connection**.\n"
+        "4. For a new connection, use:\n"
+        "   - **Authentication type:** Microsoft Entra ID User Login\n"
+        f"   - **Resource URI:** `{client_id or 'not yet confirmed'}`\n"
+        f"   - **Instance name:** `{instance_name}`\n\n"
+        "Return here and tell us which connection you used. You don't need "
+        "to resend the administrator replies."
+    )
+
+
 def _ensure_lifecycle_state(context: dict[str, Any]) -> dict[str, Any]:
     root = Path(context["root"])
     if not _lifecycle_state_path(context).exists():
@@ -15997,6 +16383,7 @@ def main(argv: list[str] | None = None) -> int:
                 stage=args.stage,
                 captured_client_id=args.client_id,
                 captured_user_field=args.user_field,
+                custom_identifier=args.custom_identifier,
             )
         elif args.command == "record-identity-requirement":
             result = record_identity_requirement(

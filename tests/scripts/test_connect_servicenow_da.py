@@ -17547,8 +17547,12 @@ def test_claim_confirmation_handoff_is_fixed_and_only_custom_claims_get_part_fou
         assert "pendingCard" not in output
         assert "email" not in output["chatMessage"].lower()
     assert "Then ask your ServiceNow administrator" not in partial["chatMessage"]
-    assert "exact configured claim name" not in partial["chatMessage"]
-    assert "Part 4" in partial["chatMessage"]
+    assert partial["chatMessage"] == snow._custom_identifier_claim_planned_reply()[
+        "renderBlock"
+    ]["text"]
+    assert "exact configured claim name" in partial["chatMessage"]
+    assert "complete the custom-claim work in their message" in partial["chatMessage"]
+    assert "You don't need to resend the claim name" not in partial["chatMessage"]
     assert "Part 4" not in plain["chatMessage"]
     assert "tenant ID already supplied" in plain["chatMessage"]
 
@@ -18367,6 +18371,149 @@ def test_existing_identity_marker_is_never_cleared_by_later_identity_steps(
         snow.resume_handoff(context, executed_actions=frozenset())
         state = snow._load_lifecycle_state(context)
     assert snow._existing_identity_kind(state) == "knowledge"
+
+
+@pytest.mark.parametrize("profile", ["itsm", "hrsd"])
+def test_custom_identifier_flag_switches_both_admin_packets_and_persists(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, profile)
+    audience = "HR" if profile == "hrsd" else "IT"
+    with snow.product_profile_context(selected):
+        _ack_identity_availability(context, stage="entra")
+        standard = snow.identity_direct_handoff(context, stage="entra")
+        assert "customIdentifier" not in snow._load_lifecycle_state(context)
+        entra = snow.identity_direct_handoff(
+            context, stage="entra", custom_identifier=True
+        )
+        state = snow._load_lifecycle_state(context)
+        assert set(state["customIdentifier"]) == {"recordedAt"}
+        snow.record_identity_direct(
+            context,
+            stage="entra",
+            client_id=APP_CLIENT_ID,
+            claim_name="payrollid",
+            user_field=None,
+            confirmed=True,
+        )
+        _ack_identity_availability(context, stage="servicenow")
+        oidc = snow.identity_direct_handoff(context, stage="servicenow")
+        resumed = snow._load_lifecycle_state(context)
+    entra_text = entra["ordinaryReply"]["text"]
+    oidc_text = oidc["ordinaryReply"]["text"]
+    assert entra_text != standard["ordinaryReply"]["text"]
+    assert "exact configured **custom claim name**" in entra_text
+    assert "Review sign-in and employee matching" in entra_text
+    assert "do not repeat completed work" in entra_text
+    assert f"supports this ESS {audience} setup" in entra_text
+    assert "payroll ID" in entra_text
+    assert "Confirmed custom claim:** `payrollid`" in oidc_text
+    assert "Review sign-in and employee matching" in oidc_text
+    assert "Do not substitute `email` or `upn`" in oidc_text
+    assert ("sn_hr_core.basic" in oidc_text) is (profile == "hrsd")
+    assert "customIdentifier" in resumed
+    assert entra["runtimeInstructionSha256"] == standard["runtimeInstructionSha256"]
+
+
+def test_custom_identifier_is_not_active_for_a_custom_claim_alone(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "hrsd")
+    with snow.product_profile_context(selected):
+        snow.record_identity_direct(
+            context,
+            stage="entra",
+            client_id=APP_CLIENT_ID,
+            claim_name="employee_id",
+            user_field=None,
+            confirmed=True,
+        )
+        _ack_identity_availability(context, stage="servicenow")
+        oidc = snow.identity_direct_handoff(context, stage="servicenow")
+        state = snow._load_lifecycle_state(context)
+    assert "customIdentifier" not in state
+    assert "Review sign-in and employee matching" not in oidc["ordinaryReply"]["text"]
+
+
+def test_existing_identity_wins_over_custom_identifier(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(selected):
+        snow.existing_identity_handoff(context, "knowledge")
+        _ack_identity_availability(context, stage="entra")
+        entra = snow.identity_direct_handoff(
+            context, stage="entra", custom_identifier=True
+        )
+    assert "Review compatibility before setup" in entra["ordinaryReply"]["text"]
+
+
+@pytest.mark.parametrize("profile", ["itsm", "hrsd"])
+def test_custom_identifier_connection_step_selects_or_creates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, profile)
+    with snow.product_profile_context(selected):
+        before = snow._current_task_guidance(
+            context,
+            snow._load_lifecycle_state(context),
+            phase_id="credential",
+            role="maker",
+        )
+        _ack_identity_availability(context, stage="entra")
+        snow.identity_direct_handoff(context, stage="entra", custom_identifier=True)
+        text = snow._current_task_guidance(
+            context,
+            snow._load_lifecycle_state(context),
+            phase_id="credential",
+            role="maker",
+        )
+    assert "Use a supported ESS ServiceNow connection if one is available" in text
+    assert "A custom employee identifier doesn't automatically require" in text
+    assert "ServiceNow Knowledge connection uses a different connector" in text
+    assert "select **Create new connection**" in text
+    assert "Use a supported ESS ServiceNow connection" not in before
+
+
+@pytest.mark.parametrize(
+    "provider", ["servicenow-da-hrsd", "servicenow-da-itsm"]
+)
+def test_custom_claim_planned_but_not_configured_asks_for_the_completed_work(
+    provider: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    previous = snow.ACTIVE_PROFILE
+    try:
+        assert snow.main(
+            [
+                "--provider",
+                provider,
+                "claim-confirmation-handoff",
+                "--custom-claim",
+                "--claim-name-given",
+            ]
+        ) == 0
+        output = json.loads(capsys.readouterr().out)
+    finally:
+        snow.ACTIVE_PROFILE = previous
+    assert output["chatMessage"] == (
+        "We have the proposed name, but the custom claim isn't confirmed as "
+        "configured.\n\n"
+        "Ask your Entra administrator to complete the custom-claim work in "
+        "their message and return non-sensitive confirmation that the setup "
+        "is complete, plus the exact configured claim name. We'll keep the "
+        "Client ID and tenant ID while we wait. Don't include employee "
+        "identifiers or secrets."
+    )
+    assert output["endTurn"] is True
+    assert output["recordsNothing"] is True
+    assert "pendingCard" not in output
 
 
 _EXISTING_SITUATIONS_WITH_TEXT = {
