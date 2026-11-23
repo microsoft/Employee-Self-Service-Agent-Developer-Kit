@@ -653,6 +653,21 @@ and none records identity values:
 - `hr-prerequisite-self-confirmed` (HR agent only): the maker confirms the
   HR prerequisite without the administrator's reply.
 
+**Second ESS agent reusing this instance's sign-in setup.** When the other ESS
+ServiceNow agent (HR for IT, IT for HR) already completed sign-in setup in this
+tenant and environment, the controller switches the administrator messages to
+the reuse-review wording on its own; no marker or maker statement is needed and
+the first-agent flow is unchanged. Send these controller messages verbatim and
+never write them yourself: the Entra and ServiceNow handoffs from
+`identity-direct-handoff` (lead-in, "Earlier {other agent} values/mapping -
+review before using", "Review the existing setup first", and setup
+instructions only for work the administrators determine is needed), the
+connection guidance (select an existing connection available for this agent,
+with no new connection required), and the final message, which states that the
+other agent wasn't retested in this setup. The existing-identity marker takes
+priority: when it is set, the compatibility-review wording above applies
+instead. Both agents use the same wording with only the agent name swapped.
+
 **Target changes (environment, agent, instance, tenant, or signed-in user).**
 When the maker switches to another environment or agent, or says the instance,
 tenant, or signed-in user is different, get the Message from the controller

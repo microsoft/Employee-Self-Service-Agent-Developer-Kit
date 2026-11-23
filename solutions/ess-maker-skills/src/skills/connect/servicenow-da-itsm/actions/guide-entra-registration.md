@@ -19,6 +19,11 @@ reuse an existing Knowledge, single sign-on, or Microsoft Graph sign-in setup),
 verbatim; the setup steps in it are reference only and ESS never changes the
 shared sign-in configuration. See `existing-identity-handoff` in `entry.md`.
 
+When the other ESS ServiceNow agent already completed sign-in setup here (and the
+marker is not set), `identity-direct-handoff` returns the second-agent
+reuse-review handoff instead; send it verbatim. See "Second ESS agent reusing
+this instance's sign-in setup" in `entry.md`.
+
 Read `adminSetup.phaseHandoffs.entra-registration` first. If it is already
 `completed` or `reused` and stored checkpoint results are empty or all in the
 phase's `completionStatuses`, rerun
