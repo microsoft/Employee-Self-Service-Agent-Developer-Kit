@@ -110,6 +110,12 @@ and native data questions without writing state:
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} identity-direct-handoff --stage entra
 ```
 
+When the maker or an administrator says employees are identified by a payroll
+or other custom employee ID, add `--custom-identifier` to this first command
+(see `Custom employee identifier` in `src/skills/connect/servicenow/entry.md`).
+Later `identity-direct-handoff` calls keep the wording through the stored
+marker; render the returned text verbatim.
+
 Require `decision: instructions-required`. Render `ordinaryReply.text`
 verbatim; it already contains the plain-text lead-in before the
 Ready-to-send fenced block, so do not rewrap or edit either part. Then pass every returned `askUserArguments` object verbatim through

@@ -477,6 +477,19 @@ Send that value here.
 
 **End message.**
 
+**Custom employee identifier (payroll ID).** Only when the maker or an
+administrator says employees are identified by a payroll or other custom
+employee ID (not by email or UPN), pass `--custom-identifier` on the first
+`identity-direct-handoff --stage entra` call. The controller stores a
+non-sensitive `customIdentifier` marker (no identifier values) so every later
+step keeps the custom-identifier wording after a resume: the Entra and
+ServiceNow handoffs ask for the exact custom claim name and tell the
+administrators to review the existing setup first, and the connection step says
+to use a supported ESS ServiceNow connection if one is available and otherwise
+create one. A custom claim name alone does not switch wording; only the flag or
+the stored marker does. The existing-identity (Knowledge, SSO, Graph) wording
+takes precedence when both apply. Render the returned text verbatim.
+
 **Custom claim not confirmed.** Only when the maker says a custom claim (or
 custom field) is wanted and the Entra administrator has not confirmed it, show
 the following Message verbatim as the whole reply. Mentioning an employee ID or
@@ -490,7 +503,10 @@ own next steps, record anything, or ask a question. Get the Message from the
 controller instead of writing it: run
 `python scripts/connect_servicenow_da.py --provider {PROVIDER} claim-confirmation-handoff --custom-claim`
 (add `--claim-name-given` when the Entra administrator's exact claim name is
-already stated, and `--servicenow-confirmed` when the ServiceNow
+already stated; the reply then asks the Entra administrator to complete the
+custom-claim work and return the confirmation plus the exact configured claim
+name, and ignores `--servicenow-confirmed`; otherwise add
+`--servicenow-confirmed` when the ServiceNow
 administrator's saved-configuration confirmation with the matching User Claim
 and User Field is already supplied), send `chatMessage` verbatim and follow
 `endTurn`/`afterReply`. The command records nothing and needs no agent state. The maker
