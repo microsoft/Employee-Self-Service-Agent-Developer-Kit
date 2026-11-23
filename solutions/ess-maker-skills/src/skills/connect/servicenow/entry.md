@@ -295,10 +295,14 @@ Parse the returned `servicenow.resume-handoff.v1` object:
   acknowledged current group it contains the exact current task, target,
   owner, runbook/location, expected non-secret evidence, and completion
   boundary. Availability remains acknowledgement only. On
-  **No**, rerun with the same group/context and `--roles-available no`, show
-  the returned group-specific `unavailableReply`, and re-ask the identical
-  question. Do not advance the current/future group, phase, or evidence on
-  **No**. Preflight and instance input never ask availability. This replaces
+  **No**, or any answer that is not a clear **Yes** (for example "I'm waiting
+  for the administrator"), rerun with the same group/context and
+  `--roles-available no`, then send the returned `chatMessage` verbatim as
+  plain chat and end the turn. Never reword it, add your own explanation, or
+  re-ask. Do not advance the current/future group, phase, or evidence. When the
+  maker returns, rerun the same command without `--roles-available` to ask
+  the Yes/No question again.
+  Preflight and instance input never ask availability. This replaces
   the generic **Ready to start?** prompt; all mutation confirmations and admin
   evidence gates remain separate;
 

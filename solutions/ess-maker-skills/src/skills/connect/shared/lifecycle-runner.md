@@ -260,10 +260,15 @@ below.
    runbook/location, expected non-secret evidence, and completion boundary.
    Availability is acknowledgement only. Continue only from the returned
    lifecycle decision and its separate action completion/evidence question.
-5. On **No**, rerun with the same group ID and context hash plus
-   `--roles-available no`. Show the exact returned `unavailableReply`, then
-   re-ask the exact same question. The controller writes no acknowledgement
-   and advances no phase or evidence; repeated **No** answers are stable.
+5. On **No**, or on any answer that is not a clear **Yes** (for example "I'm
+   waiting for the administrator" or "not yet"), rerun with the same group ID
+   and context hash plus `--roles-available no`. The controller returns the
+   waiting message in `chatMessage` with `endTurn: true` and no card. Send
+   `chatMessage` verbatim as plain chat and end the turn; do not reword it,
+   add your own explanation, or ask again. The controller writes no
+   acknowledgement and advances nothing; repeated answers are stable. When the
+   maker returns, rerun the same `resume-handoff` command without
+   `--roles-available` to ask the Yes/No question again.
 6. One acknowledgement unlocks every internal phase in that group. Entering
    the next group asks its own role even when its role label resembles an
    earlier group. A raw `done` phase in **Rechecking** still enters its group

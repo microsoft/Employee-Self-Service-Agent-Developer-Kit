@@ -97,8 +97,10 @@ Never infer physical-connection readiness from Shared Identity.
 
 For direct capture, first use the current `resume-handoff` business-group
 availability gate. Do not run this command or render administrator instructions
-until the Entra availability acknowledgement is current. A No answer pauses
-with the returned bring-admin reply and changes no state; a Yes answer is
+until the Entra availability acknowledgement is current. Any answer other than
+a clear Yes pauses through `resume-handoff --roles-available no`: send its
+returned `chatMessage` verbatim as plain chat, end the turn, and change no
+state. A Yes answer is
 recorded only by `resume-handoff --roles-available yes` with its exact group ID
 and context hash.
 

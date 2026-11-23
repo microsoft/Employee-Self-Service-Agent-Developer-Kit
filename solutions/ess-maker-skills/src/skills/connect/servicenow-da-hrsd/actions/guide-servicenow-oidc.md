@@ -47,7 +47,9 @@ choose the first claim or apply a default.
 For direct capture, first use the current `resume-handoff` business-group
 availability gate. Do not run this command or render administrator instructions
 until the ServiceNow `security_admin` availability acknowledgement is current.
-A No answer pauses with the returned bring-admin reply and changes no state; a
+A No answer, or any answer other than a clear Yes, pauses through
+`resume-handoff --roles-available no`: send its returned `chatMessage` verbatim
+as plain chat, end the turn, and change no state. A
 Yes answer is recorded only by `resume-handoff --roles-available yes` with its
 exact group ID and context hash.
 

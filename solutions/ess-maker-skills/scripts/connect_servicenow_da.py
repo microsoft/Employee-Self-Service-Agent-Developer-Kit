@@ -1269,11 +1269,8 @@ def identity_direct_handoff(
                 "askUserArguments": adapt_question_to_ask_user(question)[
                     "askUserArguments"
                 ],
-                "unavailableReply": (
-                    f"Please involve your {group['role']} for "
-                    f"{group['label']}, then answer the same question again."
-                    "\n\nNo business group, lifecycle phase, evidence, "
-                    "attestation, or accepted contract revision has advanced."
+                "unavailableReply": _availability_unavailable_reply(
+                    context, group
                 ),
             },
             "questions": [],
@@ -10646,6 +10643,51 @@ def _business_group_availability_question(
     )
 
 
+def _availability_unavailable_reply(
+    context: dict[str, Any],
+    group: dict[str, Any],
+) -> str:
+    """Plain waiting message for a maker whose collaborator is not available.
+
+    The ServiceNow administrator wording follows spec S2 step 9. Every other
+    group uses the same structure. Nothing here names internal state.
+    """
+    agent = _display_agent_name(context)
+    audience = _product_audience()
+    group_id = str(group.get("id") or "")
+    if group_id == "hr-prerequisite":
+        return (
+            "We're waiting for your ServiceNow administrator to confirm "
+            f"the HR prerequisites for **{agent}**. When they're ready, "
+            "tell us and we'll continue from here. Don't include employee "
+            "identifiers or secrets."
+        )
+    if group_id == "entra-identity":
+        return (
+            "We're waiting for your Microsoft Entra administrator to "
+            f"confirm the Client ID and User Claim for **{agent}**. When "
+            "they reply, paste their non-sensitive message or send those "
+            "items individually. Don't include employee identifiers or "
+            "secrets."
+        )
+    if group_id == "servicenow-sso":
+        return (
+            f"The Entra values are confirmed for {audience}. Next, we're "
+            "waiting for your ServiceNow administrator to confirm the "
+            f"saved configuration, User Claim, and User Field for "
+            f"**{agent}**. When they reply, paste their non-sensitive "
+            "message or send those items individually. Don't include "
+            "employee identifiers or secrets. You won't need to repeat "
+            "the Entra values."
+        )
+    return (
+        "The administrator steps are confirmed. Next, we're waiting for "
+        "you to continue in Copilot Studio with the ESS Maker or Agent "
+        f"Developer role for **{agent}**. When you're ready, tell us and "
+        "we'll continue from here."
+    )
+
+
 def _credential_lead_in(state: dict[str, Any]) -> str:
     mapping = state.get("evidence", {}).get("identityMapping")
     claim = field = None
@@ -11375,10 +11417,7 @@ def _business_group_transport(
             "available": roles_available,
             "stateChanged": False,
             "unavailableReply": (
-                f"Please involve your {current_group['role']} for "
-                f"{current_group['label']}, then answer the same question "
-                "again.\n\nNo business group, lifecycle phase, evidence, "
-                "attestation, or accepted contract revision has advanced."
+                _availability_unavailable_reply(context, current_group)
                 if current_group is not None
                 else None
             ),
@@ -11888,6 +11927,17 @@ def resume_handoff(
         return result
     availability = transport["businessGroupAvailability"]
     group_question = availability["question"]
+    if group_question is not None and roles_available is False:
+        # Any answer other than a clear Yes is "not available": send the
+        # waiting message as plain chat and end the turn without a card.
+        availability["question"] = None
+        result["status"] = "business-group-unavailable"
+        result["waitsForMaker"] = True
+        result["renderBlock"] = {
+            "kind": "waiting",
+            "text": availability["unavailableReply"],
+        }
+        return result
     if group_question is not None and roles_available is not True:
         result["status"] = "business-group-availability-required"
         return result

@@ -14138,6 +14138,10 @@ def test_resume_handoff_cli_jit_group_no_is_byte_stable(
     assert snow.main(command) == 0
     repeated_no = json.loads(capsys.readouterr().out)
 
+    assert first_no["status"] == "business-group-unavailable"
+    assert first_no["transport"]["businessGroupAvailability"][
+        "question"
+    ] is None
     assert first_no["transport"]["businessGroupAvailability"][
         "questionSha256"
     ] == availability["questionSha256"]
@@ -14149,6 +14153,9 @@ def test_resume_handoff_cli_jit_group_no_is_byte_stable(
     ] == repeated_no["transport"]["businessGroupAvailability"][
         "unavailableReply"
     ]
+    assert first_no["renderBlock"]["text"] == first_no["transport"][
+        "businessGroupAvailability"
+    ]["unavailableReply"]
     assert state_path.read_bytes() == before
 
 
@@ -14355,12 +14362,10 @@ def test_business_group_question_is_just_in_time_after_preflight(
     assert "action" not in gated
     assert "checkpoints" not in gated
     assert "pendingInput" not in gated
-    assert first_no["transport"]["businessGroupAvailability"]["question"] == (
-        availability["question"]
-    )
+    assert first_no["transport"]["businessGroupAvailability"]["question"] is None
     assert second_no["transport"]["businessGroupAvailability"][
         "question"
-    ] == availability["question"]
+    ] is None
     assert first_no["transport"]["businessGroupAvailability"][
         "questionSha256"
     ] == second_no["transport"]["businessGroupAvailability"][
@@ -14371,7 +14376,72 @@ def test_business_group_question_is_just_in_time_after_preflight(
     ] == second_no["transport"]["businessGroupAvailability"][
         "unavailableReply"
     ]
+    wrapped = snow._with_agent_rules(second_no, "resume-handoff")
+    assert wrapped["endTurn"] is True
+    assert "pendingCard" not in wrapped
+    assert wrapped["chatMessage"] == first_no["transport"][
+        "businessGroupAvailability"
+    ]["unavailableReply"]
+    for jargon in (
+        "business group",
+        "lifecycle phase",
+        "evidence",
+        "attestation",
+        "contract revision",
+        "answer the same question",
+    ):
+        assert jargon not in wrapped["chatMessage"].lower()
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("profile", ("hrsd", "itsm"))
+def test_unavailable_reply_is_plain_waiting_text_for_every_group(
+    profile: str,
+) -> None:
+    context = _profile_context(
+        profile,
+        agent_id=AGENT_ID if profile == "hrsd" else OTHER_AGENT_ID,
+        agent_slug=(
+            "employee-self-service-hr"
+            if profile == "hrsd"
+            else "employee-self-service-it"
+        ),
+    )
+    with snow.product_profile_context(profile):
+        audience = snow._product_audience()
+        agent = snow._display_agent_name(context)
+        replies = {
+            group_id: snow._availability_unavailable_reply(
+                context, {"id": group_id}
+            )
+            for group_id in (
+                "hr-prerequisite",
+                "entra-identity",
+                "servicenow-sso",
+                "maker-configuration",
+            )
+        }
+    assert replies["servicenow-sso"] == (
+        f"The Entra values are confirmed for {audience}. Next, we're "
+        "waiting for your ServiceNow administrator to confirm the saved "
+        f"configuration, User Claim, and User Field for **{agent}**. When "
+        "they reply, paste their non-sensitive message or send those items "
+        "individually. Don't include employee identifiers or secrets. You "
+        "won't need to repeat the Entra values."
+    )
+    for reply in replies.values():
+        lowered = reply.lower()
+        for jargon in (
+            "business group",
+            "lifecycle",
+            "evidence",
+            "attestation",
+            "contract revision",
+            "security_admin",
+            "answer the same question",
+        ):
+            assert jargon not in lowered
+        assert "tenant" not in lowered
 
 
 def test_grouped_ordinary_reply_uses_canonical_status_glyphs_without_mutation(
@@ -14896,9 +14966,10 @@ def test_maker_role_is_asked_once_at_maker_phase_start(
             availability_group_id="maker-configuration",
             availability_context_sha256=availability["contextIdentitySha256"],
         )
+        assert declined["status"] == "business-group-unavailable"
         assert declined["transport"]["businessGroupAvailability"][
             "question"
-        ] is not None
+        ] is None
         saved = snow._load_lifecycle_state(context)
         assert saved["roleAttestations"] == {}
         assert "maker-configuration" not in saved.get(
