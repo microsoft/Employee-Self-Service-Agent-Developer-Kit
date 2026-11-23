@@ -7302,15 +7302,13 @@ def test_ready_to_send_messages_are_wrapped_in_one_fenced_block(
             context,
             stage="servicenow",
         )
-        expected_service_now, _, _ = snow._render_identity_runtime_instruction(
-            context,
-            stage="servicenow",
-            application_client_id=APP_CLIENT_ID,
+        expected_service_now = snow._first_agent_servicenow_packet(
+            instance_name="dev123",
+            client_id=APP_CLIENT_ID,
+            tenant_id=TENANT_ID,
             claim_name="employee_id",
         )
-        _, expected_entra, _ = snow._identity_runtime_instruction_source(
-            "entra"
-        )
+        expected_entra = snow._first_agent_entra_packet("dev123")
         plugin = (
             snow._current_task_guidance(
                 context,
@@ -7461,7 +7459,12 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     _, canonical_entra, _ = snow._identity_runtime_instruction_source(
         "entra"
     )
-    assert source_text == canonical_entra
+    with snow.product_profile_context(profile_key):
+        assert source_text == snow._first_agent_entra_packet("dev123")
+    assert source_text != canonical_entra
+    assert "**Before creating another app registration**" in source_text
+    assert "**Part 4: Only if ServiceNow identifies employees" in source_text
+    assert "**Please send back:** the Application (client) ID" in source_text
     assert "The Entra administrator should:" not in ordinary
     assert len(entra["questions"]) == 1
     assert [
@@ -7578,28 +7581,22 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     assert "<tenant ID>" not in ordinary
     assert "<instance>" not in ordinary
     assert "`employee_id`" in ordinary
-    assert (
-        "and User Claim `employee_id`, confirmed by the Entra administrator."
-        in ordinary
-    )
+    assert "- **Custom claim:** `employee_id`" in ordinary
     assert (
         "- **User Claim:** `employee_id`, the claim confirmed by the Entra "
         "administrator. Don't change it." in ordinary
     )
     assert "<claim>" not in ordinary
-    assert "`https://dev123.service-now.com`" in ordinary
-    assert ("8. **HR agent only:**" in ordinary) is (
-        profile_key == "hrsd"
-    )
+    assert "**https://dev123.service-now.com**" in ordinary
+    assert ("**HR access:**" in ordinary) is (profile_key == "hrsd")
     source_text = _ready_to_send_body(ordinary)
     with snow.product_profile_context(profile_key):
-        expected_text, _, _ = snow._render_identity_runtime_instruction(
-            context,
-            stage="servicenow",
-            application_client_id=APP_CLIENT_ID,
+        assert source_text == snow._first_agent_servicenow_packet(
+            instance_name="dev123",
+            client_id=APP_CLIENT_ID,
+            tenant_id=TENANT_ID,
             claim_name="employee_id",
         )
-    assert source_text == expected_text
     assert len(service_now["questions"]) == 1
     input_card = service_now["questions"][0]
     assert input_card["canonicalQuestion"]["allowFreeformInput"] is True

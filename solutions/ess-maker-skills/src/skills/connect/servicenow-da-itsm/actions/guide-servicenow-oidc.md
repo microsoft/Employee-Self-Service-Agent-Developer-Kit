@@ -51,7 +51,7 @@ A No answer pauses with the returned bring-admin reply and changes no state; a
 Yes answer is recorded only by `resume-handoff --roles-available yes` with its
 exact group ID and context hash.
 
-After that acknowledgement, return the canonical runtime instructions from
+After that acknowledgement, return the controller-built first-agent ServiceNow administrator message, which follows the PM spec's step structure and shares its underlying steps with
 [the shared ServiceNow administrator source](../../shared/runtime-instructions/servicenow-administrator.md)
 with the confirmed Client ID and User Claim already locked:
 

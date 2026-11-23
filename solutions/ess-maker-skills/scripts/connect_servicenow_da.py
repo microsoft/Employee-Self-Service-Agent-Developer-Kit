@@ -1404,6 +1404,21 @@ def identity_direct_handoff(
             lead_in = _second_agent_servicenow_lead_in(
                 second_agent, claim_name
             )
+    else:
+        instance_for_packet = normalize_instance_name(
+            expected_identity["instanceName"]
+        )
+        if stage == "entra":
+            packet_text = _first_agent_entra_packet(instance_for_packet)
+        else:
+            packet_text = _first_agent_servicenow_packet(
+                instance_name=instance_for_packet,
+                client_id=client_id,
+                tenant_id=_normalize_directory_tenant_id(
+                    expected_identity["tenantId"]
+                ),
+                claim_name=claim_name,
+            )
     target_text = (
         f"Target agent: `{_agent_slug(context)}` "
         f"(`{context['agent']['id']}`)\n"
@@ -16093,6 +16108,150 @@ def _custom_identifier_servicenow_packet(
         "from Entra's Endpoints page. Do not substitute `email` or `upn` "
         "for the confirmed custom claim.",
         *hr_access,
+        f"References: [ESS ServiceNow integration]({_ESS_INTEGRATION_LINK}) "
+        f"and [ServiceNow connector setup]({_CONNECTOR_SETUP_LINK}).",
+    ]
+    return "\n\n".join(paragraphs)
+
+
+def _first_agent_entra_packet(instance_name: str) -> str:
+    """Spec S1 step 3: the first-agent message for the Entra administrator."""
+    url = f"https://{instance_name}.service-now.com"
+    paragraphs = [
+        f"We're connecting **{_spec_agent_name()}** to **{url}**, so "
+        f"employees can {_existing_identity_purpose()} while signed in as "
+        "themselves.",
+        "ServiceNow needs an app registration in Microsoft Entra ID that it "
+        "can trust to identify users. You need the **Global "
+        "Administrator** or **Cloud Application Administrator** role.",
+        "**Before creating another app registration**\n\n"
+        "If your organization already has an app registration that "
+        "ServiceNow uses for Microsoft Entra sign-in\u2014for example, for "
+        "ServiceNow Knowledge or single sign-on\u2014coordinate with your "
+        "ServiceNow administrator before creating another one. ServiceNow "
+        "allows only one OIDC configuration per Microsoft Entra tenant.",
+        "Review [coexistence with the Microsoft Graph connector for "
+        f"ServiceNow]({_COEXISTENCE_LINK}).",
+        *(
+            part.replace(
+                "wording identifying ServiceNow access",
+                "wording that identifies ServiceNow access",
+            )
+            for part in _CUSTOM_ENTRA_SETUP_PARTS
+        ),
+        "**Part 4: Only if ServiceNow identifies employees by something "
+        "other than email or UPN**\n\n"
+        "Coordinate the identifier with your ServiceNow administrator.\n\n"
+        "1. Ensure the identifier\u2014for example, an employee or payroll "
+        "ID\u2014is populated in a Microsoft Entra user attribute for every "
+        "employee who will use ESS with ServiceNow.\n"
+        "2. Configure this app to emit that attribute as a claim, "
+        f"following [Configure Microsoft Entra to emit the identity key]"
+        f"({_EMIT_IDENTITY_KEY_LINK}) and [Customize JWT claims]"
+        f"({_JWT_CLAIMS_LINK}).\n"
+        "3. Use a claim format appropriate to the identifier, rather than "
+        "the default email format.\n"
+        "4. If Entra returns an error after adding the claim, follow the "
+        "guidance for `acceptMappedClaims` on single-tenant apps or a "
+        "custom signing key.",
+        "**Please send back:** the Application (client) ID, Directory "
+        "(tenant) ID, and the custom claim name if Part 4 applies. **Do "
+        "not send passwords, client secrets, tokens, or certificate "
+        "material.**",
+        f"References: [ESS ServiceNow integration]({_ESS_INTEGRATION_LINK}) "
+        f"and [ServiceNow connector setup]({_CONNECTOR_SETUP_LINK}).",
+    ]
+    return "\n\n".join(paragraphs)
+
+
+def _first_agent_servicenow_packet(
+    *,
+    instance_name: str,
+    client_id: str,
+    tenant_id: str,
+    claim_name: str,
+) -> str:
+    """Spec S1 step 5: the first-agent message for the ServiceNow admin."""
+    url = f"https://{instance_name}.service-now.com"
+    standard_claim = claim_name.casefold() in {"email", "upn"}
+    custom_claim = (
+        "none supplied for this setup"
+        if standard_claim
+        else f"`{claim_name}`"
+    )
+    user_claim = (
+        "`email` or `upn`, whichever matches how your ServiceNow user "
+        "records identify employees. If a custom identifier is required, "
+        "coordinate its confirmed claim with the Entra administrator first."
+        if standard_claim
+        else f"`{claim_name}`, the claim confirmed by the Entra "
+        "administrator. Don't change it."
+    )
+    hr_access = (
+        [
+            "**HR access:** Employees using HR scenarios need one of "
+            "`sn_hr_core.basic`, `sn_hr_core.manager`, or "
+            "`sn_hr_core.admin`."
+        ]
+        if ACTIVE_PROFILE.requires_hr_core
+        else []
+    )
+    paragraphs = [
+        f"We're connecting **{_spec_agent_name()}** to **{url}**, so "
+        f"employees can {_existing_identity_purpose()} while signed in as "
+        "themselves.",
+        "ServiceNow needs to trust Microsoft Entra sign-in and match each "
+        "employee to their ServiceNow user record. You need the `admin` or "
+        "`security_admin` role.",
+        "**Before changing existing configuration**\n\n"
+        "ServiceNow allows only one OIDC configuration per Microsoft Entra "
+        "tenant. If one already serves single sign-on or the Microsoft "
+        "Graph connector, **don't change it**. Coordinate the appropriate "
+        "reuse or resolution with your Entra administrator.",
+        f"See [coexistence guidance]({_COEXISTENCE_LINK}) and [ServiceNow "
+        f"Knowledge connector guidance]({_KNOWLEDGE_GUIDANCE_LINK}).",
+        "**Entra values**\n\n"
+        f"- **Client ID:** `{client_id}`\n"
+        f"- **Tenant ID:** `{tenant_id}`\n"
+        f"- **Custom claim:** {custom_claim}",
+        "**Configure ServiceNow**\n\n"
+        f"1. Sign in to **{url}**.\n"
+        "2. From the profile menu, select **Elevate role**, select "
+        "`security_admin`, and select **Update**. If the **New** button is "
+        "missing later, check that the role is elevated.\n"
+        "3. Go to **All**, search for **OAuth**, and select **System OAuth "
+        "> Application Registry**.\n"
+        "4. Select **New > Configure an OIDC provider to verify ID "
+        "tokens**.\n"
+        "5. Complete the application registry form:\n"
+        "   - **Name:** a purpose-specific name, such as **ESS Microsoft "
+        "Entra ID**\n"
+        f"   - **Client ID:** `{client_id}`\n"
+        "   - **Client Secret:** any value; this field isn't used for this "
+        "configuration. Do not return it to the maker.\n"
+        "   - **Scope Restriction:** Broadly scoped\n"
+        "6. Beside **OAuth OIDC Provider Configuration**, select the "
+        "search icon, then **New**. Set:\n"
+        "   - **OIDC Provider:** a name for this tenant, such as "
+        "**Microsoft Entra ID \u2014 <your organization>**\n"
+        "   - **OIDC Metadata URL:** "
+        f"`https://login.microsoftonline.com/{tenant_id}/.well-known/"
+        "openid-configuration`\n"
+        "   - **OIDC Configuration Cache Life Span:** `120`\n"
+        "   - **Application:** Global, if shown\n"
+        f"   - **User Claim:** {user_claim}\n"
+        "   - **User Field:** the user-record field holding that exact "
+        "identifier\u2014for example, **Email** for the `email` claim\n"
+        "   - **Enable JTI claim verification:** off\n"
+        "7. Select **Submit**. Back on the application registry form, "
+        "confirm that the configuration is selected and select "
+        "**Submit**.",
+        "**Important:** Do not use the metadata URL containing `/v2.0` "
+        "from Entra's Endpoints page.",
+        *hr_access,
+        "**Please send back:** confirmation that the configuration is "
+        "saved, the **User Claim**, and the **User Field** you used. **Do "
+        "not send secrets.**",
         f"References: [ESS ServiceNow integration]({_ESS_INTEGRATION_LINK}) "
         f"and [ServiceNow connector setup]({_CONNECTOR_SETUP_LINK}).",
     ]

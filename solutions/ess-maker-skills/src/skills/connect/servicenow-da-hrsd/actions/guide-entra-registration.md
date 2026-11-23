@@ -102,9 +102,9 @@ with the returned bring-admin reply and changes no state; a Yes answer is
 recorded only by `resume-handoff --roles-available yes` with its exact group ID
 and context hash.
 
-After that acknowledgement, return the canonical runtime instructions from
+After that acknowledgement, return the controller-built first-agent Entra administrator message, which follows the PM spec's step structure and shares its underlying steps with
 [the shared Entra administrator source](../../shared/runtime-instructions/entra-administrator.md)
-and native data questions without writing state:
+(the source file is reused as-is for realm messages), and native data questions without writing state:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} identity-direct-handoff --stage entra
