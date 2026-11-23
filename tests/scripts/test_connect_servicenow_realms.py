@@ -519,8 +519,13 @@ def test_connection_problems_are_blocked_without_a_repair(
     assert message.startswith("**Validation is paused:**")
     assert named in message
     assert "BLOCKED" not in message
-    assert "recheck before you run the request" in message
-    assert "administrator-confirmed sign-in setup stays in place" in message
+    assert "return here and tell us" in message
+    assert "We'll recheck" in message
+    assert "Settings" not in message and "Connection Settings" not in message
+    assert (
+        "administrator-confirmed sign-in setup stays in place" in message
+        or "completed administrator work" in message
+    )
     assert "connectionHandoff" not in result
 
 
@@ -562,8 +567,9 @@ def test_runtime_checks_required_topics_and_portal_read_only() -> None:
     )
     assert off["status"] == "blocked"
     assert len(off["observations"]) == 2
-    assert "Fix them in Dev" in off["message"]
-    assert "promote again" in off["message"]
+    assert "We'll enable the affected built-in topic" in off["message"]
+    assert "unrelated topics unchanged" in off["message"]
+    assert "Fix them in Dev" not in off["message"]
     empty = realms.evaluate_runtime(FOUNDATION, [], portal)
     assert empty["status"] == "blocked"
 
@@ -1367,7 +1373,7 @@ def test_realms_guide_carries_the_s5_recovery_wording() -> None:
         for line in REALMS_GUIDE.read_text(encoding="utf-8").splitlines()
     )
     for phrase in (
-        'ends with "Validation is paused"',
+        "supported destination repair is complete",
         "Retry the permission check to continue.",
         "A working Dev connection doesn't tell us whether a usable connection is "
         "available and linked to this agent in **{Environment}**.",
@@ -1381,15 +1387,12 @@ def test_realms_guide_carries_the_s5_recovery_wording() -> None:
         "That matches what you expected, but an empty result alone doesn't show "
         "whether the agent can retrieve your HR data.",
         "That changes the shared-instance assumption behind this promotion path.",
-        "your own deployment process",
         "We'll retain the earlier result only for its original instance and "
         "identify which setup information needs review.",
         "Bring back their non-sensitive reply after any required access work is "
         "complete.",
         "We're continuing ServiceNow validation for **{Agent} in {Environment}**.",
         "Emit it verbatim as an assistant message",
-        'reply "Done" and we\'ll recheck this step only',
-        "publish the agent in Dev",
     ):
         assert phrase in text, phrase
     assert "Show each item in" not in text
@@ -1507,16 +1510,11 @@ def test_realm_block_prod_request_matches_the_spec_variant() -> None:
 
 
 @pytest.mark.parametrize(
-    ("reference", "connections", "named", "step"),
+    ("reference", "connections", "named"),
     [
-        ({}, [], "has no ServiceNow connection available", "Create new connection"),
-        (
-            {},
-            [_connection()],
-            "isn't linked to",
-            "Select the ServiceNow connection available in Test",
-        ),
-        (_bound(), [_connection(status="Error")], "is disconnected", "**Connected**"),
+        ({}, [], "has no ServiceNow connection available"),
+        ({}, [_connection()], "isn't linked to"),
+        (_bound(), [_connection(status="Error")], "is disconnected"),
         (
             _bound(),
             [
@@ -1528,15 +1526,13 @@ def test_realm_block_prod_request_matches_the_spec_variant() -> None:
                 )
             ],
             "doesn't use the expected sign-in values",
-            "expected `contoso`, found `other`",
         ),
     ],
 )
-def test_realm_block_connection_problems_carry_dev_style_steps(
+def test_realm_block_connection_problems_pause_without_a_menu_path(
     reference: dict[str, str],
     connections: list[dict[str, Any]],
     named: str,
-    step: str,
 ) -> None:
     block = _rendered(
         connections=realms.evaluate_connections(FOUNDATION, reference, connections)
@@ -1544,14 +1540,15 @@ def test_realm_block_connection_problems_carry_dev_style_steps(
     assert _icons(block) == ["✅", "❌", "⬜", "⬜", "⬜"]
     assert "**Validation is paused:**" in block
     assert named in block
-    assert step in block
-    assert 'reply "Done" and we\'ll recheck this step only.' in block
-    assert "Dev connection" not in block
+    assert "return here and tell us" in block
+    assert "We'll recheck" in block
+    for invented in ("Settings", "Create new connection", "**Connected**", "Dev connection"):
+        assert invented not in block
     assert "BLOCKED" not in block
     assert "Show my open HR cases" not in block
 
 
-def test_realm_block_topics_disabled_points_back_to_dev_and_publish() -> None:
+def test_realm_block_topics_disabled_is_enabled_by_the_agent() -> None:
     block = _rendered(
         runtime=realms.evaluate_runtime(
             FOUNDATION,
@@ -1560,22 +1557,19 @@ def test_realm_block_topics_disabled_points_back_to_dev_and_publish() -> None:
         )
     )
     assert _icons(block) == ["✅", "✅", "❌", "⬜", "⬜"]
-    assert "`b`" in block
-    assert "Test is a managed environment" in block
     assert (
-        "Go back to Dev and update the topics: run `/connect servicenow` again."
-        in block
-    )
-    assert "Publish the agent in Dev." in block
-    assert (
-        "Deploy (promote) Employee Self-Service (HR) to Test again through your "
-        "own deployment process."
+        "A required ServiceNow HR topic is off in **Employee Self-Service (HR) "
+        "in Test**, so the agent can't complete that request."
     ) in block
-    assert 'Reply "Done" and we\'ll recheck this step only.' in block
-    assert "manually" not in block
+    assert (
+        "We'll enable the affected built-in topic and leave unrelated topics "
+        "unchanged."
+    ) in block
+    assert "Publish the agent in Dev" not in block
+    assert "run `/connect servicenow` again" not in block
 
 
-def test_realm_block_portal_problem_keeps_topics_green() -> None:
+def test_realm_block_portal_problem_asks_for_the_url() -> None:
     block = _rendered(
         "prod",
         runtime=realms.evaluate_runtime(
@@ -1585,10 +1579,9 @@ def test_realm_block_portal_problem_keeps_topics_green() -> None:
     )
     assert _icons(block) == ["✅", "✅", "✅", "❌", "⬜"]
     assert "ticket links" in block
-    assert "Prod is a managed environment" in block
-    assert "Go back to Dev and update the portal URL" in block
-    assert "Publish the agent in Dev." in block
-    assert "to Prod again" in block
+    assert "What is the full HTTPS base URL employees should use for IT tickets?" in block
+    assert "Publish the agent in Dev" not in block
+    assert "managed environment" not in block
 
 
 def test_realm_block_untested_and_ready_footers() -> None:
@@ -1664,7 +1657,7 @@ def test_controller_returns_the_checklist_first_for_hr_and_it(
     world["topics"] = [_topic("a", "Inactive")]
     failed = snow.run_realm_command(context, _args("check-realm", realm="test"))
     assert _icons(failed["renderBlock"]["text"]) == ["✅", "✅", "❌", "⬜", "⬜"]
-    assert "Publish the agent in Dev." in failed["renderBlock"]["text"]
+    assert "We'll enable the affected built-in topic" in failed["renderBlock"]["text"]
     status = snow.run_realm_command(context, _args("realm-status"))
     assert status["renderBlock"]["text"] == failed["renderBlock"]["text"]
     world["topics"] = [_topic("a")]
@@ -1681,3 +1674,311 @@ def test_controller_returns_the_checklist_first_for_hr_and_it(
     )
     assert _icons(ready["renderBlock"]["text"]) == ["✅"] * 5
     assert ready["renderBlock"]["text"].endswith(ready["message"])
+
+
+def _profile_words(profile: str) -> tuple[str, str]:
+    return ("HR", "case") if profile == "hrsd" else ("IT", "ticket")
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_controller_records_the_portal_url_as_a_request_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: str
+) -> None:
+    import connect_servicenow_da as snow
+
+    monkeypatch.setattr(snow, "ACTIVE_PROFILE", snow.PRODUCT_PROFILES[profile])
+    kind, record = _profile_words(profile)
+    world = _prepare_controller(monkeypatch, dev_reference=DEV_RECORD)
+    world["portal"] = {"valid": False, "reason": "missing"}
+    context = _controller_context(tmp_path)
+    asked = snow.run_realm_command(
+        context, _args("discover-realm-target", realm="test")
+    )
+    text = asked["renderBlock"]["text"]
+    assert f"missing its employee portal URL, so its {record} links" in text
+    assert (
+        f"What is the full HTTPS base URL employees should use for {kind} "
+        f"{record}s?"
+    ) in text
+
+    def record_url(**values: Any) -> dict[str, Any]:
+        return snow.run_realm_command(
+            context,
+            _args(
+                "record-realm-portal-url",
+                realm="test",
+                confirm_portal_url=False,
+                **values,
+            ),
+        )
+
+    unconfirmed = record_url(portal_url="contoso.service-now.com")
+    assert unconfirmed["status"] == "portal-url-confirmation"
+    assert unconfirmed["recordsNothing"] is True
+    assert unconfirmed["candidate"] == "https://contoso.service-now.com"
+    with pytest.raises(snow.ServiceNowConnectError):
+        record_url(portal_url="https://other.service-now.com")
+    saved = record_url(portal_url="https://contoso.service-now.com")
+    assert saved["message"] == (
+        f"We'll save that URL for the {kind} agent in Test. The shared "
+        "identity setup stays in place."
+    )
+    assert saved["portalUrlRequest"]["status"] == "requested"
+    assert saved["renderBlock"]["text"].endswith(saved["message"])
+    world["portal"] = {"valid": True}
+    fixed = snow.run_realm_command(context, _args("check-realm", realm="test"))
+    assert _icons(fixed["renderBlock"]["text"]) == ["✅", "✅", "✅", "✅", "⏳"]
+
+
+def test_portal_url_needs_a_flagged_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import connect_servicenow_da as snow
+
+    _prepare_controller(monkeypatch, dev_reference=DEV_RECORD)
+    context = _controller_context(tmp_path)
+    snow.run_realm_command(context, _args("discover-realm-target", realm="test"))
+    with pytest.raises(snow.ServiceNowConnectError, match="isn't flagged"):
+        snow.run_realm_command(
+            context,
+            _args(
+                "record-realm-portal-url",
+                realm="test",
+                portal_url="https://contoso.service-now.com",
+                confirm_portal_url=True,
+            ),
+        )
+
+
+def _blocked_target(
+    *, connections: dict[str, Any] | None = None, runtime: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    registry = _registry()
+    target = registry["targets"]["test"]
+    realms.apply_checks(
+        target,
+        connections=connections
+        or realms.evaluate_connections(FOUNDATION, _bound(), [_connection()]),
+        runtime=runtime
+        or realms.evaluate_runtime(FOUNDATION, [_topic("a")], {"valid": True}),
+    )
+    return registry
+
+
+def _record(target: dict[str, Any], result: str) -> dict[str, Any]:
+    return realms.record_validation(
+        target,
+        prompt_category=PROMPT,
+        allowed_prompt_category=PROMPT,
+        result=result,
+        failure_category=None,
+    )
+
+
+def test_untested_finish_while_a_connection_is_blocked_is_saved_as_untested() -> None:
+    registry = _blocked_target(
+        connections=realms.evaluate_connections(FOUNDATION, {}, [])
+    )
+    target = registry["targets"]["test"]
+    recorded = _record(target, "untested")
+    assert recorded["status"] == "untested"
+    assert recorded["blockedBy"]
+    with pytest.raises(realms.ServiceNowRealmError):
+        _record(target, "pass")
+    block = realms.realm_status(registry, render=_render_context())["renderBlock"][
+        "text"
+    ]
+    assert "Validation is paused:" in block
+    assert "remains untested" in block
+    assert "Your progress is saved" in block
+    assert "Waiting for you" not in block
+
+
+def test_untested_while_blocked_returns_to_the_test_pane_request_once_ready() -> None:
+    registry = _blocked_target(
+        connections=realms.evaluate_connections(FOUNDATION, {}, [])
+    )
+    target = registry["targets"]["test"]
+    _record(target, "untested")
+    resumed = realms.apply_checks(
+        target,
+        connections=realms.evaluate_connections(FOUNDATION, _bound(), [_connection()]),
+        runtime=realms.evaluate_runtime(FOUNDATION, [_topic("a")], {"valid": True}),
+    )
+    assert resumed is True
+    assert target["stages"]["maker-validation"]["status"] == "needs-maker"
+    block = realms.realm_status(registry, render=_render_context())["renderBlock"][
+        "text"
+    ]
+    assert "Waiting for you" in block
+
+
+def test_a_pass_while_only_the_portal_is_missing_is_reported_then_confirmed() -> None:
+    registry = _blocked_target(
+        runtime=realms.evaluate_runtime(
+            FOUNDATION, [_topic("a")], {"valid": False, "reason": "missing"}
+        )
+    )
+    target = registry["targets"]["test"]
+    assert _record(target, "pass")["status"] == "reported"
+    assert realms.target_status(registry, "test") == "blocked"
+    block = realms.realm_status(registry, render=_render_context())["renderBlock"][
+        "text"
+    ]
+    assert (
+        "Your HR request returned the expected data, but the agent in **Test** "
+        "is missing its employee portal URL"
+    ) in block
+    assert "What is the full HTTPS base URL employees should use for HR cases?" in block
+    assert "Waiting for you" not in block
+    realms.apply_checks(
+        target,
+        connections=realms.evaluate_connections(FOUNDATION, _bound(), [_connection()]),
+        runtime=realms.evaluate_runtime(FOUNDATION, [_topic("a")], {"valid": True}),
+    )
+    assert target["stages"]["maker-validation"]["status"] == "done"
+    assert realms.target_status(registry, "test") == "ready"
+
+
+def test_a_reported_pass_is_not_kept_when_a_connection_problem_appears() -> None:
+    registry = _blocked_target(
+        runtime=realms.evaluate_runtime(
+            FOUNDATION, [_topic("a")], {"valid": False, "reason": "missing"}
+        )
+    )
+    target = registry["targets"]["test"]
+    _record(target, "pass")
+    realms.apply_checks(
+        target,
+        connections=realms.evaluate_connections(FOUNDATION, {}, []),
+        runtime=realms.evaluate_runtime(FOUNDATION, [_topic("a")], {"valid": True}),
+    )
+    assert target["stages"]["maker-validation"]["status"] != "done"
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_returning_after_an_untested_finish_rechecks_before_continuing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: str
+) -> None:
+    import connect_servicenow_da as snow
+
+    monkeypatch.setattr(snow, "ACTIVE_PROFILE", snow.PRODUCT_PROFILES[profile])
+    _prepare_controller(monkeypatch, dev_reference=DEV_RECORD)
+    context = _controller_context(tmp_path)
+    snow.run_realm_command(context, _args("discover-realm-target", realm="test"))
+    first = snow.run_realm_command(context, _args("check-realm", realm="test"))
+    assert "We're rechecking your permission" not in first["renderBlock"]["text"]
+    snow.run_realm_command(
+        context,
+        _args(
+            "record-realm-test",
+            realm="test",
+            prompt_category=snow.ACTIVE_PROFILE.test_prompt_category,
+            result="untested",
+            failure_category=None,
+        ),
+    )
+    back = snow.run_realm_command(context, _args("check-realm", realm="test"))
+    text = back["renderBlock"]["text"]
+    assert text.startswith("We're continuing ServiceNow validation for **")
+    assert (
+        "We're rechecking your permission and the affected destination setup "
+        "before we continue."
+    ) in text
+    assert "Untested; your progress is saved" in text
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_a_different_instance_pauses_and_keeps_the_earlier_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: str
+) -> None:
+    import connect_servicenow_da as snow
+
+    monkeypatch.setattr(snow, "ACTIVE_PROFILE", snow.PRODUCT_PROFILES[profile])
+    _prepare_controller(monkeypatch, dev_reference=DEV_RECORD)
+    context = _controller_context(tmp_path)
+    snow.run_realm_command(context, _args("discover-realm-target", realm="test"))
+    snow.run_realm_command(
+        context,
+        _args(
+            "record-realm-test",
+            realm="test",
+            prompt_category=snow.ACTIVE_PROFILE.test_prompt_category,
+            result="pass",
+            failure_category=None,
+        ),
+    )
+    paused = snow.run_realm_command(
+        context,
+        _args("check-realm", realm="test", expected_instance="another"),
+    )
+    assert paused["message"] == realms.instance_pause_text()
+    assert paused["message"].startswith(
+        "That changes the shared-instance assumption behind this promotion path."
+    )
+    assert "This destination run is paused" in paused["message"]
+    assert "another" not in paused["message"]
+    assert paused["renderBlock"]["text"].endswith(paused["message"])
+    # The earlier result stays for its original instance; nothing continues.
+    registry = realms.load_registry(
+        tmp_path, snow.ACTIVE_PROFILE.provider_key, snow._agent_slug(context)
+    )
+    target = registry["targets"]["test"]
+    assert target["stages"]["maker-validation"]["status"] == "done"
+    assert target["instancePause"]["retainedInstance"] == "contoso"
+    other_command = snow.run_realm_command(
+        context, _args("check-realm", realm="test")
+    )
+    assert other_command["message"] == realms.instance_pause_text()
+    again = snow.run_realm_command(
+        context,
+        _args("check-realm", realm="test", expected_instance="contoso"),
+    )
+    assert "paused" not in again["renderBlock"]["text"]
+    assert snow.run_realm_command(context, _args("realm-status"))["targets"]["test"]
+
+
+def test_an_instance_change_notice_is_the_pause_only_in_a_promoted_realm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import connect_servicenow_da as snow
+
+    _prepare_controller(monkeypatch, dev_reference=DEV_RECORD)
+    context = _controller_context(tmp_path)
+    before = snow.target_change_handoff(context, "instance")
+    assert before["renderBlock"]["text"].startswith(
+        "That changes the ServiceNow instance."
+    )
+    snow.run_realm_command(context, _args("discover-realm-target", realm="test"))
+    after = snow.target_change_handoff(context, "instance")
+    assert after["renderBlock"]["text"] == realms.instance_pause_text()
+    assert after["recordsNothing"] is True
+
+
+def test_realm_setup_handoffs_use_the_destination_wording(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import connect_servicenow_da as snow
+    import json
+
+    incomplete = snow.realm_setup_handoff("incomplete")
+    assert incomplete["renderBlock"]["text"] == (
+        "Before we can continue, we need to finish basic ADK setup. We'll "
+        "hand over to the setup skill and return here afterward."
+    )
+    assert incomplete["recordsNothing"] is True
+    complete = snow.realm_setup_handoff("complete")
+    assert complete["renderBlock"]["text"] == (
+        "We'll continue with the ESS agent you just set up. You can select a "
+        "different supported ESS agent before we continue."
+    )
+    assert "chatMessage" in snow._with_agent_rules(incomplete, "realm-setup-handoff")
+    monkeypatch.chdir(tmp_path)
+    assert snow.main(["realm-setup-handoff", "--situation", "complete"]) == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["status"] == "setup-complete"
+    # An unprepared workspace is sent to setup before any realm command runs.
+    assert snow.main(["check-realm", "--realm", "test"]) == 0
+    gated = json.loads(capsys.readouterr().out)
+    assert gated["status"] == "setup-required"
+    assert gated["recordsNothing"] is True

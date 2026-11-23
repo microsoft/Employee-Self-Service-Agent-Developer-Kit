@@ -12547,6 +12547,7 @@ REALM_COMMANDS = frozenset(
         "check-realm",
         "record-realm-test",
         "record-realm-admin",
+        "record-realm-portal-url",
         "select-realm",
     }
 )
@@ -12697,8 +12698,11 @@ def _realm_target_context(
 def _realm_run_checks(
     context: dict[str, Any],
     target: dict[str, Any],
-) -> None:
-    """Re-read the promoted realm; nothing here writes to the agent."""
+) -> bool:
+    """Re-read the promoted realm; nothing here writes to the agent.
+
+    Returns True when this recheck follows an untested finish.
+    """
     environment = context["environment"]
     ring = environment["ring"]
     identity = target["identity"]
@@ -12738,7 +12742,7 @@ def _realm_run_checks(
         )
     except ServiceNowConnectError:
         portal = {"valid": False, "reason": "portal-topic-missing"}
-    realms.apply_checks(
+    return realms.apply_checks(
         target,
         connections=realms.evaluate_connections(
             expected,
@@ -12788,6 +12792,8 @@ def _realm_render_context(
     context: dict[str, Any],
     registry: dict[str, Any],
     realm: str,
+    *,
+    resume: bool = False,
 ) -> dict[str, Any] | None:
     target = registry["targets"].get(realm)
     if realm not in realms.PROMOTED_REALMS or not isinstance(target, dict):
@@ -12802,6 +12808,8 @@ def _realm_render_context(
     return {
         "agent": _spec_agent_name(),
         "kind": "HR" if hr else "IT",
+        "product": ACTIVE_PROFILE.product_name.removeprefix("ServiceNow "),
+        "resume": resume,
         "record": "case" if hr else "ticket",
         "example": "Show my open HR cases" if hr else "Show my open IT tickets",
         "agentUrl": maker_portal_links(_realm_target_context(context, target))[
@@ -12826,9 +12834,12 @@ def _realm_check_result(
     context: dict[str, Any],
     registry: dict[str, Any],
     realm: str,
+    *,
+    resume: bool = False,
 ) -> dict[str, Any]:
     result = realms.realm_status(
-        registry, render=_realm_render_context(context, registry, realm)
+        registry,
+        render=_realm_render_context(context, registry, realm, resume=resume),
     )
     target = registry["targets"][realm]
     result["realm"] = realm
@@ -12839,7 +12850,9 @@ def _realm_check_result(
             _realm_target_context(context, target)
         )["copilotStudioAgent"]["url"],
     }
-    if realms.target_status(registry, realm) == "ready":
+    if target.get("instancePause"):
+        result["message"] = realms.instance_pause_text()
+    elif realms.target_status(registry, realm) == "ready":
         result["message"] = _realm_completion_message(realm)
     elif realms.target_status(registry, realm) == "untested":
         result["message"] = _realm_untested_message(realm)
@@ -12895,6 +12908,11 @@ def _run_realm_command(
             and previous["identity"]["agentId"] == identity["agentId"]
             and previous["identity"]["environmentId"] == identity["environmentId"]
         )
+        if same_target and realms.request_instance_change(
+            previous, getattr(args, "expected_instance", None)
+        ):
+            realms.save_registry(root, registry)
+            return _realm_check_result(context, registry, realm)
         admin_setup = previous.get("adminSetup") if same_target else None
         if not isinstance(admin_setup, dict):
             admin_setup = realms.new_admin_setup(_realm_admin_case(context, identity))
@@ -12930,6 +12948,13 @@ def _run_realm_command(
             raise ServiceNowConnectError(
                 f"The {realm.title()} realm has not been discovered yet."
             )
+        if realms.request_instance_change(
+            target, getattr(args, "expected_instance", None)
+        ):
+            realms.save_registry(root, registry)
+            return _realm_check_result(context, registry, realm)
+        if command == "record-realm-portal-url":
+            return _record_realm_portal_url(context, registry, realm, target, args)
         if command == "record-realm-admin":
             _record_realm_admin(context, target, args)
         elif command == "check-realm":
@@ -12948,9 +12973,15 @@ def _run_realm_command(
                     ),
                 )
 
+    resumed = False
     if command in {"discover-realm-target", "check-realm", "record-realm-admin"}:
         if realms.independent_pending(target) is None:
+            finished_untested = (
+                (target["stages"].get("maker-validation") or {}).get("status")
+                == "untested"
+            )
             _realm_run_checks(context, target)
+            resumed = finished_untested
     else:
         realms.record_validation(
             target,
@@ -12960,7 +12991,63 @@ def _run_realm_command(
             failure_category=args.failure_category,
         )
     realms.save_registry(root, registry)
-    return _realm_check_result(context, registry, realm)
+    return _realm_check_result(context, registry, realm, resume=resumed)
+
+
+def _record_realm_portal_url(
+    context: dict[str, Any],
+    registry: dict[str, Any],
+    realm: str,
+    target: dict[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    """Record the portal URL request for the destination agent.
+
+    Destination environments are managed, so this only records the confirmed URL; the
+    change itself is made by the supported destination repair and the next
+    check reads the result.
+    """
+    runtime = target["stages"].get("runtime-configuration") or {}
+    if runtime.get("status") != "blocked" or not runtime.get("portalReason"):
+        raise ServiceNowConnectError(
+            "The employee portal URL isn't flagged for this destination. "
+            "Run the destination check first."
+        )
+    instance = target["expected"]["values"].get("instanceName")
+    if not instance:
+        raise ServiceNowConnectError(
+            "We need the ServiceNow instance name before the employee portal "
+            "URL can be recorded."
+        )
+    kind = "HR" if ACTIVE_PROFILE.key == "hrsd" else "IT"
+    raw = str(args.portal_url or "").strip()
+    has_scheme = "://" in raw
+    candidate = normalize_portal_url(
+        raw if has_scheme else f"https://{raw}",
+        expected_instance_name=instance,
+    )
+    if not has_scheme and not args.confirm_portal_url:
+        return {
+            "status": "portal-url-confirmation",
+            "realm": realm,
+            "recordsNothing": True,
+            "candidate": candidate,
+            "message": (
+                f"Should the {kind} agent use **{candidate}**? Reply to "
+                "confirm and we'll save it, or send the full HTTPS base URL "
+                "you want instead."
+            ),
+        }
+    request = realms.record_portal_url_request(target, candidate)
+    realms.save_registry(Path(context["root"]), registry)
+    result = _realm_check_result(context, registry, realm)
+    label = realm.title()
+    result["portalUrlRequest"] = request
+    result["message"] = (
+        f"We'll save that URL for the {kind} agent in {label}. The shared "
+        "identity setup stays in place."
+    )
+    return result
 
 
 def _realm_apply_independent_args(
@@ -13211,6 +13298,16 @@ def build_parser() -> argparse.ArgumentParser:
     validation_parser.add_argument("--entra-claim")
     validation_parser.add_argument("--servicenow-claim")
     validation_parser.add_argument("--claim-name")
+    realm_setup_parser = subparsers.add_parser(
+        "realm-setup-handoff",
+        help=(
+            "Return the destination-validation wording for basic ADK setup "
+            "(incomplete, or complete and continuing); records nothing."
+        ),
+    )
+    realm_setup_parser.add_argument(
+        "--situation", choices=("incomplete", "complete"), required=True
+    )
 
     inspect_parser = subparsers.add_parser(
         "inspect",
@@ -13706,6 +13803,20 @@ def build_parser() -> argparse.ArgumentParser:
     realm_admin_parser.add_argument("--directory-tenant-id")
     realm_admin_parser.add_argument(
         "--confirm-saved-mapping", action="store_true"
+    )
+    portal_url_parser = subparsers.add_parser(
+        "record-realm-portal-url",
+        help=(
+            "Record the employee portal URL a destination agent should use; "
+            "records the request only and writes nothing to the destination."
+        ),
+    )
+    portal_url_parser.add_argument(
+        "--realm", choices=("test", "prod"), required=True
+    )
+    portal_url_parser.add_argument("--portal-url", required=True)
+    portal_url_parser.add_argument(
+        "--confirm-portal-url", action="store_true"
     )
     select_realm_parser = subparsers.add_parser(
         "select-realm",
@@ -14261,6 +14372,49 @@ def empty_service_areas_handoff(realm: str = "dev") -> dict[str, Any]:
     }
 
 
+_REALM_SETUP_AFTER_REPLY = {
+    "incomplete": (
+        "Send the message above, then run the /setup handoff in setupHandoff. "
+        "When setup is finished, run realm-setup-handoff --situation "
+        "complete and continue. Nothing is recorded by this command."
+    ),
+    "complete": (
+        "Send the message above. If the maker picks a different supported "
+        "ESS agent, switch to it first; then run discover-realm-target. "
+        "Nothing is recorded by this command."
+    ),
+}
+
+
+def realm_setup_handoff(situation: str) -> dict[str, Any]:
+    """Destination-validation wording for the basic-setup gate."""
+    if situation == "incomplete":
+        text = (
+            "Before we can continue, we need to finish basic ADK setup. "
+            "We'll hand over to the setup skill and return here afterward."
+        )
+        return {
+            "status": "setup-required",
+            "branch": "workspace-not-prepared",
+            "decision": "finish-basic-setup",
+            "recordsNothing": True,
+            "setupHandoff": {"command": "/setup"},
+            "renderBlock": {"kind": "waiting", "text": text},
+            "afterReply": _REALM_SETUP_AFTER_REPLY[situation],
+        }
+    text = (
+        "We'll continue with the ESS agent you just set up. You can select a "
+        "different supported ESS agent before we continue."
+    )
+    return {
+        "status": "setup-complete",
+        "decision": "continue-with-agent",
+        "recordsNothing": True,
+        "renderBlock": {"kind": "info", "text": text},
+        "afterReply": _REALM_SETUP_AFTER_REPLY[situation],
+    }
+
+
 _TARGET_CHANGES = ("environment", "agent", "instance", "tenant", "user")
 _TARGET_CHANGE_AFTER_REPLY = (
     "Send the message above, then follow nextCommand so the permission and "
@@ -14274,6 +14428,16 @@ _FRIENDLY_NAME_BLOCKED_RE = re.compile(
     r"https?://|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
     re.IGNORECASE,
 )
+
+
+def _destination_realm_active(context: dict[str, Any]) -> bool:
+    try:
+        registry = realms.load_registry(
+            Path(context["root"]), ACTIVE_PROFILE.provider_key, _agent_slug(context)
+        )
+    except (OSError, ValueError, KeyError, realms.ServiceNowRealmError):
+        return False
+    return registry.get("activeTargetRealm") in {"test", "prod"}
 
 
 def target_change_handoff(
@@ -14333,6 +14497,8 @@ def target_change_handoff(
         "earlier setup information still applies.\n\n"
         f"{closing}"
     )
+    if change == "instance" and _destination_realm_active(context):
+        text = realms.instance_pause_text()
     return {
         "status": "target-change-notice",
         "decision": "revalidate-target",
@@ -17005,6 +17171,10 @@ def main(argv: list[str] | None = None) -> int:
             result = validation_notice(
                 None, args.situation, args.scenario
             )
+        elif args.command == "realm-setup-handoff":
+            result = realm_setup_handoff(args.situation)
+        elif args.command in REALM_COMMANDS and _workspace_not_prepared(Path(".")):
+            result = realm_setup_handoff("incomplete")
         else:
             context_kwargs: dict[str, Any] = {}
             if args.agent_id is not None or args.agent_slug is not None:
@@ -17265,7 +17435,8 @@ def main(argv: list[str] | None = None) -> int:
                 claim_name=args.claim_name,
             )
         elif args.command in REALM_COMMANDS:
-            result = run_realm_command(context, args)
+            if context is not None:
+                result = run_realm_command(context, args)
         elif args.command not in {
             "validation-notice",
             "adapt-question",
@@ -17274,6 +17445,7 @@ def main(argv: list[str] | None = None) -> int:
             "claim-confirmation-handoff",
             "metadata-url-handoff",
             "empty-service-areas-handoff",
+            "realm-setup-handoff",
         }:  # pragma: no cover
             raise ServiceNowConnectError("Unsupported command.")
     except (ServiceNowConnectError, AgentBuilderError, ValueError) as exc:
