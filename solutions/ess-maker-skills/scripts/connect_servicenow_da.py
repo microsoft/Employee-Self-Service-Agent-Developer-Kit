@@ -11790,6 +11790,7 @@ def resume_handoff(
     availability_group_id: str | None = None,
     availability_context_sha256: str | None = None,
     group_changed: bool = False,
+    dedupe_checklist: bool | None = None,
 ) -> dict[str, Any]:
     root = Path(context["root"])
     contract = _load_json(root / CONTRACT_PATH)
@@ -11822,10 +11823,14 @@ def resume_handoff(
     )
     current_group = _current_business_group(contract, progress)
     is_final = bool(progress["internal"].get("groupedFinalText"))
+    # Every resume shows the checklist; only the continuation of a business
+    # group acknowledgement (the previous call already showed it) may skip it.
+    if dedupe_checklist is None:
+        dedupe_checklist = availability_group_id is not None
     show_checklist = _checklist_due(
         context,
         str(progress["internal"]["groupedText"]),
-        force=is_final,
+        force=is_final or not dedupe_checklist,
     )
     pre_action_handoff, bypass_availability = (
         _shared_reuse_before_availability(
@@ -11901,6 +11906,7 @@ def resume_handoff(
             executed_actions=executed_actions,
             verified_phases=verified_phases,
             group_changed=True,
+            dedupe_checklist=True,
         )
     result["businessGroupAvailabilityAccepted"] = False
     if (

@@ -17577,7 +17577,7 @@ def test_hr_and_it_maker_messages_share_the_same_wording(
         ("itsm", "employee-self-service-it", "Set up ServiceNow IT"),
     ),
 )
-def test_setup_checklist_shows_only_when_progress_changes(
+def test_setup_checklist_shows_on_every_resume(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     profile: str,
@@ -17642,7 +17642,9 @@ def test_setup_checklist_shows_only_when_progress_changes(
         first = resume({"preflight"})
         second = resume({"preflight"})
         assert title in first
-        assert title not in second
+        # A repeated resume still shows the checklist; the model may have
+        # skipped the earlier output.
+        assert title in second
         assert snow._lifecycle_state_path(context).read_bytes() == (
             lifecycle_before
         )
@@ -17662,9 +17664,11 @@ def test_setup_checklist_shows_only_when_progress_changes(
         )
         assert title in changed
         assert "✅" in changed
-        assert title not in resume(
+        again = resume(
             {"preflight", "plugin-prerequisites", "entra-registration"}
         )
+        assert title in again
+        assert "✅" in again
 
 
 def test_checklist_due_always_shows_the_final_state(tmp_path: Path) -> None:
