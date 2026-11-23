@@ -12696,8 +12696,7 @@ def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
         assert (
             "   - **Instance name:** `dev123`—not the full URL\n"
             "4. Complete the connection creation.\n\n"
-            "Return here and tell us you connected your "
-            f"{agent_name} to the ServiceNow connection. You "
+            "Return here and tell us which connection you used. You "
             "won't need to resend the administrator replies.\n\n"
             f"After that, we'll test an {audience} request with your "
             "account to check sign-in and employee matching."
@@ -12707,10 +12706,14 @@ def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
         assert "**Expected form values" not in text
         assert "Part 2" not in text
     record_noun = "case" if profile == "hrsd" else "ticket"
-    assert (
+    assert portal == (
         f"Next, we'll make sure the agent's {audience} {record_noun} links "
-        "open in the right employee portal."
-    ) == portal
+        "open in the right employee portal.\n\n"
+        "What is the full HTTPS base URL of your ServiceNow employee "
+        "portal? It may differ from the instance URL, so we won't assume "
+        "`/sp` or `/esc`."
+    )
+    assert snow.has_wait_cue(portal)
     if profile == "hrsd":
         expected_test = (
             "We're ready to try an HR request.\n\n"
@@ -12735,6 +12738,112 @@ def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
         )
     assert expected_test == test
     assert "Required prompt" not in test
+
+
+@pytest.mark.parametrize("profile", ("hrsd", "itsm"))
+def test_portal_url_ask_is_plain_text_per_setup_mode(
+    profile: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _profile_context(
+        profile,
+        agent_id=AGENT_ID if profile == "hrsd" else OTHER_AGENT_ID,
+        agent_slug=(
+            "employee-self-service-hr"
+            if profile == "hrsd"
+            else "employee-self-service-it"
+        ),
+    )
+
+    def state(**extra: Any) -> dict:
+        value: dict = {
+            "adminSetup": {
+                "preflight": {"instanceName": "dev123"},
+                "phaseHandoffs": {},
+            },
+            "evidence": {},
+        }
+        value.update(extra)
+        return value
+
+    custom = state()
+    custom["evidence"]["identityMapping"] = {
+        "serviceNowAdministratorConfirmed": True,
+        "tokenClaimName": "employee_id",
+        "serviceNowUserField": "employee_number",
+    }
+    standard = state()
+    standard["evidence"]["identityMapping"] = {
+        "serviceNowAdministratorConfirmed": True,
+        "tokenClaimName": "upn",
+        "serviceNowUserField": "email",
+    }
+    audience = "HR" if profile == "hrsd" else "IT"
+    other = "IT" if profile == "hrsd" else "HR"
+    singular = "case" if profile == "hrsd" else "ticket"
+    plural = "cases" if profile == "hrsd" else "tickets"
+
+    def guidance(value: dict) -> str:
+        return snow._current_task_guidance(
+            context,
+            value,
+            phase_id="portal-url",
+            role="ESS Maker / Agent Developer",
+        )
+
+    with snow.product_profile_context(profile):
+        monkeypatch.setattr(
+            snow, "_other_agent_already_connected", lambda *_: False
+        )
+        first = guidance(standard)
+        payroll = guidance(custom)
+        existing = guidance(state(existingIdentity={"kind": "knowledge"}))
+        monkeypatch.setattr(
+            snow, "_other_agent_already_connected", lambda *_: True
+        )
+        second = guidance(standard)
+
+    assert first.endswith(
+        "What is the full HTTPS base URL of your ServiceNow employee "
+        "portal? It may differ from the instance URL, so we won't assume "
+        "`/sp` or `/esc`."
+    )
+    assert payroll == (
+        f"Next, we'll make sure {audience} {singular} links open in the "
+        "employee portal.\n\n"
+        "What is the full HTTPS base URL employees should use for "
+        f"{audience} {plural}?"
+    )
+    assert existing == (
+        f"Next, we'll make sure the agent's {singular} links open in the "
+        "employee portal.\n\n"
+        "What is the full HTTPS base URL employees should use for "
+        f"{audience} {plural}? It may differ from the ServiceNow instance "
+        "URL."
+    )
+    assert second == (
+        f"Next, we'll make sure the {audience} agent's {singular} links "
+        "open in the right employee portal.\n\n"
+        "What is the full HTTPS base URL of the portal employees should "
+        f"use for {audience} {plural}? It may differ from the {other} "
+        "portal."
+    )
+    for text in (first, payroll, existing, second):
+        assert snow.has_wait_cue(text)
+        assert "ask_user" not in text
+
+
+def test_portal_url_docs_ask_in_plain_text_not_a_card() -> None:
+    root = snow.SOLUTION_ROOT / "src" / "skills" / "connect"
+    for profile in ("hrsd", "itsm"):
+        text = (
+            root / f"servicenow-da-{profile}" / "actions"
+            / "configure-portal-url.md"
+        ).read_text(encoding="utf-8")
+        assert "plain chat text built by the controller" in text
+        assert "visible-handoff-question:v1 -->" not in text
+        assert "What is the full HTTPS base URL of your ServiceNow" not in text
+        assert "allowFreeformInput\": true" not in text
 
 
 @pytest.mark.parametrize(
@@ -17254,6 +17363,7 @@ def test_hr_and_it_maker_messages_share_the_same_wording(
 ) -> None:
     monkeypatch.setattr(snow, "ACTIVE_PROFILE", snow.ACTIVE_PROFILE)
     monkeypatch.setattr(snow, "ACTIVE_AGENT_NAME", None)
+    monkeypatch.setattr(snow, "_other_agent_already_connected", lambda *_: False)
     context = _context()
     rendered: dict[str, dict[str, str]] = {}
     for profile in ("hrsd", "itsm"):

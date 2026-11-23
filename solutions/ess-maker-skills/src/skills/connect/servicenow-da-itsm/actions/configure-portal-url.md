@@ -5,6 +5,16 @@ origin is already known from preflight, but only the administrator can confirm
 whether the employee portal is that exact root URL or uses a separate path.
 Never infer `/sp`, `/esc`, or any other example.
 
+The URL question is plain chat text built by the controller: the current-task
+message (shown verbatim by the caller) already asked "What is the full HTTPS
+base URL ..." and the turn ended. This document runs after the Maker's typed
+reply. Never show the URL question as a question card or form, never reword
+or repeat the controller message, and never ask for credentials.
+
+Treat the Maker's reply as the administrator-confirmed value. Accept it as
+free-form text: a bare URL, a sentence that contains a URL, or a URL with a
+short note.
+
 Run:
 
 ```text
@@ -13,19 +23,23 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-sl
 
 If the exact `ServiceNow ITSM Setup Configurations` topic already contains one
 valid administrator-confirmed HTTPS Portal BaseURI on the confirmed ServiceNow
-instance, return `ACTION_RESULT = "applied"` without a question or mutation.
+instance and it equals the URL in the Maker's reply (or the reply asks to keep
+it), return `ACTION_RESULT = "applied"` without a question or mutation.
 
-Otherwise discover compatible values saved by other prepared agents in this
-workspace. This is local-only and must not call AgentBuilder or Connectivity:
+If the reply does not contain a URL (for example, the Maker asks to reuse a
+saved value or does not know it), discover compatible values saved by other
+prepared agents in this workspace. This is local-only and must not call
+AgentBuilder or Connectivity:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} portal-reuse-handoff
 ```
 
-- `none`: continue to the manual URL question below.
+- `none`: ask the plain-text URL question again in your own words, without a
+  card, and wait for the reply.
 - `already-recorded` with an accepted record: use its exact `portalUrl`
   without asking the Maker again, then run the guarded `set-portal-url` command
-  below. A declined record continues to the manual question.
+  below. A declined record continues to the plain-text URL question.
 - `source-selection-required`: ask the returned label-only question, translate
   the selected label through `portalSourceChoices`, and rerun
   `portal-reuse-handoff --source-key <internal-source-key>`.
@@ -38,7 +52,7 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-sl
     `set-portal-url` command. Never ask the Maker to type it.
   - **No**: run
     `record-portal-reuse --source-key <internal-source-key> --decision decline`
-    and continue to the manual question.
+    and continue to the plain-text URL question.
 
 Candidate discovery and decision recording do not complete the phase or copy
 the source topic ID, binding, phase result, or readback. The current agent must
@@ -47,35 +61,10 @@ equals the accepted URL, `set-portal-url` must return `already-configured`,
 record a current-target confirmation, and make no update call. A different
 value follows the existing guarded update/readback/rollback transaction.
 
-If no accepted saved value applies, ask for the administrator-confirmed full
-employee portal URL. Show the guarded update and manual fallback guidance in
-the ordinary current-task reply, after its controller-built lead-in, which is shown verbatim. The question body is only the requested-URL question below, with no
-target topic, node, instance origin, current value, or classification
-lines; keep those facts for your own checks.
-Use the instance root only when the administrator explicitly confirms that exact root URL; otherwise ask for the confirmed path. Do not show a sample URL as the answer and do not ask for credentials.
-
-Before the question, always write this as a normal reply to the Maker (not only
-inside the question form), exactly as shown:
-
-**Message:**
-
-Next, we'll make sure the agent's IT ticket links open in the right employee portal.
-
-**End message.**
-
-<!-- visible-handoff-question:v1 -->
-```json
-[
-  {
-    "header": "What is the full HTTPS base URL of your ServiceNow employee portal?",
-    "question": "It may differ from the instance URL, so we won't assume `/sp` or `/esc`.",
-    "allowFreeformInput": true
-  }
-]
-```
-
-The explanation in `question` goes in the chat message; the card shows only
-the question and one input box.
+Show the guarded update and manual fallback guidance in the ordinary
+current-task reply. Keep the topic, node, instance origin, current value, and
+classification facts for your own checks.
+Use the instance root only when the administrator explicitly confirms that exact root URL; otherwise use the confirmed path. Do not show a sample URL as the answer.
 
 Validate that the answer:
 
@@ -94,7 +83,8 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-sl
 Send the returned `chatMessage` as plain chat text, then ask the returned
 `pendingCard` (title: "Is **{NORMALIZED_PORTAL_URL}** the employee portal
 URL?", options "Yes" and "No") with no free-form input and no extra body.
-- **No**: save nothing and ask the URL question above again.
+- **No**: save nothing and ask the plain-text URL question again, without a
+  card.
 - **Yes**: show the returned `savedMessage` verbatim
   ("We'll save that portal URL."). Do not announce topic changes in this step;
   topics were handled in the earlier Topics step. Then run:

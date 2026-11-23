@@ -10742,6 +10742,74 @@ def _dev_test_guidance(
     )
 
 
+_PORTAL_URL_RECORD_COPY = {
+    "hrsd": {"audience": "HR", "singular": "case", "plural": "cases"},
+    "itsm": {"audience": "IT", "singular": "ticket", "plural": "tickets"},
+}
+_PORTAL_URL_STANDARD_CLAIMS = frozenset({"email", "upn"})
+
+
+def _custom_claim_identity(state: dict[str, Any] | None) -> bool:
+    """True when the confirmed identity uses a custom token claim (spec S4)."""
+    evidence = state.get("evidence") if isinstance(state, dict) else None
+    mapping = (
+        evidence.get("identityMapping") if isinstance(evidence, dict) else None
+    )
+    claim = mapping.get("tokenClaimName") if isinstance(mapping, dict) else None
+    return (
+        isinstance(claim, str)
+        and bool(claim.strip())
+        and claim.strip().casefold() not in _PORTAL_URL_STANDARD_CLAIMS
+    )
+
+
+def _portal_url_ask_guidance(
+    context: dict[str, Any],
+    state: dict[str, Any],
+) -> str:
+    """Plain-text lead-in and URL question for the portal URL step.
+
+    Wording follows the spec variant for the setup mode: existing sign-in
+    (S3), a second agent (S2), a custom identity claim (S4), or the first
+    agent (S1).
+    """
+    copy_ = _PORTAL_URL_RECORD_COPY[ACTIVE_PROFILE.key]
+    audience = copy_["audience"]
+    singular = copy_["singular"]
+    plural = copy_["plural"]
+    if _existing_identity_kind(state):
+        return (
+            f"Next, we'll make sure the agent's {singular} links open in the "
+            "employee portal.\n\n"
+            "What is the full HTTPS base URL employees should use for "
+            f"{audience} {plural}? It may differ from the ServiceNow "
+            "instance URL."
+        )
+    if _other_agent_already_connected(context, state):
+        other = "IT" if audience == "HR" else "HR"
+        return (
+            f"Next, we'll make sure the {audience} agent's {singular} links "
+            "open in the right employee portal.\n\n"
+            "What is the full HTTPS base URL of the portal employees should "
+            f"use for {audience} {plural}? It may differ from the {other} "
+            "portal."
+        )
+    if _custom_claim_identity(state):
+        return (
+            f"Next, we'll make sure {audience} {singular} links open in the "
+            "employee portal.\n\n"
+            "What is the full HTTPS base URL employees should use for "
+            f"{audience} {plural}?"
+        )
+    return (
+        f"Next, we'll make sure the agent's {audience} {singular} links open "
+        "in the right employee portal.\n\n"
+        "What is the full HTTPS base URL of your ServiceNow employee portal? "
+        "It may differ from the instance URL, so we won't assume `/sp` or "
+        "`/esc`."
+    )
+
+
 def _current_task_guidance(
     context: dict[str, Any],
     state: dict[str, Any],
@@ -10819,8 +10887,7 @@ def _current_task_guidance(
             f"   - **Resource URI:** `{client_id or 'not yet confirmed'}`\n"
             f"   - **Instance name:** `{instance_name}`—not the full URL\n"
             "4. Complete the connection creation.\n\n"
-            "Return here and tell us you connected your "
-            f"{_spec_agent_name()} to the ServiceNow connection. You won't "
+            "Return here and tell us which connection you used. You won't "
             "need to resend the administrator replies.\n\n"
             f"After that, we'll test an {audience} request with your account "
             "to check sign-in and employee matching."
@@ -10832,11 +10899,7 @@ def _current_task_guidance(
             "unchanged."
         )
     if phase_id == "portal-url":
-        record_noun = "case" if ACTIVE_PROFILE.key == "hrsd" else "ticket"
-        return (
-            f"Next, we'll make sure the agent's {_product_audience()} "
-            f"{record_noun} links open in the right employee portal."
-        )
+        return _portal_url_ask_guidance(context, state)
     if phase_id == "test":
         return _dev_test_guidance(context, state)
     raise ServiceNowConnectError(
@@ -13856,7 +13919,7 @@ AGENT_RULES = (
 WAIT_CUE_PATTERN = re.compile(
     r"return here|come back|tell us|let us know|\breplies\b|\breply\b|"
     r"\bpaste\b|please send|\bsend (?:back|them|us|it|that|this|the)\b|"
-    r"once you have|when you have|when they|\?\s*$",
+    r"once you have|when you have|when they|full https base url|\?\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 _WAIT_RENDER_KINDS = frozenset({"waiting", "error", "final"})
