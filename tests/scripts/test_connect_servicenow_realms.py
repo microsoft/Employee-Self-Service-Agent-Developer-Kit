@@ -1342,7 +1342,8 @@ def test_realms_guide_carries_the_spec_questions() -> None:
         for line in REALMS_GUIDE.read_text(encoding="utf-8").splitlines()
     )
     for phrase in (
-        "Which destination should we check, Test or Prod?",
+        "Should we check Test?",
+        "Should we check Prod?",
         "What did the request from **{Agent} in {Environment}** return, and was "
         "that what you expected?",
         "do not treat it as pass or fail and do not run `record-realm-test`",

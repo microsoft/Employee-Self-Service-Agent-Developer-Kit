@@ -103,23 +103,46 @@ publish, or give deployment instructions.
 
 If the maker asks to check ServiceNow after promotion but does not say Test or
 Production, and the controller's `activeTargetRealm` does not settle it, ask
-with `ask_user` (card title = the question, short labels only; put any
-explanation in the chat message). Never infer the destination from conversation text. If the
+with `ask_user` (card title = the question, Yes/No only; put any explanation
+in the chat message). Never infer the destination from conversation text. If the
 agent is also unknown, ask for that next, and do not ask again for context that
 is already established.
+
+Ask the destination as a sequence of Yes/No questions, never a Test/Prod
+picker. First ask "Should we check Test?". On **Yes**, the destination is
+`test`. On **No**, ask "Should we check Prod?". On **Yes**, the destination is
+`prod`. If both are **No**, ask in chat which destination to check and wait for
+a typed reply; do not run a realm command.
 
 ```json
 {
   "message": "",
   "requestedSchema": {
     "properties": {
-      "destination": {
+      "checkTest": {
         "type": "string",
-        "title": "Destination",
-        "description": "Which destination should we check, Test or Prod?",
+        "title": "Should we check Test?",
         "oneOf": [
-          { "const": "test", "title": "Test" },
-          { "const": "prod", "title": "Prod" }
+          { "const": "yes", "title": "Yes" },
+          { "const": "no", "title": "No" }
+        ]
+      }
+    }
+  }
+}
+```
+
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "checkProd": {
+        "type": "string",
+        "title": "Should we check Prod?",
+        "oneOf": [
+          { "const": "yes", "title": "Yes" },
+          { "const": "no", "title": "No" }
         ]
       }
     }
@@ -582,7 +605,7 @@ what to do next.
 | A step fails | Later rows stay ⬜ and only the failing step's instruction is shown. |
 | Prod is checked before Test is Ready | Prod is checked on its own. |
 | Maker replies "Done" after fixing a step | `check-realm` reruns; the step turns ✅ without repeating earlier answers. |
-| Maker asks to check ServiceNow after promotion without saying Test or Prod | We ask "Which destination should we check, Test or Prod?" and do not guess. |
+| Maker asks to check ServiceNow after promotion without saying Test or Prod | We ask "Should we check Test?" and, on No, "Should we check Prod?" as Yes/No cards, and do not guess. |
 | Account lacks access (denied) vs. access check could not finish | Denied: ask a maker with the Environment Maker role to run it. Inconclusive: validation is paused, not denied, retry the permission check. |
 | Maker replies only "Done." to the Test-pane request | We don't record pass or fail and ask what the request from the agent in that environment returned and whether it matched. |
 | Maker says "Finish without testing" and no setup blocker remains | `record-realm-test --result untested` saves it as untested (not a pass) and we show the untested-finish message. A later pass or fail replaces it. |
