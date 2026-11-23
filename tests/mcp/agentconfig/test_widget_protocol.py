@@ -8,13 +8,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import sys
-import warnings
 from pathlib import Path
 from typing import Any
 
 import pytest
 from mcp.server.fastmcp.exceptions import ToolError
-from pydantic_settings.exceptions import IncompleteFieldDefinitionWarning
 
 
 REPO_ROOT = Path(__file__).parents[3]
@@ -26,11 +24,15 @@ AGENTCONFIG_DIR = (
     / "mcp"
     / "agentconfig_landing_page"
 )
-sys.path.insert(0, str(AGENTCONFIG_DIR))
+# Sibling MCP servers share the top-level names ``client``/``server``, so the
+# modules are loaded through the shared isolated importer rather than by a plain
+# ``import`` off ``sys.path``. See tests/mcp/_mcp_modules.py.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", IncompleteFieldDefinitionWarning)
-    import server as agentconfig_server  # noqa: E402
+from _mcp_modules import load_landing_page_modules  # noqa: E402
+
+_LANDING_MODULES = load_landing_page_modules()
+agentconfig_server = _LANDING_MODULES["server"]
 
 
 WIDGET_ORIGIN = agentconfig_server.WIDGET_ORIGIN
