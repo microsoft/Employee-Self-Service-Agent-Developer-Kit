@@ -17360,11 +17360,13 @@ def _profile_words(text: str, profile: str) -> str:
 
 def test_hr_and_it_maker_messages_share_the_same_wording(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(snow, "ACTIVE_PROFILE", snow.ACTIVE_PROFILE)
     monkeypatch.setattr(snow, "ACTIVE_AGENT_NAME", None)
     monkeypatch.setattr(snow, "_other_agent_already_connected", lambda *_: False)
     context = _context()
+    context["root"] = tmp_path
     rendered: dict[str, dict[str, str]] = {}
     for profile in ("hrsd", "itsm"):
         with snow.product_profile_context(profile):
@@ -18077,6 +18079,241 @@ def test_existing_identity_second_agent_keeps_the_s3_opening(
         ]
     assert text.startswith("We'll connect **Employee Self-Service IT**")
     assert "already uses ServiceNow" not in text
+
+
+def _second_agent_context(monkeypatch, tmp_path, profile, other, mapping=True):
+    monkeypatch.setattr(snow, "ACTIVE_AGENT_NAME", None)
+    other_context, _, other_profile = _recording_setup(monkeypatch, tmp_path, other)
+    with snow.product_profile_context(other_profile):
+        other_state = snow._load_lifecycle_state(other_context)
+        other_state["adminSetup"]["phaseHandoffs"] = {
+            "entra-registration": {
+                "status": "completed",
+                "evidence": {"clientId": "11111111-1111-4111-8111-111111111111"},
+            }
+        }
+        if mapping:
+            other_state.setdefault("evidence", {})["identityMapping"] = {
+                "tokenClaimName": "email",
+                "serviceNowUserField": "Email",
+            }
+        snow._write_lifecycle_state(other_context, other_state)
+    context, _, selected = _recording_setup(monkeypatch, tmp_path, profile)
+    context["environment"]["display_name"] = "Example Dev"
+    with snow.product_profile_context(selected):
+        state = snow._load_lifecycle_state(context)
+        state.setdefault("adminSetup", {}).setdefault("preflight", {})[
+            "instanceName"
+        ] = "dev123456"
+        snow._write_lifecycle_state(context, state)
+    return context, selected
+
+
+def _second_agent_walkthrough(context, selected, claim_name="email"):
+    with snow.product_profile_context(selected):
+        _ack_identity_availability(context, stage="entra")
+        entra = snow.identity_direct_handoff(context, stage="entra")
+        snow.record_identity_direct(
+            context,
+            stage="entra",
+            client_id=APP_CLIENT_ID,
+            claim_name=claim_name,
+            user_field=None,
+            confirmed=True,
+        )
+        _complete_entra_admin(context, client_id=APP_CLIENT_ID)
+        _ack_identity_availability(context, stage="servicenow")
+        oidc = snow.identity_direct_handoff(context, stage="servicenow")
+        snow.record_identity_direct(
+            context,
+            stage="servicenow",
+            client_id=None,
+            claim_name=None,
+            user_field="Email",
+            confirmed=True,
+        )
+        _complete_servicenow_admin(context)
+        guidance = snow._current_task_guidance(
+            context,
+            snow._load_lifecycle_state(context),
+            phase_id="credential",
+            role="maker",
+        )
+    return entra["ordinaryReply"]["text"], oidc["ordinaryReply"]["text"], guidance
+
+
+@pytest.mark.parametrize(
+    ("profile", "other", "agent"),
+    [
+        ("itsm", "hrsd", "Employee Self-Service IT"),
+        ("hrsd", "itsm", "Employee Self-Service HR"),
+    ],
+)
+def test_second_agent_reuse_handoffs_follow_the_s2_review_pattern(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    other: str,
+    agent: str,
+) -> None:
+    audience = "IT" if profile == "itsm" else "HR"
+    earlier = "HR" if profile == "itsm" else "IT"
+    context, selected = _second_agent_context(monkeypatch, tmp_path, profile, other)
+    entra, oidc, guidance = _second_agent_walkthrough(context, selected)
+    tenant = context["environment"]["tenant_id"]
+
+    prefix = "The HR prerequisite is confirmed. " if profile == "hrsd" else ""
+    assert entra.startswith(
+        f"{prefix}{earlier} is already using ServiceNow. Your administrators "
+        f"still need to confirm that the shared sign-in setup can also serve "
+        f"{audience}. This doesn't necessarily mean creating or changing "
+        "anything.\n\n"
+        "Send this message to your Microsoft Entra administrator. It "
+        f"includes the earlier {earlier} values for review.\n\n"
+        "When they reply, paste their confirmation here without secrets. "
+        "They'll coordinate reuse with your ServiceNow administrator; you "
+        "don't need to interpret the settings."
+    )
+    for expected in (
+        f"Employee Self-Service {earlier} already uses "
+        "**https://dev123456.service-now.com**. We're adding "
+        f"**{agent}** so employees can ",
+        f"**Earlier {earlier} values\u2014review before using for {audience}**",
+        "- **Client ID:** `11111111-1111-4111-8111-111111111111`",
+        f"- **Tenant ID:** `{tenant}`",
+        "- **Claim setup:** standard email claim; no custom claim",
+        f"These are the values confirmed for {earlier}, not yet confirmed for "
+        f"{audience}.",
+        "**Review the existing setup first**",
+        "State whether the configuration was reused or newly created. If "
+        "reuse is unresolved, tell us what remains to be agreed.",
+        "**Setup instructions\u2014only for work you determine is needed**",
+        f"Do not repeat completed steps solely to add {audience}.",
+        "**Part 1: Register the app**",
+    ):
+        assert expected in entra
+    assert "Review compatibility before setup" not in entra
+
+    assert oidc.startswith(
+        f"The Entra administrator has confirmed that {audience} can use the "
+        "existing registration, including its Client ID, tenant ID, and "
+        "standard email claim.\n\n"
+        "Next, send this message to your ServiceNow administrator to "
+        f"confirm the saved sign-in setup and employee matching for "
+        f"{audience}.\n\n"
+        f"It includes the Entra values just confirmed and the earlier "
+        f"{earlier} mapping for review. Paste their reply here without "
+        "secrets."
+    )
+    for expected in (
+        f"**Entra values confirmed for {audience}**",
+        f"- **Client ID:** `{APP_CLIENT_ID}`",
+        "- **Custom claim:** none; standard email claim confirmed",
+        f"**Earlier {earlier} mapping\u2014review before using for "
+        f"{audience}**",
+        "- **User Claim:** `email`",
+        "- **User Field:** **Email**",
+        f"This mapping was confirmed for {earlier}, not yet confirmed for "
+        f"{audience}.",
+        "**Review the existing setup first**",
+        "**don't change it**",
+        "**Setup instructions\u2014only for work you determine is needed**",
+        "**Configure ServiceNow**",
+        "Select **Submit**.",
+    ):
+        assert expected in oidc
+    assert ("sn_hr_core.basic" in oidc) is (profile == "hrsd")
+
+    assert guidance.startswith(
+        "Both administrators have confirmed the shared sign-in setup for "
+        f"{audience}, using `email` as the User Claim and **Email** as the "
+        "User Field.\n\n"
+        f"Next, select a ServiceNow connection for {agent}. We'll then "
+        f"configure and test the {audience} agent.\n\n"
+        "In Copilot Studio:"
+    )
+    assert "3. Select an existing ServiceNow connection available for this agent." in guidance
+    assert (
+        f'The connection may still have "{earlier}" in its name; you don\'t '
+        f"need to rename it or create a duplicate solely to add {audience}."
+    ) in guidance
+    assert "Return here and tell us which connection you selected." in guidance
+    assert "Create new connection" not in guidance
+
+
+def test_second_agent_reuse_tolerates_missing_earlier_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _second_agent_context(
+        monkeypatch, tmp_path, "itsm", "hrsd", mapping=False
+    )
+    entra, oidc, _ = _second_agent_walkthrough(context, selected)
+    assert "**Earlier HR values\u2014review before using for IT**" in entra
+    assert "Claim setup" not in entra
+    assert "Earlier HR mapping" not in oidc
+    assert "**Entra values confirmed for IT**" in oidc
+
+
+@pytest.mark.parametrize(
+    ("profile", "other", "lookup", "records", "earlier"),
+    [
+        ("itsm", "hrsd", "IT ticket lookup", "tickets", "HR"),
+        ("hrsd", "itsm", "HR case lookup", "cases", "IT"),
+    ],
+)
+def test_second_agent_final_message_names_the_agent_that_was_not_retested(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    other: str,
+    lookup: str,
+    records: str,
+    earlier: str,
+) -> None:
+    context, selected = _second_agent_context(monkeypatch, tmp_path, profile, other)
+    with snow.product_profile_context(selected):
+        state = snow._load_lifecycle_state(context)
+        audience = snow._second_agent_audience(context, state)
+        final = snow._dev_final_message("Example Dev", None, audience)
+        first_agent = snow._dev_final_message("Example Dev")
+    assert audience == earlier
+    assert final.startswith(
+        f"**Your ServiceNow connection worked for the {lookup} in Example "
+        "Dev.**"
+    )
+    assert final.endswith(
+        f"Creating {records} and sign-in for other employees haven't been "
+        f"verified. {earlier} wasn't retested in this setup."
+    )
+    assert "retested" not in first_agent
+
+
+def test_second_agent_wording_never_replaces_first_agent_or_s3_flows(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    first, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(selected):
+        _ack_identity_availability(first, stage="entra")
+        text = snow.identity_direct_handoff(first, stage="entra")["ordinaryReply"][
+            "text"
+        ]
+        assert snow._second_agent_reuse(first, snow._load_lifecycle_state(first)) is None
+    assert "already using ServiceNow" not in text
+    assert "Earlier HR values" not in text
+
+    context, selected = _second_agent_context(monkeypatch, tmp_path, "hrsd", "itsm")
+    with snow.product_profile_context(selected):
+        snow.existing_identity_handoff(context, "knowledge")
+        state = snow._load_lifecycle_state(context)
+        assert snow._second_agent_reuse(context, state) is None
+        _ack_identity_availability(context, stage="entra")
+        entra = snow.identity_direct_handoff(context, stage="entra")["ordinaryReply"][
+            "text"
+        ]
+    assert "Review compatibility before setup" in entra
+    assert "Earlier IT values" not in entra
 
 
 @pytest.mark.parametrize("profile", ["itsm", "hrsd"])

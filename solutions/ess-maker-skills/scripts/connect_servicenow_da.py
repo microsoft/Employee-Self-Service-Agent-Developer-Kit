@@ -1359,6 +1359,29 @@ def identity_direct_handoff(
             existing_kind,
             claim_name=claim_name if stage == "servicenow" else None,
         )
+    elif second_agent := _second_agent_reuse(context, state):
+        instance_for_packet = normalize_instance_name(
+            expected_identity["instanceName"]
+        )
+        if stage == "entra":
+            packet_text = _second_agent_entra_packet(
+                context, second_agent, instance_for_packet
+            )
+            lead_in = _second_agent_entra_lead_in(second_agent)
+        else:
+            packet_text = _second_agent_servicenow_packet(
+                context,
+                second_agent,
+                instance_name=instance_for_packet,
+                client_id=client_id,
+                tenant_id=_normalize_directory_tenant_id(
+                    expected_identity["tenantId"]
+                ),
+                claim_name=claim_name,
+            )
+            lead_in = _second_agent_servicenow_lead_in(
+                second_agent, claim_name
+            )
     target_text = (
         f"Target agent: `{_agent_slug(context)}` "
         f"(`{context['agent']['id']}`)\n"
@@ -9976,6 +9999,7 @@ _DEV_FINAL_SCOPE = {
 def _dev_final_message(
     environment_display_name: str | None,
     existing_kind: str | None = None,
+    other_agent: str | None = None,
 ) -> str:
     lookup, records = _DEV_FINAL_SCOPE[ACTIVE_PROFILE.key]
     in_env = f" in {environment_display_name}" if environment_display_name else ""
@@ -9987,6 +10011,8 @@ def _dev_final_message(
         + (
             f" {_EXISTING_IDENTITY_KINDS[existing_kind]['retest']}"
             if existing_kind
+            else f" {other_agent} wasn't retested in this setup."
+            if other_agent
             else ""
         )
     )
@@ -10017,6 +10043,7 @@ def _build_phase_progress(
     executed_actions: frozenset[str],
     verified_phases: frozenset[str],
     environment_display_name: str | None = None,
+    other_agent: str | None = None,
 ) -> dict[str, Any]:
     phases = contract.get("phases")
     if not isinstance(phases, list) or not phases:
@@ -10131,7 +10158,11 @@ def _build_phase_progress(
 
     grouped = render_grouped()
     final_message = (
-        _dev_final_message(environment_display_name, _existing_identity_kind(state))
+        _dev_final_message(
+            environment_display_name,
+            _existing_identity_kind(state),
+            other_agent,
+        )
         if decision.get("decision") == "complete"
         and completed_count == len(items)
         else None
@@ -10508,6 +10539,15 @@ def _other_agent_already_connected(
     shared-identity phase, and the same ServiceNow instance when this run has
     already recorded one.
     """
+    return bool(_other_agent_reuse_sources(context, state))
+
+
+def _other_agent_reuse_sources(
+    context: dict[str, Any],
+    state: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Local records of other agents with shared setup this run can reuse."""
+    sources: list[dict[str, Any]] = []
     target_setup = state.get("adminSetup") if isinstance(state, dict) else None
     target_preflight = (
         target_setup.get("preflight") if isinstance(target_setup, dict) else None
@@ -10544,8 +10584,8 @@ def _other_agent_already_connected(
                     continue
             except ServiceNowConnectError:
                 continue
-        return True
-    return False
+        sources.append(source)
+    return sources
 
 
 def _dev_opening_text(
@@ -10873,6 +10913,11 @@ def _current_task_guidance(
                 client_id=client_id,
                 instance_name=instance_name,
             )
+        second_agent = _second_agent_reuse(context, state)
+        if second_agent:
+            return _second_agent_connection_guidance(
+                context, state, second_agent
+            )
         return _credential_lead_in(state) + (
             "Next, create the sign-in connection that "
             f"{_spec_agent_name()} will use to access ServiceNow. This part "
@@ -11108,6 +11153,7 @@ def _resume_progress(
         executed_actions=executed_actions,
         verified_phases=verified_phases,
         environment_display_name=_recorded_environment_name(context),
+        other_agent=_second_agent_audience(context, state),
     )
 
 
@@ -14709,6 +14755,359 @@ def _existing_connection_guidance(
         f"   - **Instance name:** `{instance_name}`\n\n"
         "Return here and tell us which connection you used. You don't need "
         "to resend the administrator replies."
+    )
+
+
+def _second_agent_reuse(
+    context: dict[str, Any],
+    state: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Spec S2: the other ServiceNow agent whose shared setup this run reuses.
+
+    Returns None for the first agent, for a same-product agent, and when the
+    existing-identity marker is set (the S3 wording owns that case).
+    """
+    if _existing_identity_kind(state):
+        return None
+    for source in _other_agent_reuse_sources(context, state):
+        profile = source["profile"]
+        if profile.key == ACTIVE_PROFILE.key:
+            continue
+        other_state = source["state"]
+        setup = other_state.get("adminSetup")
+        handoff = _completed_handoff(
+            setup if isinstance(setup, dict) else {}, "entra-registration"
+        )
+        client_id = None
+        raw_client_id = (
+            handoff["evidence"].get("clientId") if handoff else None
+        )
+        if raw_client_id:
+            try:
+                client_id = normalize_client_id(str(raw_client_id))
+            except ServiceNowConnectError:
+                client_id = None
+        evidence = other_state.get("evidence")
+        mapping = (
+            evidence.get("identityMapping")
+            if isinstance(evidence, dict)
+            else None
+        )
+        claim = field = None
+        if isinstance(mapping, dict):
+            raw_claim = mapping.get("tokenClaimName")
+            raw_field = mapping.get("serviceNowUserField")
+            if isinstance(raw_claim, str) and _SAFE_IDENTITY_NAME.fullmatch(
+                raw_claim
+            ):
+                claim = raw_claim
+            if isinstance(raw_field, str) and _SAFE_USER_FIELD.fullmatch(
+                raw_field
+            ):
+                field = raw_field
+        return {
+            "audience": "HR" if profile.key == "hrsd" else "IT",
+            "clientId": client_id,
+            "claimName": claim,
+            "userField": field,
+        }
+    return None
+
+
+def _second_agent_audience(
+    context: dict[str, Any],
+    state: dict[str, Any] | None,
+) -> str | None:
+    reuse = _second_agent_reuse(context, state)
+    return reuse["audience"] if reuse else None
+
+
+def _second_agent_names(reuse: dict[str, Any]) -> tuple[str, str]:
+    """Other agent's audience and this run's, from the single resolver."""
+    return reuse["audience"], _product_audience()
+
+
+def _second_agent_packet_tail(packet: str, marker: str) -> str:
+    """The setup steps of an existing packet, from the marker onward."""
+    tail = packet[packet.index(marker):]
+    for old, new in (
+        (
+            "Coordinate the identifier with the ServiceNow administrator.",
+            "Coordinate the identifier with your ServiceNow administrator.",
+        ),
+        ("Configure the app to emit", "Configure this app to emit"),
+        (
+            "whichever matches how ServiceNow user records",
+            "whichever matches how your ServiceNow user records",
+        ),
+    ):
+        tail = tail.replace(old, new)
+    return tail
+
+
+def _second_agent_claim_label(claim: str | None) -> str:
+    if claim and claim.casefold() not in {"email", "upn"}:
+        return f"custom claim `{claim}`"
+    return f"standard {(claim or 'email').casefold()} claim"
+
+
+def _second_agent_entra_lead_in(reuse: dict[str, Any]) -> str:
+    """Spec S2 step 2: the Entra handoff lead-in for the second agent."""
+    other, audience = _second_agent_names(reuse)
+    prefix = (
+        "The HR prerequisite is confirmed. "
+        if ACTIVE_PROFILE.requires_hr_core
+        else ""
+    )
+    return (
+        f"{prefix}{other} is already using ServiceNow. Your administrators "
+        "still need to confirm that the shared sign-in setup can also serve "
+        f"{audience}. This doesn't necessarily mean creating or "
+        "changing anything.\n\n"
+        "Send this message to your Microsoft Entra administrator. It "
+        f"includes the earlier {other} values for review.\n\n"
+        "When they reply, paste their confirmation here without secrets. "
+        "They'll coordinate reuse with your ServiceNow administrator; you "
+        "don't need to interpret the settings."
+    )
+
+
+def _second_agent_servicenow_lead_in(
+    reuse: dict[str, Any],
+    claim_name: str | None,
+) -> str:
+    """Spec S2 step 4: acknowledge Entra, then ask for the ServiceNow review."""
+    other, audience = _second_agent_names(reuse)
+    return (
+        f"The Entra administrator has confirmed that {audience} can use the "
+        "existing registration, including its Client ID, tenant ID, and "
+        f"{_second_agent_claim_label(claim_name)}.\n\n"
+        "Next, send this message to your ServiceNow administrator to "
+        f"confirm the saved sign-in setup and employee matching for "
+        f"{audience}.\n\n"
+        "It includes the Entra values just confirmed and the earlier "
+        f"{other} mapping for review. Paste their reply here without "
+        "secrets."
+    )
+
+
+def _second_agent_packet_intro(
+    reuse: dict[str, Any],
+    url: str,
+) -> str:
+    return (
+        f"Employee Self-Service {reuse['audience']} already uses "
+        f"**{url}**. We're adding **{_spec_agent_name()}** so employees can "
+        f"{_existing_identity_purpose()} while signed in as themselves."
+    )
+
+
+def _second_agent_entra_packet(
+    context: dict[str, Any],
+    reuse: dict[str, Any],
+    instance_name: str,
+) -> str:
+    """Spec S2 step 3: review the shared registration before any setup."""
+    other, audience = _second_agent_names(reuse)
+    url = f"https://{instance_name}.service-now.com"
+    tenant_id = _normalize_directory_tenant_id(
+        context["environment"]["tenant_id"]
+    )
+    values = []
+    if reuse["clientId"]:
+        values.append(f"- **Client ID:** `{reuse['clientId']}`")
+    values.append(f"- **Tenant ID:** `{tenant_id}`")
+    if reuse["claimName"]:
+        claim = reuse["claimName"]
+        values.append(
+            "- **Claim setup:** standard email claim; no custom claim"
+            if claim.casefold() in {"email", "upn"}
+            else f"- **Claim setup:** custom claim `{claim}`"
+        )
+    base = _existing_entra_packet(
+        context, next(iter(_EXISTING_IDENTITY_KINDS)), instance_name
+    )
+    paragraphs = [
+        _second_agent_packet_intro(reuse, url),
+        f"Please confirm whether the existing ESS app registration can also "
+        f"serve {audience}. ServiceNow needs an app registration in "
+        "Microsoft Entra ID that it can trust to identify users. You need "
+        "the **Global Administrator** or **Cloud Application "
+        "Administrator** role.",
+        f"**Earlier {other} values\u2014review before using for "
+        f"{audience}**\n\n" + "\n".join(values),
+        f"These are the values confirmed for {other}, not yet confirmed for "
+        f"{audience}.",
+        "**Review the existing setup first**\n\n"
+        "1. Coordinate with your ServiceNow administrator to confirm "
+        f"whether this registration can serve {audience} on the same "
+        "instance.\n"
+        "2. Review the user claims, API scope, and authorized Microsoft "
+        "ServiceNow connector described in the setup instructions below. "
+        "Confirm which requirements the existing registration already "
+        "satisfies.\n"
+        "3. Confirm the Client ID, tenant ID, and custom claim name if "
+        f"applicable for {audience}. If the existing setup meets the "
+        "requirements, reuse it without repeating completed steps or "
+        "creating another registration.",
+        "ServiceNow allows only one OIDC configuration per Microsoft Entra "
+        "tenant. If an app registration already supports ServiceNow "
+        "Knowledge or single sign-on, coordinate with the ServiceNow "
+        "administrator before creating another one.",
+        "Review [coexistence with the Microsoft Graph connector for "
+        f"ServiceNow]({_COEXISTENCE_LINK}).",
+        "**Please send back:** confirmation whether the registration can "
+        f"serve {audience}, the Application (client) ID, Directory "
+        "(tenant) ID, and custom claim name if applicable. State whether "
+        "the configuration was reused or newly created. If reuse is "
+        "unresolved, tell us what remains to be agreed.",
+        "**Do not send passwords, client secrets, tokens, or certificate "
+        "material.**",
+        "**Setup instructions\u2014only for work you determine is "
+        "needed**",
+        "You and the ServiceNow administrator decide which work is missing "
+        "and agree on any changes before proceeding, accounting for "
+        f"{other} and other existing uses. Do not repeat completed steps "
+        f"solely to add {audience}.",
+        _second_agent_packet_tail(base, "**Part 1: Register the app**"),
+    ]
+    return "\n\n".join(paragraphs)
+
+
+def _second_agent_servicenow_packet(
+    context: dict[str, Any],
+    reuse: dict[str, Any],
+    *,
+    instance_name: str,
+    client_id: str,
+    tenant_id: str,
+    claim_name: str,
+) -> str:
+    """Spec S2 steps 5-6: confirm the saved setup can also serve this agent."""
+    other, audience = _second_agent_names(reuse)
+    url = f"https://{instance_name}.service-now.com"
+    custom = (
+        f"`{claim_name}`"
+        if claim_name.casefold() not in {"email", "upn"}
+        else f"none; standard {claim_name.casefold()} claim confirmed"
+    )
+    paragraphs = [
+        _second_agent_packet_intro(reuse, url),
+        "Please confirm whether the saved ESS sign-in configuration and "
+        f"employee mapping can also serve {audience}. ServiceNow needs to "
+        "trust Microsoft Entra sign-in and match each employee to their "
+        "ServiceNow user record. You need the `admin` or `security_admin` "
+        "role.",
+        f"**Entra values confirmed for {audience}**\n\n"
+        f"- **Client ID:** `{client_id}`\n"
+        f"- **Tenant ID:** `{tenant_id}`\n"
+        f"- **Custom claim:** {custom}",
+    ]
+    if reuse["claimName"] and reuse["userField"]:
+        paragraphs.extend(
+            [
+                f"**Earlier {other} mapping\u2014review before using for "
+                f"{audience}**\n\n"
+                f"- **User Claim:** `{reuse['claimName']}`\n"
+                f"- **User Field:** **{reuse['userField']}**",
+                f"This mapping was confirmed for {other}, not yet "
+                f"confirmed for {audience}.",
+            ]
+        )
+    base = _existing_servicenow_packet(
+        context,
+        next(iter(_EXISTING_IDENTITY_KINDS)),
+        instance_name=instance_name,
+        client_id=client_id,
+        tenant_id=tenant_id,
+        claim_name=claim_name,
+    )
+    paragraphs.extend(
+        [
+            "**Review the existing setup first**\n\n"
+            "1. Review the saved ESS OIDC configuration against the Entra "
+            f"values confirmed for {audience}.\n"
+            "2. Confirm the User Claim and User Field that match the "
+            "signed-in employee to their ServiceNow user record.\n"
+            "3. If the saved setup can serve "
+            f"{audience}, confirm its reuse without creating another "
+            "configuration or repeating completed steps.",
+            "ServiceNow allows only one OIDC configuration per Microsoft "
+            "Entra tenant. If a configuration already serves single "
+            "sign-on or the Microsoft Graph connector, **don't change "
+            "it**. Coordinate the appropriate reuse or resolution with "
+            "your Entra administrator.",
+            f"See [coexistence guidance]({_COEXISTENCE_LINK}) and "
+            f"[ServiceNow Knowledge connector guidance]"
+            f"({_KNOWLEDGE_GUIDANCE_LINK}).",
+            "**Please send back:** confirmation that the configuration is "
+            f"saved and can serve {audience}, the **User Claim**, and the "
+            "**User Field** used. State whether the configuration was "
+            "reused or newly created. If reuse is unresolved, tell us what "
+            "remains to be agreed.",
+            "**Do not send secrets.**",
+            "**Setup instructions\u2014only for work you determine is "
+            "needed**",
+            "If work is missing, coordinate the appropriate reuse or "
+            "resolution with the Entra administrator before proceeding, "
+            f"accounting for {other} and other existing uses. Do not "
+            f"repeat completed steps solely to add {audience}.",
+            "**Configure ServiceNow**",
+            _second_agent_packet_tail(base, f"1. Sign in to **{url}**."),
+        ]
+    )
+    return "\n\n".join(paragraphs)
+
+
+def _second_agent_credential_lead_in(state: dict[str, Any]) -> str:
+    """Spec S2 step 8: both administrators confirmed the shared setup."""
+    audience = _product_audience()
+    mapping = state.get("evidence", {}).get("identityMapping")
+    claim = field = None
+    if (
+        isinstance(mapping, dict)
+        and mapping.get("serviceNowAdministratorConfirmed") is True
+    ):
+        claim = mapping.get("tokenClaimName")
+        field = mapping.get("serviceNowUserField")
+    using = (
+        f", using `{claim}` as the User Claim and **{field}** as the User "
+        "Field"
+        if isinstance(claim, str)
+        and claim
+        and isinstance(field, str)
+        and field
+        else ""
+    )
+    return (
+        "Both administrators have confirmed the shared sign-in setup for "
+        f"{audience}{using}.\n\n"
+        f"Next, select a ServiceNow connection for {_spec_agent_name()}. "
+        f"We'll then configure and test the {audience} agent.\n\n"
+    )
+
+
+def _second_agent_connection_guidance(
+    context: dict[str, Any],
+    state: dict[str, Any],
+    reuse: dict[str, Any],
+) -> str:
+    """Spec S2 steps 8-9: select an existing connection; no duplicate."""
+    other, audience = _second_agent_names(reuse)
+    return (
+        _second_agent_credential_lead_in(state)
+        + "In Copilot Studio:\n\n"
+        f"1. Open **{_display_agent_name(context)}** in "
+        f"**{_display_environment_name(context)}**.\n"
+        "2. Go to **Settings > Connection Settings > ServiceNow > "
+        "Connect**.\n"
+        "3. Select an existing ServiceNow connection available for this "
+        "agent.\n\n"
+        f"The connection may still have \"{other}\" in its name; you don't "
+        "need to rename it or create a duplicate solely to add "
+        f"{audience}.\n\n"
+        "Return here and tell us which connection you selected. You won't "
+        "need to resend the administrator replies."
     )
 
 
