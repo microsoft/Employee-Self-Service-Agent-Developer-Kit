@@ -101,8 +101,9 @@ runner's `adapt-question` shape):
   target). **No** on the last candidate, or the only candidate, opens the exact
   returned `manualInstanceQuestion`, which is typed in plain chat.
 - With no candidates, the returned question is already the free-form URL
-  question. Its title is the question itself; do not add a body, example, or
-  note to the card because the explanation is already in `chatMessage`.
+  question. The controller puts it in `chatMessage` with `endTurn: true`, so
+  the Maker types the URL in the normal chat box; there is no card and no
+  body, example, or note to add.
 - Discovery errors stay visible in `chatMessage`. Manual target confirmation
   does not prove connection health, select/reuse a credential, create an
   instance, or bind the agent.

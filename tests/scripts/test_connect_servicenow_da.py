@@ -19459,3 +19459,106 @@ def test_admin_packets_never_ask_for_a_directory_tenant_id(
         assert "send back the tenant" not in text.lower()
     assert "Application (client) ID" in entra
     assert f"**Tenant ID:** `{TENANT_ID}`" in service_now
+
+
+def test_typed_questions_are_plain_chat_and_end_the_turn() -> None:
+    link = snow._with_agent_rules(
+        {"status": "agent-link-required", "question": snow._agent_link_question()},
+        "agent-chooser",
+    )
+    manual = snow._with_agent_rules(
+        {
+            "status": "ready",
+            "question": {
+                "header": "Which ServiceNow instance should the agent use?",
+                "question": "Send its public HTTPS URL, not credentials.",
+                "options": [],
+                "allowFreeformInput": True,
+            },
+        },
+        "instance-discovery",
+    )
+
+    for wrapped, header in (
+        (link, "What is the Copilot Studio link for the agent?"),
+        (manual, "Which ServiceNow instance should the agent use?"),
+    ):
+        assert "pendingCard" not in wrapped
+        assert wrapped["endTurn"] is True
+        assert wrapped["chatMessage"].startswith(header)
+        assert "nextCommand" not in wrapped
+
+
+def test_yes_no_cards_stay_cards_and_typed_questions_do_not_become_cards() -> None:
+    yes_no = {
+        "header": "Connect the agent to ServiceNow?",
+        "question": "Connect the agent to ServiceNow?",
+        "options": [{"label": "Yes"}, {"label": "No"}],
+        "allowFreeformInput": False,
+    }
+
+    wrapped = snow._with_agent_rules({"question": yes_no}, "agent-chooser")
+
+    assert wrapped["pendingCard"]["canonicalQuestion"]["options"] == [
+        {"label": "Yes"},
+        {"label": "No"},
+    ]
+    assert wrapped["endTurn"] is False
+
+
+def test_message_only_stop_outputs_carry_chat_message_and_end_the_turn() -> None:
+    unsupported = snow._with_agent_rules(
+        snow._unsupported_agent_result({"id": "x", "name": "Benefits"}),
+        "agent-chooser",
+    )
+    open_reply = snow._with_agent_rules(
+        {"status": "open", "recorded": False, "message": "Did the test run?"},
+        "record-test",
+    )
+    untested = snow._with_agent_rules(
+        {
+            "kind": "maker-attestation",
+            "result": "untested",
+            "message": "Run the test, then tell me the result.",
+        },
+        "record-test",
+    )
+
+    assert unsupported["chatMessage"] == snow.UNSUPPORTED_AGENT_MESSAGE
+    assert open_reply["chatMessage"] == "Did the test run?"
+    assert untested["chatMessage"] == "Run the test, then tell me the result."
+    for wrapped in (unsupported, open_reply, untested):
+        assert wrapped["endTurn"] is True
+
+
+def test_setup_handoffs_are_not_stops_and_messages_are_not_leaked() -> None:
+    incomplete = snow._setup_incomplete_result({"id": "x", "name": "HR"})
+
+    wrapped = snow._with_agent_rules(incomplete, "agent-chooser")
+
+    assert wrapped.get("endTurn") is not True
+    assert "chatMessage" not in wrapped
+    plain = snow._with_agent_rules(
+        {"status": "ready", "message": "internal note"}, "topics-status"
+    )
+    assert "chatMessage" not in plain
+
+
+def test_explicit_wait_flag_overrides_the_wait_cue_guess() -> None:
+    question_but_continue = {
+        "renderBlock": {"kind": "progress", "text": "Checking next step?"},
+        "waitsForMaker": False,
+        "decision": "x",
+    }
+    stop_without_cue = {
+        "renderBlock": {"kind": "progress", "text": "Details are ready."},
+        "waitsForMaker": True,
+        "decision": "x",
+    }
+
+    assert snow._with_agent_rules(question_but_continue, "resume-handoff")[
+        "endTurn"
+    ] is False
+    assert snow._with_agent_rules(stop_without_cue, "resume-handoff")[
+        "endTurn"
+    ] is True

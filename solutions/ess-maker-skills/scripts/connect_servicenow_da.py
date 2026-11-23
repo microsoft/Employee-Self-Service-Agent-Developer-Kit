@@ -14402,6 +14402,25 @@ WAIT_CUE_PATTERN = re.compile(
 )
 _WAIT_RENDER_KINDS = frozenset({"waiting", "error", "final"})
 _WAIT_STATUS_MARKERS = ("-required", "maker-action", "input-required")
+# Outputs whose only maker-facing text is `message`; they end the turn.
+_MESSAGE_STOP_STATUSES = frozenset(
+    {"unsupported-agent", "portal-url-confirmation"}
+)
+
+
+def _test_reply_message(result: dict[str, Any]) -> str | None:
+    """`message` of a Test-pane result that is a reply to the maker, not a record."""
+    message = result.get("message")
+    if not isinstance(message, str) or not message.strip():
+        return None
+    reply_only = (
+        result.get("status") == "open" and result.get("recorded") is False
+    )
+    untested = (
+        result.get("kind") == "maker-attestation"
+        and result.get("result") == "untested"
+    )
+    return message if reply_only or untested else None
 
 
 def has_wait_cue(text: str) -> bool:
@@ -14417,14 +14436,32 @@ def _is_raw_card(value: dict[str, Any]) -> bool:
     )
 
 
-def _pending_cards(value: Any) -> list[dict[str, Any]]:
-    """Canonical card questions this output asks, in order, without duplicates."""
+def _is_typed_question(value: dict[str, Any]) -> bool:
+    """A free-text question: no options, the maker types the answer in chat."""
+    return (
+        _is_raw_card(value)
+        and value["allowFreeformInput"] is True
+        and not value.get("options")
+    )
+
+
+def _pending_cards(
+    value: Any,
+    *,
+    typed: bool = False,
+) -> list[dict[str, Any]]:
+    """Canonical card questions this output asks, in order, without duplicates.
+
+    Free-text questions are never cards; ``typed=True`` returns only those so
+    they can be sent as plain chat text.
+    """
     found: list[dict[str, Any]] = []
 
     def visit(node: Any) -> None:
         if isinstance(node, dict):
             if _is_raw_card(node):
-                found.append(node)
+                if _is_typed_question(node) == typed:
+                    found.append(node)
                 return
             for key, item in node.items():
                 if (
@@ -17325,15 +17362,21 @@ def _chat_message(result: dict[str, Any]) -> str:
     if isinstance(ordinary, dict):
         add(ordinary.get("text"))
     add(result.get("replyBeforeQuestion"))
-    for card in _pending_cards(
-        {
-            key: item
-            for key, item in result.items()
-            if key not in {"renderBlock", "ordinaryReply"}
-        }
-    ):
+    body = {
+        key: item
+        for key, item in result.items()
+        if key not in {"renderBlock", "ordinaryReply"}
+    }
+    if result.get("status") in _MESSAGE_STOP_STATUSES:
+        add(result.get("message"))
+    elif (command_message := _test_reply_message(result)) is not None:
+        add(command_message)
+    for card in _pending_cards(body):
         if card["question"].strip() != card["header"].strip():
             add(card["question"])
+    for question in _pending_cards(body, typed=True):
+        add(question["header"])
+        add(question["question"])
     return "\n\n".join(parts)
 
 
@@ -17343,6 +17386,22 @@ def _output_waits_for_maker(
 ) -> bool:
     """True when the maker must reply or act outside chat before the flow moves."""
     if result.get("status") == "error" or command in REALM_COMMANDS:
+        return True
+    explicit = result.get("waitsForMaker")
+    if isinstance(explicit, bool):
+        return explicit
+    if (
+        result.get("status") in _MESSAGE_STOP_STATUSES
+        or _test_reply_message(result) is not None
+        or _pending_cards(
+            {
+                key: item
+                for key, item in result.items()
+                if key not in {"renderBlock", "ordinaryReply"}
+            },
+            typed=True,
+        )
+    ):
         return True
     if has_wait_cue(_chat_message(result)):
         return True
