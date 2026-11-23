@@ -13,6 +13,7 @@ import uuid
 
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 
@@ -17765,6 +17766,350 @@ def test_target_change_notice_is_fixed_for_every_change_kind() -> None:
     assert "resume-handoff" in wrapped["nextCommand"]
     assert "pendingCard" not in wrapped
     assert "Do not reuse evidence from the earlier target" in wrapped["afterReply"]
+
+
+_VALIDATION_CONTEXT = {
+    "environment": {
+        "id": "env-1",
+        "display_name": "Contoso Dev",
+        "tenant_id": "22222222-2222-4222-8222-222222222222",
+        "ring": "dev",
+    },
+    "agent": {"id": "agent-1", "display_name": "Employee Self-Service HR"},
+}
+_VALIDATION_CLIENT_ID = "11111111-1111-4111-8111-111111111111"
+
+
+def _validation_state() -> dict[str, Any]:
+    return {
+        "adminSetup": {
+            "phaseHandoffs": {
+                "entra-registration": {
+                    "evidence": {"clientId": _VALIDATION_CLIENT_ID}
+                }
+            },
+            "preflight": {"instanceName": "contoso"},
+        }
+    }
+
+
+def _notice(
+    profile: str,
+    situation: str,
+    scenario: str | None = None,
+    context: dict[str, Any] | None = _VALIDATION_CONTEXT,
+    state: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    with snow.product_profile_context(profile):
+        if context is not None:
+            context = {
+                **context,
+                "agent": {
+                    "id": "agent-1",
+                    "display_name": "Employee Self-Service "
+                    + ("HR" if profile == "hrsd" else "IT"),
+                },
+            }
+        with mock.patch.object(
+            snow, "_load_lifecycle_state", return_value=state or {}
+        ):
+            return snow.validation_notice(
+                context, situation, scenario, **kwargs
+            )
+
+
+def test_validation_notice_context_free_questions_and_exit() -> None:
+    first = _notice("hrsd", "agent-chooser", context=None)
+    second = _notice("itsm", "agent-chooser", "second-agent", context=None)
+    payroll = _notice("hrsd", "agent-chooser", "payroll", context=None)
+    exit_ = _notice("itsm", "knowledge-only-exit", context=None)
+    assert first["renderBlock"]["text"] == (
+        "Which Employee Self-Service HR or IT agent should we connect to "
+        "ServiceNow?"
+    )
+    assert second["renderBlock"]["text"] == (
+        "Which Employee Self-Service HR or IT agent are we adding to the "
+        "ServiceNow setup?"
+    )
+    assert payroll["renderBlock"]["text"] == (
+        "Which ESS agent should we connect to ServiceNow?"
+    )
+    assert "Do not show the Choose agent card" in first["afterReply"]
+    assert exit_["renderBlock"]["text"] == (
+        "We can connect Employee Self-Service HR or IT to ServiceNow, but we "
+        "can't configure the ServiceNow Knowledge connector.\n\n"
+        "Use the [ServiceNow Knowledge connector guidance]"
+        f"({snow._KNOWLEDGE_GUIDANCE_LINK}) for that setup."
+    )
+    for result in (first, second, payroll, exit_):
+        assert result["recordsNothing"] is True
+        wrapped = snow._with_agent_rules(result, "validation-notice")
+        assert wrapped["endTurn"] is True
+        assert "pendingCard" not in wrapped and "nextCommand" not in wrapped
+    assert "no setup starts" in exit_["afterReply"]
+
+
+def test_validation_notice_instance_question_is_first_agent_only() -> None:
+    result = _notice("itsm", "instance-question", "first-agent")
+    assert result["renderBlock"]["text"] == (
+        "Which ServiceNow instance should Employee Self-Service IT use? Send "
+        "its public HTTPS URL, not credentials."
+    )
+    assert "Never ask for or accept credentials" in result["afterReply"]
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice("itsm", "instance-question", "second-agent")
+
+
+@pytest.mark.parametrize(
+    ("scenario", "saved"),
+    [
+        ("first-agent", "saved-configuration confirmation"),
+        ("second-agent", "saved-configuration confirmation for HR"),
+    ],
+)
+def test_validation_notice_sso_conflict_wording(
+    scenario: str, saved: str
+) -> None:
+    result = _notice("hrsd", "sso-conflict", scenario)
+    assert result["renderBlock"]["text"] == (
+        "Send the reported conflict to your Entra and ServiceNow "
+        "administrators. Ask them to agree on a supported setup using the "
+        "compatibility guidance in their messages.\n\n"
+        "We won't change that configuration or troubleshoot the conflict. "
+        "Bring back their non-sensitive compatibility confirmation, "
+        f"{saved}, User Claim, User Field, and any changed registration or "
+        "claim values.\n\n"
+        "We'll recheck the affected setup before continuing. Don't include "
+        "employee identifiers or secrets."
+    )
+    assert "Do not ask a Yes/No question" in result["afterReply"]
+
+
+def test_validation_notice_payroll_conflict_and_claim_contradiction() -> None:
+    conflict = _notice("hrsd", "sso-conflict", "payroll")
+    assert conflict["renderBlock"]["text"].startswith(
+        "Send the reported conflict to your Entra and ServiceNow "
+        "administrators. They need to resolve it manually using the "
+        "coexistence guidance in their messages."
+    )
+    assert "exact saved User Claim and User Field" in (
+        conflict["renderBlock"]["text"]
+    )
+    for profile in ("hrsd", "itsm"):
+        result = _notice(
+            profile,
+            "claim-contradiction",
+            "payroll" if profile == "hrsd" else "first-agent",
+            entra_claim="claim_a",
+            servicenow_claim="claim_b",
+        )
+        assert result["renderBlock"]["text"].startswith(
+            "The administrator replies name different claims: Entra "
+            "confirmed `claim_a`, while ServiceNow reported `claim_b`."
+        )
+        assert result["renderBlock"]["text"].endswith(
+            "The confirmed Client ID and tenant ID stay in place."
+        )
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice(
+            "hrsd",
+            "claim-contradiction",
+            "first-agent",
+            entra_claim="claim_a",
+            servicenow_claim="CLAIM_A",
+        )
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice("hrsd", "claim-contradiction", entra_claim="claim_a")
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice("itsm", "sso-conflict", "payroll")
+
+
+def test_validation_notice_blocked_finish_wording_per_scenario() -> None:
+    first = _notice("hrsd", "blocked-finish", "first-agent")
+    second = _notice("itsm", "blocked-finish", "second-agent")
+    payroll = _notice("hrsd", "blocked-finish", "payroll")
+    assert first["renderBlock"]["text"] == (
+        "**Setup is paused:** we're still waiting for your ServiceNow "
+        "administrator's saved-configuration confirmation, User Claim, and "
+        "User Field for **Employee Self-Service HR in Contoso Dev**. The "
+        "integration remains untested; setup isn't complete.\n\n"
+        "Your progress is saved at that handoff. Bring back their "
+        "non-sensitive reply when it's ready. Don't include employee "
+        "identifiers or secrets."
+    )
+    assert second["renderBlock"]["text"].startswith(
+        "**Setup is paused:** we're still waiting for your ServiceNow "
+        "administrator to confirm the saved configuration, User Claim, and "
+        "User Field for **Employee Self-Service IT in Contoso Dev**. IT "
+        "remains untested; setup isn't complete."
+    )
+    assert payroll["renderBlock"]["text"] == (
+        "**Setup is paused:** we're still waiting for your Entra "
+        "administrator to confirm the completed custom-claim setup and exact "
+        "configured claim name for **Employee Self-Service HR in Contoso "
+        "Dev**. The integration remains untested; setup isn't complete.\n\n"
+        "Your progress is saved at that handoff. Bring back their "
+        "non-sensitive confirmation when it's ready, including the "
+        "appropriate format and populated source attribute for every "
+        "intended employee. Don't include employee identifiers or secrets."
+    )
+    assert "Do not claim the integration works" in first["afterReply"]
+    # The spec defines no wording for the Entra stage of the S1/S2 flows.
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice("hrsd", "blocked-finish", "first-agent", waiting_for="entra-claim")
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice("hrsd", "blocked-finish", "payroll", waiting_for="servicenow")
+
+
+def test_validation_notice_connection_situations() -> None:
+    first = _notice(
+        "hrsd", "connection-disconnected", "first-agent",
+        connection_name="Dev connection",
+    )
+    second = _notice(
+        "itsm", "connection-disconnected", "second-agent",
+        connection_name="Dev connection",
+    )
+    assert first["renderBlock"]["text"].startswith(
+        "**Dev connection is disconnected**, so the agent can't use it for "
+        "this request.\n\nIn Copilot Studio, open **Employee Self-Service HR "
+        "> Settings > Connection Settings > ServiceNow**."
+    )
+    assert first["renderBlock"]["text"].endswith(
+        "The administrator information and portal URL will stay in place."
+    )
+    assert second["renderBlock"]["text"] == (
+        "**Dev connection is disconnected.** This connection is also used by "
+        "HR, and IT can't use it while it's disconnected.\n\n"
+        "In Copilot Studio, open **Employee Self-Service IT > Settings > "
+        "Connection Settings > ServiceNow**. Reconnect the shared "
+        "connection, or create a separate supported connection for IT if "
+        "you don't want to change the shared connection.\n\n"
+        "Return here and tell us which connection you selected."
+    )
+    for bad in (None, "https://example.test", _VALIDATION_CLIENT_ID):
+        with pytest.raises(snow.ServiceNowConnectError):
+            _notice(
+                "hrsd", "connection-disconnected", "first-agent",
+                connection_name=bad,
+            )
+
+
+def test_validation_notice_no_usable_connection_and_resource_uri() -> None:
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice("itsm", "no-usable-connection", "second-agent")
+    state = _validation_state()
+    create = _notice("itsm", "no-usable-connection", "second-agent", state=state)
+    assert create["renderBlock"]["text"] == (
+        "We can't use an existing ServiceNow connection for this IT setup. "
+        "Create a supported connection in Copilot Studio:\n\n"
+        "1. Open **Employee Self-Service IT > Settings > Connection "
+        "Settings > ServiceNow > Connect > Create new connection**.\n"
+        "2. Use:\n"
+        "- **Authentication type:** Microsoft Entra ID User Login\n"
+        f"- **Resource URI:** `{_VALIDATION_CLIENT_ID}`\n"
+        "- **Instance name:** `contoso`\n"
+        "3. Return here and tell us which connection you created.\n\n"
+        "You don't need to repeat the administrator setup solely to create "
+        "this connection."
+    )
+    uri = _notice(
+        "hrsd", "resource-uri-claim-name", "payroll", state=state,
+        claim_name="claim_a",
+    )
+    assert uri["renderBlock"]["text"].startswith(
+        "The connection's **Resource URI** is set to `claim_a`. That field "
+        "needs the Entra app's **Client ID**, not the claim name."
+    )
+    assert f"correct it to `{_VALIDATION_CLIENT_ID}`" in (
+        uri["renderBlock"]["text"]
+    )
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice("hrsd", "no-usable-connection", "first-agent")
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice("hrsd", "resource-uri-claim-name", "first-agent",
+                claim_name="claim_a")
+
+
+def test_validation_notice_topic_link_retry_and_consent() -> None:
+    topic_it = _notice("itsm", "topic-off", "first-agent")
+    topic_pay = _notice("hrsd", "topic-off", "payroll")
+    link_first = _notice("hrsd", "agent-not-linked", "first-agent")
+    link_second = _notice("itsm", "agent-not-linked", "second-agent")
+    link_pay = _notice("hrsd", "agent-not-linked", "payroll")
+    retry = _notice("itsm", "retry-request", "second-agent")
+    consent = _notice("hrsd", "missing-consent", "first-agent")
+    assert topic_it["renderBlock"]["text"] == (
+        "A ServiceNow IT topic needed for this request is off. We'll turn on "
+        "that built-in topic and leave unrelated topics unchanged."
+    )
+    assert topic_pay["renderBlock"]["text"] == (
+        "A required ServiceNow HRSD topic is off, so Employee Self-Service "
+        "HR can't complete that request. We'll enable the affected built-in "
+        "topic and leave unrelated topics unchanged."
+    )
+    assert link_first["renderBlock"]["text"] == (
+        "**Employee Self-Service HR** isn't linked to the selected "
+        "ServiceNow connection. We'll link it and keep the completed "
+        "administrator setup."
+    )
+    assert link_second["renderBlock"]["text"] == (
+        "**Employee Self-Service IT** isn't linked to the selected "
+        "ServiceNow connection. We'll link this agent to it and keep the "
+        "completed administrator setup."
+    )
+    assert link_pay["renderBlock"]["text"] == (
+        "The selected ServiceNow connection isn't linked to **Employee "
+        "Self-Service HR**. We'll link this agent to the selected connection."
+    )
+    assert retry["renderBlock"]["text"] == (
+        "Try the IT request again in the Test pane and tell us whether it "
+        "returns the expected data."
+    )
+    assert consent["renderBlock"]["text"].startswith(
+        "The Entra setup is missing the required consent for the ServiceNow "
+        "connector, which blocks this sign-in setup."
+    )
+    assert "never infer it from a generic failure" in consent["afterReply"]
+    wrapped = snow._with_agent_rules(topic_it, "validation-notice")
+    assert wrapped["endTurn"] is False and "pendingCard" not in wrapped
+    assert "Do not wait for the maker" in wrapped["afterReply"]
+    assert snow._with_agent_rules(retry, "validation-notice")["endTurn"] is True
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice("hrsd", "missing-consent", "payroll")
+
+
+def test_validation_notice_existing_identity_uses_its_own_command() -> None:
+    state = {"existingIdentity": {"kind": "knowledge"}}
+    with pytest.raises(snow.ServiceNowConnectError, match="existing-identity"):
+        _notice("hrsd", "blocked-finish", state=state)
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice("hrsd", "not-a-situation")
+    # S3 reuses the context-free texts.
+    assert _notice("hrsd", "agent-chooser", "existing-identity", None)[
+        "renderBlock"
+    ]["text"].startswith("Which Employee Self-Service HR or IT agent")
+
+
+def test_validation_notice_cli_context_free(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    previous = snow.ACTIVE_PROFILE
+    try:
+        assert snow.main(
+            [
+                "--provider", "servicenow-da-itsm", "validation-notice",
+                "--situation", "knowledge-only-exit",
+            ]
+        ) == 0
+        out = json.loads(capsys.readouterr().out)
+    finally:
+        snow.ACTIVE_PROFILE = previous
+    assert out["endTurn"] is True and out["recordsNothing"] is True
+    assert out["chatMessage"].startswith(
+        "We can connect Employee Self-Service HR or IT to ServiceNow"
+    )
 
 
 @pytest.mark.parametrize(

@@ -13153,6 +13153,31 @@ def build_parser() -> argparse.ArgumentParser:
     service_areas_parser.add_argument(
         "--realm", choices=("dev", "test", "prod"), default="dev"
     )
+    validation_parser = subparsers.add_parser(
+        "validation-notice",
+        help=(
+            "Return the fixed maker-facing message for one validation "
+            "situation; records nothing."
+        ),
+    )
+    validation_parser.add_argument(
+        "--situation", choices=_VALIDATION_SITUATIONS, required=True
+    )
+    validation_parser.add_argument(
+        "--scenario",
+        choices=_VALIDATION_SCENARIOS,
+        help=(
+            "Defaults to existing-identity, second-agent, or first-agent "
+            "from the recorded state. Pass payroll explicitly (HR only)."
+        ),
+    )
+    validation_parser.add_argument("--connection-name")
+    validation_parser.add_argument(
+        "--waiting-for", choices=_VALIDATION_WAITING_FOR
+    )
+    validation_parser.add_argument("--entra-claim")
+    validation_parser.add_argument("--servicenow-claim")
+    validation_parser.add_argument("--claim-name")
 
     inspect_parser = subparsers.add_parser(
         "inspect",
@@ -16063,6 +16088,461 @@ def claim_setup_confirmation_required(claim_name: str) -> dict[str, Any]:
     }
 
 
+_VALIDATION_SCENARIOS = (
+    "first-agent",
+    "second-agent",
+    "payroll",
+    "existing-identity",
+)
+_VALIDATION_SITUATIONS = (
+    "agent-chooser",
+    "instance-question",
+    "knowledge-only-exit",
+    "sso-conflict",
+    "claim-contradiction",
+    "blocked-finish",
+    "connection-disconnected",
+    "no-usable-connection",
+    "resource-uri-claim-name",
+    "topic-off",
+    "agent-not-linked",
+    "retry-request",
+    "missing-consent",
+)
+_VALIDATION_CONTEXT_FREE = frozenset({"agent-chooser", "knowledge-only-exit"})
+_VALIDATION_WAITING_FOR = ("servicenow", "entra-claim")
+
+_VALIDATION_AFTER_PLAIN_QUESTION = (
+    "End your turn after sending the message; this is a plain chat "
+    "question, not a card."
+)
+_VALIDATION_AFTER_CHOOSER = (
+    f"{_VALIDATION_AFTER_PLAIN_QUESTION} Match the maker's reply to exactly "
+    "one prepared agent and run agent-chooser --selection-key "
+    '"prepared:{AGENT_ID}" (or --selection-key "another-agent" --agent-link '
+    '"{LINK}" when they paste a Copilot Studio link). When the reply names '
+    "no agent or several, ask this question again. Do not show the Choose "
+    "agent card."
+)
+_VALIDATION_AFTER_INSTANCE = (
+    f"{_VALIDATION_AFTER_PLAIN_QUESTION} When the maker replies with the "
+    "public HTTPS URL, continue the lifecycle's instance confirmation with "
+    "resume-handoff. Never ask for or accept credentials; if the reply "
+    "contains any, do not repeat or record them and ask for the URL only."
+)
+_VALIDATION_AFTER_EXIT = (
+    "End your turn after sending the message. Nothing is recorded and no "
+    "setup starts; run no other ServiceNow Connect command unless the "
+    "maker later asks to connect Employee Self-Service HR or IT to "
+    "ServiceNow."
+)
+_VALIDATION_AFTER_ADMINS = (
+    "When the maker returns, any message means they want to continue. Do "
+    "not ask a Yes/No question. Record only the administrators' "
+    "non-sensitive reply with the existing record-identity-direct commands "
+    "(never secrets or employee identifiers). Do not change an existing "
+    "OIDC configuration serving SSO or the Microsoft Graph connector; the "
+    "administrators resolve any conflict manually. Recheck the affected "
+    "setup with resume-handoff before continuing."
+)
+_VALIDATION_AFTER_BLOCKED_FINISH = (
+    "Do not claim the integration works or that setup is complete. When "
+    "the maker returns, record only the administrator's non-sensitive "
+    "reply with the existing record-identity-direct commands and continue "
+    "with resume-handoff, which rechecks permission and the affected "
+    "setup and resumes at the actual waiting point. If another blocker "
+    "remains, do not use this message: name that blocker, its owner, and "
+    "the exact outstanding action instead."
+)
+_VALIDATION_AFTER_TOPIC = (
+    "Do not wait for the maker. Turn on only the affected built-in topic "
+    "through the topics phase (set-topic-state); leave unrelated topics "
+    "unchanged. Then send this command's retry-request message instead of "
+    "running nextCommand."
+)
+_VALIDATION_AFTER_LINK = (
+    "Do not wait for the maker. Link this agent to the selected connection "
+    "with the existing connection commands and keep the completed "
+    "administrator setup. Then send this command's retry-request message "
+    "instead of running nextCommand."
+)
+_VALIDATION_AFTER_RETRY = (
+    f"{_VALIDATION_AFTER_PLAIN_QUESTION} When the maker reports the "
+    "result, record it with record-test."
+)
+_VALIDATION_AFTER_CONSENT = (
+    "Use this message only when a supported check identified the missing "
+    "consent; never infer it from a generic failure. "
+    f"{_VALIDATION_AFTER_ADMINS}"
+)
+
+
+def validation_notice(
+    context: dict[str, Any] | None,
+    situation: str,
+    scenario: str | None = None,
+    *,
+    connection_name: str | None = None,
+    waiting_for: str | None = None,
+    entra_claim: str | None = None,
+    servicenow_claim: str | None = None,
+    claim_name: str | None = None,
+) -> dict[str, Any]:
+    """Fixed maker-facing notice for one validation situation.
+
+    The wording follows the spec scenario (first agent, second agent that
+    reuses shared sign-in setup, or the payroll custom-claim flow). It
+    records nothing and never infers the situation: the caller names it
+    only after the maker's reply or a supported check shows it. The S3
+    existing-identity wording stays in existing-identity-handoff.
+    """
+    if situation not in _VALIDATION_SITUATIONS:
+        raise ServiceNowConnectError("Unsupported validation situation.")
+    if scenario is not None and scenario not in _VALIDATION_SCENARIOS:
+        raise ServiceNowConnectError("Unsupported validation scenario.")
+    state: dict[str, Any] | None = None
+    if context is not None:
+        state = _load_lifecycle_state(context)
+        if scenario is None:
+            if _existing_identity_kind(state):
+                scenario = "existing-identity"
+            elif _other_agent_already_connected(context, state):
+                scenario = "second-agent"
+    scenario = scenario or "first-agent"
+    if situation not in _VALIDATION_CONTEXT_FREE and context is None:
+        raise ServiceNowConnectError(
+            "This validation situation needs the selected agent."
+        )
+    if scenario == "payroll" and ACTIVE_PROFILE.key != "hrsd":
+        raise ServiceNowConnectError(
+            "The payroll scenario applies only to Employee Self-Service HR."
+        )
+    if scenario == "existing-identity" and situation not in (
+        _VALIDATION_CONTEXT_FREE
+    ):
+        raise ServiceNowConnectError(
+            "Use existing-identity-handoff for this existing sign-in "
+            "setup situation."
+        )
+
+    agent = (
+        _display_agent_name(context) if context is not None
+        else _spec_agent_name()
+    )
+    audience = _product_audience()
+    other = "IT" if audience == "HR" else "HR"
+    environment = (
+        _recorded_environment_name(context) if context is not None else None
+    )
+    agent_in_env = (
+        f"**{agent} in {environment}**" if environment else f"**{agent}**"
+    )
+    waiting, info = "waiting", "info"
+    kind = waiting
+    after_reply = _VALIDATION_AFTER_ADMINS
+
+    def unsupported() -> ServiceNowConnectError:
+        return ServiceNowConnectError(
+            f"The spec defines no {situation} wording for the {scenario} "
+            "scenario; do not write one."
+        )
+
+    if situation == "agent-chooser":
+        question = {
+            "second-agent": "Which Employee Self-Service HR or IT agent are "
+            "we adding to the ServiceNow setup?",
+            "payroll": "Which ESS agent should we connect to ServiceNow?",
+        }.get(
+            scenario,
+            "Which Employee Self-Service HR or IT agent should we connect "
+            "to ServiceNow?",
+        )
+        text, after_reply = question, _VALIDATION_AFTER_CHOOSER
+    elif situation == "instance-question":
+        if scenario != "first-agent":
+            raise unsupported()
+        text = (
+            f"Which ServiceNow instance should {agent} use? Send its public "
+            "HTTPS URL, not credentials."
+        )
+        after_reply = _VALIDATION_AFTER_INSTANCE
+    elif situation == "knowledge-only-exit":
+        text = (
+            "We can connect Employee Self-Service HR or IT to ServiceNow, "
+            "but we can't configure the ServiceNow Knowledge connector.\n\n"
+            "Use the [ServiceNow Knowledge connector guidance]"
+            f"({_KNOWLEDGE_GUIDANCE_LINK}) for that setup."
+        )
+        kind, after_reply = waiting, _VALIDATION_AFTER_EXIT
+    elif situation == "sso-conflict":
+        if scenario == "payroll":
+            text = "\n\n".join(
+                [
+                    "Send the reported conflict to your Entra and "
+                    "ServiceNow administrators. They need to resolve it "
+                    "manually using the coexistence guidance in their "
+                    "messages.",
+                    "We won't change the existing configuration or "
+                    "diagnose that conflict. Bring back their "
+                    "non-sensitive confirmation of a supported setup, "
+                    "completed claim setup, exact saved User Claim and "
+                    "User Field, and any changed registration or claim "
+                    "values.",
+                    "We'll recheck the affected setup before continuing. "
+                    "Don't include employee identifiers or secrets.",
+                ]
+            )
+        else:
+            saved = (
+                f"saved-configuration confirmation for {audience}"
+                if scenario == "second-agent"
+                else "saved-configuration confirmation"
+            )
+            text = "\n\n".join(
+                [
+                    "Send the reported conflict to your Entra and "
+                    "ServiceNow administrators. Ask them to agree on a "
+                    "supported setup using the compatibility guidance in "
+                    "their messages.",
+                    "We won't change that configuration or troubleshoot "
+                    "the conflict. Bring back their non-sensitive "
+                    f"compatibility confirmation, {saved}, User Claim, "
+                    "User Field, and any changed registration or claim "
+                    "values.",
+                    "We'll recheck the affected setup before continuing. "
+                    "Don't include employee identifiers or secrets.",
+                ]
+            )
+    elif situation == "claim-contradiction":
+        entra = _safe_identity_name(entra_claim, "entra_claim")
+        servicenow = _safe_identity_name(servicenow_claim, "servicenow_claim")
+        if entra.casefold() == servicenow.casefold():
+            raise ServiceNowConnectError(
+                "The reported claims match; there is no contradiction."
+            )
+        text = "\n\n".join(
+            [
+                "The administrator replies name different claims: Entra "
+                f"confirmed `{entra}`, while ServiceNow reported "
+                f"`{servicenow}`.",
+                "Send both replies to the administrators and ask them to "
+                "agree on a supported claim and matching ServiceNow field "
+                "that accounts for any existing uses. Bring back their "
+                "non-sensitive confirmation of the completed claim setup, "
+                "saved mapping, and any changed registration or claim "
+                "values.",
+                "We'll recheck the affected setup before continuing. "
+                "Don't include employee identifiers or secrets.",
+                "The confirmed Client ID and tenant ID stay in place.",
+            ]
+        )
+    elif situation == "blocked-finish":
+        stage = waiting_for or (
+            "entra-claim" if scenario == "payroll" else "servicenow"
+        )
+        if stage not in _VALIDATION_WAITING_FOR:
+            raise ServiceNowConnectError("Unsupported --waiting-for value.")
+        if stage == "entra-claim" and scenario == "payroll":
+            headline = (
+                "**Setup is paused:** we're still waiting for your Entra "
+                "administrator to confirm the completed custom-claim setup "
+                f"and exact configured claim name for {agent_in_env}. The "
+                "integration remains untested; setup isn't complete."
+            )
+            bring_back = (
+                "Bring back their non-sensitive confirmation when it's "
+                "ready, including the appropriate format and populated "
+                "source attribute for every intended employee."
+            )
+        elif stage == "servicenow" and scenario == "first-agent":
+            headline = (
+                "**Setup is paused:** we're still waiting for your "
+                "ServiceNow administrator's saved-configuration "
+                f"confirmation, User Claim, and User Field for {agent_in_env}."
+                " The integration remains untested; setup isn't complete."
+            )
+            bring_back = (
+                "Bring back their non-sensitive reply when it's ready."
+            )
+        elif stage == "servicenow" and scenario == "second-agent":
+            headline = (
+                "**Setup is paused:** we're still waiting for your "
+                "ServiceNow administrator to confirm the saved "
+                f"configuration, User Claim, and User Field for {agent_in_env}."
+                f" {audience} remains untested; setup isn't complete."
+            )
+            bring_back = (
+                "Bring back their non-sensitive reply when it's ready."
+            )
+        else:
+            raise unsupported()
+        text = (
+            f"{headline}\n\nYour progress is saved at that handoff. "
+            f"{bring_back} Don't include employee identifiers or secrets."
+        )
+        after_reply = _VALIDATION_AFTER_BLOCKED_FINISH
+    elif situation == "connection-disconnected":
+        name = (connection_name or "").strip()
+        if not name:
+            raise ServiceNowConnectError(
+                "Pass --connection-name with the friendly connection name "
+                "the maker used."
+            )
+        if _FRIENDLY_NAME_BLOCKED_RE.search(name):
+            raise ServiceNowConnectError(
+                "Pass the friendly connection name the maker used, not an "
+                "ID or a URL."
+            )
+        if scenario == "first-agent":
+            text = "\n\n".join(
+                [
+                    f"**{name} is disconnected**, so the agent can't use it "
+                    "for this request.",
+                    f"In Copilot Studio, open **{agent} > Settings > "
+                    "Connection Settings > ServiceNow**.",
+                    "Reconnect it only if you intend to act on that "
+                    "connection, including any shared uses. Otherwise, "
+                    "select another supported ESS connection or create a "
+                    "separate one using step 7's connection instructions.",
+                    "Return here and tell us which connection you used. "
+                    "We'll check this agent's connection and link before "
+                    "you repeat the request. The administrator information "
+                    "and portal URL will stay in place.",
+                ]
+            )
+        elif scenario == "second-agent":
+            text = "\n\n".join(
+                [
+                    f"**{name} is disconnected.** This connection is also "
+                    f"used by {other}, and {audience} can't use it while "
+                    "it's disconnected.",
+                    f"In Copilot Studio, open **{agent} > Settings > "
+                    "Connection Settings > ServiceNow**. Reconnect the "
+                    "shared connection, or create a separate supported "
+                    f"connection for {audience} if you don't want to "
+                    "change the shared connection.",
+                    "Return here and tell us which connection you "
+                    "selected.",
+                ]
+            )
+        else:
+            raise unsupported()
+        after_reply = _EXISTING_AFTER_REPLY_CONNECTION
+    elif situation == "no-usable-connection":
+        if scenario != "second-agent":
+            raise unsupported()
+        client_id = _known_entra_client_id(state or {})
+        instance = _state_instance_name(state)
+        if not client_id or not instance:
+            raise ServiceNowConnectError(
+                "The confirmed Client ID and instance name are not recorded "
+                "yet; do not show connection values that are not confirmed."
+            )
+        text = (
+            f"We can't use an existing ServiceNow connection for this "
+            f"{audience} setup. Create a supported connection in Copilot "
+            "Studio:\n\n"
+            f"1. Open **{agent} > Settings > Connection Settings > "
+            "ServiceNow > Connect > Create new connection**.\n"
+            "2. Use:\n"
+            "- **Authentication type:** Microsoft Entra ID User Login\n"
+            f"- **Resource URI:** `{client_id}`\n"
+            f"- **Instance name:** `{instance}`\n"
+            "3. Return here and tell us which connection you created.\n\n"
+            "You don't need to repeat the administrator setup solely to "
+            "create this connection."
+        )
+        after_reply = _EXISTING_AFTER_REPLY_CONNECTION
+    elif situation == "resource-uri-claim-name":
+        if scenario != "payroll":
+            raise unsupported()
+        claim = _safe_identity_name(claim_name, "claim_name")
+        client_id = _known_entra_client_id(state or {})
+        if not client_id:
+            raise ServiceNowConnectError(
+                "The confirmed Client ID is not recorded yet; do not show a "
+                "Resource URI value that is not confirmed."
+            )
+        text = "\n\n".join(
+            [
+                f"The connection's **Resource URI** is set to `{claim}`. "
+                "That field needs the Entra app's **Client ID**, not the "
+                "claim name.",
+                "If this connection is only used by this HR agent, correct "
+                f"it to `{client_id}` in the supported connection setup. If "
+                "it is shared, select or create a separate supported ESS "
+                "connection for HR rather than changing the shared "
+                "connection.",
+                "Return here and tell us which connection you used. We'll "
+                "check this agent's connection and link before continuing. "
+                "The administrator-confirmed payroll mapping stays in place.",
+            ]
+        )
+        after_reply = _EXISTING_AFTER_REPLY_CONNECTION
+    elif situation == "topic-off":
+        if scenario == "payroll":
+            text = (
+                "A required ServiceNow HRSD topic is off, so "
+                f"{agent} can't complete that request. We'll enable the "
+                "affected built-in topic and leave unrelated topics "
+                "unchanged."
+            )
+        else:
+            text = (
+                f"A ServiceNow {audience} topic needed for this request is "
+                "off. We'll turn on that built-in topic and leave unrelated "
+                "topics unchanged."
+            )
+        kind, after_reply = info, _VALIDATION_AFTER_TOPIC
+    elif situation == "agent-not-linked":
+        if scenario == "payroll":
+            text = (
+                "The selected ServiceNow connection isn't linked to "
+                f"**{agent}**. We'll link this agent to the selected "
+                "connection."
+            )
+        else:
+            link = "it" if scenario == "first-agent" else "this agent to it"
+            text = (
+                f"**{agent}** isn't linked to the selected ServiceNow "
+                f"connection. We'll link {link} and keep the completed "
+                "administrator setup."
+            )
+        kind, after_reply = info, _VALIDATION_AFTER_LINK
+    elif situation == "retry-request":
+        text = (
+            f"Try the {audience} request again in the Test pane and tell us "
+            "whether it returns the expected data."
+        )
+        after_reply = _VALIDATION_AFTER_RETRY
+    else:
+        if scenario not in {"first-agent", "second-agent"}:
+            raise unsupported()
+        text = "\n\n".join(
+            [
+                "The Entra setup is missing the required consent for the "
+                "ServiceNow connector, which blocks this sign-in setup.",
+                "Ask your Entra administrator to review the connector's "
+                "consent requirements in their instructions with your "
+                "ServiceNow administrator, accounting for any shared setup "
+                "before a repair.",
+                "Bring back their non-sensitive confirmation of the "
+                "completed supported setup and any changed values. We'll "
+                "recheck the affected setup before continuing; if a test is "
+                "needed, repeat the request in this agent's Test pane.",
+            ]
+        )
+        after_reply = _VALIDATION_AFTER_CONSENT
+    return {
+        "status": "validation-notice",
+        "decision": f"validation-{situation}",
+        "scenario": scenario,
+        "recordsNothing": True,
+        "renderBlock": {"kind": kind, "text": text},
+        "afterReply": after_reply,
+    }
+
+
 def _chat_message(result: dict[str, Any]) -> str:
     """Build the one chat message the agent relays for this output.
 
@@ -16318,6 +16798,13 @@ def main(argv: list[str] | None = None) -> int:
             result = metadata_url_handoff(args.metadata_url)
         elif args.command == "empty-service-areas-handoff":
             result = empty_service_areas_handoff(args.realm)
+        elif (
+            args.command == "validation-notice"
+            and args.situation in _VALIDATION_CONTEXT_FREE
+        ):
+            result = validation_notice(
+                None, args.situation, args.scenario
+            )
         else:
             context_kwargs: dict[str, Any] = {}
             if args.agent_id is not None or args.agent_slug is not None:
@@ -16562,9 +17049,24 @@ def main(argv: list[str] | None = None) -> int:
                 args.reported_claim,
                 args.reported_user_field,
             )
+        elif (
+            args.command == "validation-notice"
+            and args.situation not in _VALIDATION_CONTEXT_FREE
+        ):
+            result = validation_notice(
+                context,
+                args.situation,
+                args.scenario,
+                connection_name=args.connection_name,
+                waiting_for=args.waiting_for,
+                entra_claim=args.entra_claim,
+                servicenow_claim=args.servicenow_claim,
+                claim_name=args.claim_name,
+            )
         elif args.command in REALM_COMMANDS:
             result = run_realm_command(context, args)
         elif args.command not in {
+            "validation-notice",
             "adapt-question",
             "list-agents",
             "agent-chooser",
