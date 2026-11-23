@@ -17716,7 +17716,7 @@ def test_claim_confirmation_handoff_is_fixed_and_only_custom_claims_get_part_fou
         "Then ask your ServiceNow administrator to confirm that the supported "
         "configuration is saved, with the matching User Claim and User Field. "
         "Don't send employee identifiers or secrets.\n\n"
-        "We'll keep the Client ID and tenant ID already supplied."
+        "We'll keep the Client ID already supplied."
     )
     for output in (full, partial, plain):
         assert output["endTurn"] is True
@@ -17731,7 +17731,7 @@ def test_claim_confirmation_handoff_is_fixed_and_only_custom_claims_get_part_fou
     assert "complete the custom-claim work in their message" in partial["chatMessage"]
     assert "You don't need to resend the claim name" not in partial["chatMessage"]
     assert "Part 4" not in plain["chatMessage"]
-    assert "tenant ID already supplied" in plain["chatMessage"]
+    assert "tenant ID" not in plain["chatMessage"]
 
 
 _HR = ["--provider", "servicenow-da-hrsd"]
@@ -18126,7 +18126,7 @@ def test_validation_notice_payroll_conflict_and_claim_contradiction() -> None:
             "confirmed `claim_a`, while ServiceNow reported `claim_b`."
         )
         assert result["renderBlock"]["text"].endswith(
-            "The confirmed Client ID and tenant ID stay in place."
+            "The confirmed Client ID stays in place."
         )
     with pytest.raises(snow.ServiceNowConnectError):
         _notice(
@@ -18849,7 +18849,7 @@ def test_second_agent_reuse_handoffs_follow_the_s2_review_pattern(
 
     assert oidc.startswith(
         f"The Entra administrator has confirmed that {audience} can use the "
-        "existing registration, including its Client ID, tenant ID, and "
+        "existing registration, including its Client ID and "
         "standard email claim.\n\n"
         "Next, send this message to your ServiceNow administrator to "
         f"confirm the saved sign-in setup and employee matching for "
@@ -19000,7 +19000,7 @@ def test_existing_identity_mode_switches_both_admin_packets_to_compatibility_rev
     assert entra["runtimeInstructionSha256"] == before["runtimeInstructionSha256"]
     assert oidc_text.startswith(
         "The Entra administrator has confirmed the registration for ESS, "
-        "including its Client ID, tenant ID, and custom claim `employee_id`."
+        "including its Client ID and custom claim `employee_id`."
     )
     assert "compatibility" in oidc_text
     assert "Setup reference" in oidc_text
@@ -19157,7 +19157,7 @@ def test_custom_claim_planned_but_not_configured_asks_for_the_completed_work(
         "Ask your Entra administrator to complete the custom-claim work in "
         "their message and return non-sensitive confirmation that the setup "
         "is complete, plus the exact configured claim name. We'll keep the "
-        "Client ID and tenant ID while we wait. Don't include employee "
+        "Client ID while we wait. Don't include employee "
         "identifiers or secrets."
     )
     assert output["endTurn"] is True
@@ -19231,7 +19231,7 @@ def test_second_agent_custom_claim_confirmation_keeps_the_existing_values(
     audience = "HR" if provider.endswith("hrsd") else "IT"
     message = output["chatMessage"]
     assert f"can serve {audience}" in message
-    assert "The Client ID and tenant ID already supplied stay in place." in message
+    assert "The Client ID already supplied stays in place." in message
     assert output["recordsNothing"] is True
 
 
@@ -19239,7 +19239,6 @@ _EXISTING_SITUATIONS_WITH_TEXT = {
     "setup-incomplete": "waiting",
     "setup-complete": None,
     "entra-incomplete": "waiting",
-    "client-id-only": "waiting",
     "two-client-ids": "waiting",
     "servicenow-incomplete": "waiting",
     "servicenow-fields-unnamed": "waiting",
@@ -19437,3 +19436,22 @@ def test_existing_identity_command_requires_context_and_valid_choices(
             snow.existing_identity_handoff(context, "unknown")
         with pytest.raises(snow.ServiceNowConnectError):
             snow.existing_identity_handoff(context, "knowledge", "unknown")
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_admin_packets_never_ask_for_a_directory_tenant_id(
+    profile: str,
+) -> None:
+    with snow.product_profile_context(profile):
+        entra = snow._first_agent_entra_packet("dev123")
+        service_now = snow._first_agent_servicenow_packet(
+            instance_name="dev123",
+            client_id=APP_CLIENT_ID,
+            tenant_id=TENANT_ID,
+            claim_name="employee_id",
+        )
+    for text in (entra, service_now):
+        assert "Directory (tenant) ID" not in text
+        assert "send back the tenant" not in text.lower()
+    assert "Application (client) ID" in entra
+    assert f"**Tenant ID:** `{TENANT_ID}`" in service_now

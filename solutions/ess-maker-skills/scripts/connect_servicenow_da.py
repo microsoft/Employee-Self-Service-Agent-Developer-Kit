@@ -14479,7 +14479,7 @@ def claim_confirmation_handoff(
                     "the app sends for ServiceNow before we continue.\n\n"
                     "Ask them to reply with the exact claim name. Don't send "
                     "employee identifiers or secrets.\n\n"
-                    "We'll keep the Client ID and tenant ID already supplied."
+                    "We'll keep the Client ID already supplied."
                 ),
             },
             "afterReply": _CLAIM_CONFIRMATION_AFTER_REPLY,
@@ -14508,9 +14508,9 @@ def claim_confirmation_handoff(
             "secrets."
         )
     paragraphs.append(
-        "The Client ID and tenant ID already supplied stay in place."
+        "The Client ID already supplied stays in place."
         if second_agent
-        else "We'll keep the Client ID and tenant ID already supplied."
+        else "We'll keep the Client ID already supplied."
     )
     return {
         "status": "claim-confirmation-required",
@@ -14813,7 +14813,6 @@ _EXISTING_IDENTITY_SITUATIONS = (
     "setup-incomplete",
     "setup-complete",
     "entra-incomplete",
-    "client-id-only",
     "two-client-ids",
     "servicenow-incomplete",
     "servicenow-fields-unnamed",
@@ -14969,13 +14968,13 @@ def _existing_identity_lead_in(
     if claim_name and claim_name.casefold() not in {"email", "upn"}:
         confirmed = (
             "The Entra administrator has confirmed the registration for "
-            "ESS, including its Client ID, tenant ID, and custom claim "
+            "ESS, including its Client ID and custom claim "
             f"`{claim_name}`."
         )
     else:
         confirmed = (
             "The Entra administrator has confirmed the registration for "
-            "ESS, including its Client ID, tenant ID, and standard "
+            "ESS, including its Client ID and standard "
             f"{(claim_name or 'email').casefold()} claim."
         )
     return (
@@ -15055,7 +15054,7 @@ def _existing_entra_packet(
         f"ServiceNow]({_COEXISTENCE_LINK}).",
         "**Please send back:** confirmation that the registration supports "
         "this ESS setup alongside the existing integration, the "
-        "Application (client) ID, Directory (tenant) ID, and custom claim "
+        "Application (client) ID and custom claim "
         "name if applicable. State whether the configuration was reused or "
         "newly created.",
         "**If compatibility is unresolved:** report what remains "
@@ -15075,8 +15074,7 @@ def _existing_entra_packet(
         "sign-in**. Keep the default account type and leave **Redirect "
         "URI** empty.\n"
         "4. Select **Register**.\n"
-        "5. On **Overview**, copy the **Application (client) ID** and "
-        "**Directory (tenant) ID**.",
+        "5. On **Overview**, copy the **Application (client) ID**.",
         "**Part 2: Add user claims**\n\n"
         "1. Select **Token configuration > Add optional claim**.\n"
         "2. Select token type **Access**, then select **aud**, **email**, "
@@ -15406,7 +15404,7 @@ def _second_agent_servicenow_lead_in(
     other, audience = _second_agent_names(reuse)
     return (
         f"The Entra administrator has confirmed that {audience} can use the "
-        "existing registration, including its Client ID, tenant ID, and "
+        "existing registration, including its Client ID and "
         f"{_second_agent_claim_label(claim_name)}.\n\n"
         "Next, send this message to your ServiceNow administrator to "
         f"confirm the saved sign-in setup and employee matching for "
@@ -15472,7 +15470,7 @@ def _second_agent_entra_packet(
         "ServiceNow connector described in the setup instructions below. "
         "Confirm which requirements the existing registration already "
         "satisfies.\n"
-        "3. Confirm the Client ID, tenant ID, and custom claim name if "
+        "3. Confirm the Client ID and custom claim name if "
         f"applicable for {audience}. If the existing setup meets the "
         "requirements, reuse it without repeating completed steps or "
         "creating another registration.",
@@ -15483,8 +15481,8 @@ def _second_agent_entra_packet(
         "Review [coexistence with the Microsoft Graph connector for "
         f"ServiceNow]({_COEXISTENCE_LINK}).",
         "**Please send back:** confirmation whether the registration can "
-        f"serve {audience}, the Application (client) ID, Directory "
-        "(tenant) ID, and custom claim name if applicable. State whether "
+        f"serve {audience}, the Application (client) ID, and custom "
+        "claim name if applicable. State whether "
         "the configuration was reused or newly created. If reuse is "
         "unresolved, tell us what remains to be agreed.",
         "**Do not send passwords, client secrets, tokens, or certificate "
@@ -15701,18 +15699,10 @@ def _existing_identity_message(
     if situation == "entra-incomplete":
         return (
             "Ask your Entra administrator to confirm which registration "
-            "supports ESS, including its **Client ID**, **tenant ID**, and "
+            "supports ESS, including its **Client ID** and "
             "any **custom claim name**.\n\n"
             "Paste their reply here without secrets, or send the confirmed "
             "values individually.",
-            waiting,
-            _EXISTING_AFTER_REPLY_VALUES,
-        )
-    if situation == "client-id-only":
-        return (
-            "We have the Client ID. Send the **tenant ID** your "
-            "administrator confirmed so we can prepare the ServiceNow "
-            "handoff. You don't need to resend the Client ID.",
             waiting,
             _EXISTING_AFTER_REPLY_VALUES,
         )
@@ -15817,7 +15807,7 @@ def _existing_identity_message(
             "supported configuration is saved and supports ESS, with the "
             "matching User Claim and User Field. Don't send employee "
             "identifiers or secrets.\n\n"
-            "The confirmed Client ID and tenant ID stay in place.",
+            "The confirmed Client ID stays in place.",
             waiting,
             _EXISTING_AFTER_REPLY_CONTINUE,
         )
@@ -15988,7 +15978,7 @@ def _custom_identifier_lead_in(
             "confirm the sign-in setup and coordinate employee matching with "
             "your ServiceNow administrator.\n\n"
             "Bring back their setup confirmation, the **Client ID**, "
-            "**tenant ID**, and exact configured **custom claim name**, if "
+            "and exact configured **custom claim name**, if "
             "needed. Paste their non-sensitive reply or send those items "
             "individually.\n\n"
             "You don't need to choose the identifier or send anyone's "
@@ -15996,7 +15986,7 @@ def _custom_identifier_lead_in(
         )
     claim = f"`{claim_name}`" if claim_name else "custom"
     return (
-        f"We have the Client ID, tenant ID, and administrator-confirmed "
+        f"We have the Client ID and administrator-confirmed "
         f"claim name {claim}.\n\n"
         "Your administrators have confirmed that ServiceNow identifies "
         "employees by payroll ID. Next, your ServiceNow administrator will "
@@ -16023,8 +16013,8 @@ def _custom_identifier_claim_planned_reply() -> dict[str, Any]:
                 "Ask your Entra administrator to complete the custom-claim "
                 "work in their message and return non-sensitive "
                 "confirmation that the setup is complete, plus the exact "
-                "configured claim name. We'll keep the Client ID and tenant "
-                "ID while we wait. Don't include employee identifiers or "
+                "configured claim name. We'll keep the Client ID "
+                "while we wait. Don't include employee identifiers or "
                 "secrets."
             ),
         },
@@ -16040,8 +16030,7 @@ _CUSTOM_ENTRA_SETUP_PARTS = (
     "3. Enter a purpose-specific name, such as **ESS ServiceNow sign-in**. "
     "Keep the default account type and leave **Redirect URI** empty.\n"
     "4. Select **Register**.\n"
-    "5. On **Overview**, copy the **Application (client) ID** and "
-    "**Directory (tenant) ID**.",
+    "5. On **Overview**, copy the **Application (client) ID**.",
     "**Part 2: Add user claims**\n\n"
     "1. Select **Token configuration > Add optional claim**.\n"
     "2. Select token type **Access**, then select **aud**, **email**, and "
@@ -16102,7 +16091,7 @@ def _custom_identifier_entra_packet(instance_name: str) -> str:
         "administrator-led manual resolution.",
         "**Please send back:** confirmation that the registration is "
         f"configured and supports this ESS {audience} setup, the "
-        "Application (client) ID, and Directory (tenant) ID. If a custom "
+        "and Application (client) ID. If a custom "
         "claim is required, include its exact configured name and "
         "confirmation that its setup is complete, including the "
         "appropriate format and populated source attribute for every "
@@ -16293,8 +16282,8 @@ def _first_agent_entra_packet(instance_name: str) -> str:
         "4. If Entra returns an error after adding the claim, follow the "
         "guidance for `acceptMappedClaims` on single-tenant apps or a "
         "custom signing key.",
-        "**Please send back:** the Application (client) ID, Directory "
-        "(tenant) ID, and the custom claim name if Part 4 applies. **Do "
+        "**Please send back:** the Application (client) ID and the custom "
+        "claim name if Part 4 applies. **Do "
         "not send passwords, client secrets, tokens, or certificate "
         "material.**",
         f"References: [ESS ServiceNow integration]({_ESS_INTEGRATION_LINK}) "
@@ -17099,7 +17088,7 @@ def validation_notice(
                 "values.",
                 "We'll recheck the affected setup before continuing. "
                 "Don't include employee identifiers or secrets.",
-                "The confirmed Client ID and tenant ID stay in place.",
+                "The confirmed Client ID stays in place.",
             ]
         )
     elif situation == "blocked-finish":

@@ -228,9 +228,7 @@ def test_servicenow_connect_does_not_ask_the_maker_for_a_tenant_id() -> None:
     messages = entry.split("## Clarification and recovery Messages", 1)[
         1
     ].split("## ServiceNow rules", 1)[0]
-    assert "tenant ID" not in " ".join(messages.split()).replace(
-        "the Client ID and tenant ID already supplied", ""
-    )
+    assert "tenant ID" not in " ".join(messages.split())
     realms = (connect / "servicenow" / "realms.md").read_text(
         encoding="utf-8"
     )
@@ -512,7 +510,7 @@ def test_servicenow_connect_entry_has_flow_clarification_messages() -> None:
         "Then ask your ServiceNow administrator to confirm that the supported "
         "configuration is saved, with the matching User Claim and User Field. "
         "Don't send employee identifiers or secrets.",
-        "We'll keep the Client ID and tenant ID already supplied.",
+        "We'll keep the Client ID already supplied.",
         "show the following Message verbatim as the whole reply",
         "ask only for the missing ones",
         "Send the reported conflict to your Entra and ServiceNow "

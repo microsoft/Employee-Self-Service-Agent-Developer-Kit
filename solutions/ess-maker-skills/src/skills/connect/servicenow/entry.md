@@ -546,7 +546,7 @@ Then ask your ServiceNow administrator to confirm that the supported
 configuration is saved, with the matching User Claim and User Field. Don't send
 employee identifiers or secrets.
 
-We'll keep the Client ID and tenant ID already supplied.
+We'll keep the Client ID already supplied.
 
 **End message.**
 
@@ -654,9 +654,11 @@ and none records identity values:
 
 - `setup-incomplete`, `setup-complete`: basic ADK setup is not finished, then
   finished.
-- `entra-incomplete`, `client-id-only`, `two-client-ids`: the Entra
-  administrator's reply is incomplete, gives only a Client ID, or names two
-  registrations.
+- `entra-incomplete`, `two-client-ids`: the Entra
+  administrator's reply is incomplete or names two registrations. A reply
+  that gives the Client ID is enough; never ask anyone for the Directory
+  (tenant) ID, because the controller takes it from the signed-in
+  environment.
 - `servicenow-incomplete`, `servicenow-fields-unnamed`: the ServiceNow
   administrator's reply is incomplete or does not name the User Claim and
   User Field.
