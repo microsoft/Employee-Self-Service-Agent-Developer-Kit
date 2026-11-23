@@ -1241,7 +1241,8 @@ def connection_pause_text(
                 f"**Validation is paused:** {finding} This destination "
                 "remains untested; its setup isn't complete.",
                 "Your progress is saved at the destination connection "
-                f"repair. {repair}, return here and tell us. {recheck}",
+                "repair. Once the supported repair is complete, return here "
+                f"and tell us. {recheck}",
             ]
         )
     lines = [f"**Validation is paused:** {finding}"]

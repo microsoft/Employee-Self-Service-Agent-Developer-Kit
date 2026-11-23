@@ -1791,6 +1791,10 @@ def test_untested_finish_while_a_connection_is_blocked_is_saved_as_untested() ->
     assert "Validation is paused:" in block
     assert "remains untested" in block
     assert "Your progress is saved" in block
+    assert (
+        "Your progress is saved at the destination connection repair. Once the "
+        "supported repair is complete, return here and tell us."
+    ) in block
     assert "Waiting for you" not in block
 
 
