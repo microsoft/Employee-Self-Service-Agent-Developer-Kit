@@ -123,6 +123,32 @@ def test_agent_name_is_single_resolver(profile: str) -> None:
     assert snow._spec_agent_name() == "ESS IT"
 
 
+def _assert_yes_no_or_freeform(card: dict[str, Any]) -> None:
+    arguments = snow.adapt_question_to_ask_user(card)["askUserArguments"]
+    for field in arguments["requestedSchema"]["properties"].values():
+        assert "description" not in field
+        assert [item["title"] for item in field["oneOf"]] == ["Yes", "No"]
+
+
+def test_candidate_cards_are_yes_no_only() -> None:
+    instance_card, choices = snow._instance_candidate_card(
+        agent_label="ESS IT",
+        candidate="example-dev",
+        error_text="",
+        is_last=False,
+    )
+    assert list(choices) == ["Yes", "No"]
+    _assert_yes_no_or_freeform(instance_card)
+    for entry in snow._credential_candidate_questions(
+        [
+            {"selectionKey": "k1", "label": "Connection A"},
+            {"selectionKey": "k2", "label": "Connection B"},
+        ]
+    ):
+        _assert_yes_no_or_freeform(entry["question"])
+        assert entry["question"]["header"].endswith("?")
+
+
 def test_agent_rules_pin_wait_and_card_behaviour() -> None:
     rules = " ".join(snow.AGENT_RULES)
     assert "endTurn is true" in rules

@@ -10,13 +10,14 @@ Run the state-free local chooser:
 python scripts/connect_servicenow_da.py agent-chooser
 ```
 
-Show the exact returned `question`. Its prepared-agent choices come only from
-canonical HR/IT setup entries for the current bound workspace environment.
-Each option is labeled with the agent's recorded Copilot Studio display name
-only (no product suffix, ID, link, or slug); a product name or ordinal is added
-only when two options would otherwise read the same. They are prepared in this
-workspace, not every agent in the environment.
-This command must not run a remote collection listing.
+Show the exact returned `question`: a Yes/No card ("Connect {agent} to
+ServiceNow?") for the first prepared agent, never a list of agents. Its
+prepared-agent candidates come only from canonical HR/IT setup entries for the
+current bound workspace environment. The card title carries the agent's recorded
+Copilot Studio display name only (no product suffix, ID, link, or slug); a
+product name or ordinal is added only when two candidates would otherwise read
+the same. They are prepared in this workspace, not every agent in the
+environment. This command must not run a remote collection listing.
 
 **Skip the chooser when the agent is already known.** If the maker already gave
 a Copilot Studio agent link, or the agent was already selected, set up, or
@@ -27,8 +28,9 @@ link is known, `prepared:{AGENT_ID}` otherwise) and continue only on
 (**Choose the agent**); when the conversation names no agent, several agents,
 or an agent that is not in this workspace, show the chooser as usual.
 
-When the maker selects a prepared agent, rerun with its returned internal
-selection key:
+When the maker answers **Yes**, rerun with the returned `prepared:{ID}`
+selection key. When the maker answers **No**, rerun with the returned
+`next-agent:{N}` key (the last candidate's **No** key is `another-agent`):
 
 ```text
 python scripts/connect_servicenow_da.py agent-chooser \
@@ -40,8 +42,9 @@ invocation and continue to its normal provider lifecycle. Fresh supported
 identity and lifecycle checks still apply; local preparation is not remote
 success evidence.
 
-For **Use another agent (paste link)**, the selection-key command returns one
-focused freeform question. Show it exactly. After the maker pastes the full
+After the last **No**, or when no agent is prepared, the controller returns
+`status: agent-link-required` with one focused freeform question (plain chat,
+no options). Show it exactly. After the maker pastes the full
 Copilot Studio link, run:
 
 ```text

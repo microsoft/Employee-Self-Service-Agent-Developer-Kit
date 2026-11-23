@@ -91,13 +91,15 @@ plain chat text, then ask the returned `pendingCard` with one `ask_user` call
 using `pendingCard.askUserArguments` exactly as given (the shared lifecycle
 runner's `adapt-question` shape):
 
-- With exactly one candidate, the card is a Yes/No question ("Should
-  <agent> use the ServiceNow instance <name>?"). **No** opens the exact
-  returned `manualInstanceQuestion`.
-- With several candidates, each candidate name is a short choice, plus
-  **Another instance**, which opens the exact returned
-  `manualInstanceQuestion`. Translate the selected label through
-  `instanceChoices`; never ask the Maker to copy an internal key.
+- Every candidate card is a Yes/No question ("Should <agent> use the
+  ServiceNow instance <name>?"); the card never lists several instances.
+  **Yes** confirms that candidate: translate it through `instanceChoices` (the
+  **Yes** value is the instance URL); never ask the Maker to copy an internal
+  key. **No** with several candidates asks the next returned
+  `followUpQuestions` entry the same way (pass its `question` through
+  `adapt-question`; its `choiceValues` hold the **Yes** URL and the **No**
+  target). **No** on the last candidate, or the only candidate, opens the exact
+  returned `manualInstanceQuestion`, which is typed in plain chat.
 - With no candidates, the returned question is already the free-form URL
   question. Its title is the question itself; do not add a body, example, or
   note to the card because the explanation is already in `chatMessage`.

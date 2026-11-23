@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -403,7 +404,7 @@ def test_servicenow_only_runner_rules_live_in_entry_not_shared_runner() -> None:
         "that group is also the role attestation for every mutating phase in it",
         "`roleAttestations.{requiredRole}` in the same write as the group "
         "acknowledgement",
-        "so those phases never show **Confirm role**",
+        "so those phases never show a role question",
         "rerun `resume-handoff` so the phase-start question is asked first",
         "A **No** answer records nothing and mutates nothing",
         "Render `ordinaryReply.text` verbatim",
@@ -1000,7 +1001,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     )
     assert "shared-reuse-handoff" not in preflight
     assert "pass the returned `question` object unchanged" in entra_normalized
-    assert "its `options` are label-only" in entra_normalized
+    assert "its options are only Yes/No" in entra_normalized
     assert "Translate the selected label through `reuseDecisionChoices`" in (
         entra_normalized
     )
@@ -1045,7 +1046,8 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "inspect-portal-url" in portal
     assert "portal-reuse-handoff" in portal
     assert "record-portal-reuse" in portal
-    assert "`portalSourceChoices`" in portal
+    assert "`nextSourceKey`" in portal
+    assert "`source-selection-required`" not in portal
     assert "`portalDecisionChoices`" in portal
     assert "Reuse the saved employee portal URL" in portal
     assert "Never ask the Maker to type it" in portal
@@ -1148,7 +1150,7 @@ def test_da_servicenow_itsm_skill_uses_isolated_shared_lifecycle() -> None:
 
     assert "agent-chooser" in chooser
     assert "must not run a remote collection listing" in chooser
-    assert "Use another agent (paste link)" in chooser
+    assert "status: agent-link-required" in chooser
     assert "focused freeform question" in chooser
     assert "pastes the full\nCopilot Studio link" in chooser
     assert "Never persist the choice to `.local/config.json`" in chooser
@@ -1393,6 +1395,33 @@ def test_servicenow_da_cards_offer_only_yes_no_choices() -> None:
             assert banned not in text
         for banned in ("**Not now**", "**Not sure**"):
             assert banned not in text
+        for banned in (
+            "**Another instance**",
+            "Another agent",
+            "Use another agent (paste link)",
+            "No / not sure",
+            "Yes, I have this role",
+            "`portalSourceChoices`",
+            "`source-selection-required`",
+            "Which ServiceNow connection should this agent use?",
+            "Which destination should we check, Test or Prod?",
+        ):
+            assert banned not in text, banned
+        labels = re.findall(r'"label":\s*"([^"]*)"', text)
+        assert set(labels) <= {"Yes", "No"}, labels
+        titles = re.findall(r'"title":\s*"([^"]*)"', text)
+        assert {t for t in titles if t in {"Test", "Prod"}} == set()
+    realms = (
+        root / "src/skills/connect/servicenow/realms.md"
+    ).read_text(encoding="utf-8")
+    assert {"Test", "Prod"}.isdisjoint(
+        re.findall(r'"title":\s*"([^"]*)"', realms)
+    )
+    gate = (
+        root / "src/skills/connect/shared/permission-gate.md"
+    ).read_text(encoding="utf-8")
+    assert "No / not sure" not in gate
+    assert set(re.findall(r'"label":\s*"([^"]*)"', gate)) <= {"Yes", "No"}
 
 
 def test_plugin_not_active_reply_is_only_the_two_waiting_sentences() -> None:

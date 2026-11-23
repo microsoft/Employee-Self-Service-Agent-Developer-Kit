@@ -40,17 +40,18 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-sl
 - `already-recorded` with an accepted record: use its exact `portalUrl`
   without asking the Maker again, then run the guarded `set-portal-url` command
   below. A declined record continues to the plain-text URL question.
-- `source-selection-required`: ask the returned label-only question, translate
-  the selected label through `portalSourceChoices`, and rerun
-  `portal-reuse-handoff --source-key <internal-source-key>`.
 - `question-required`: send the returned `chatMessage`, then ask the returned
-  `pendingCard` (title: "Reuse the saved employee portal URL <URL>?"). Translate
-  the answer through `portalDecisionChoices`.
+  `pendingCard` (title: "Reuse the saved employee portal URL <URL>?"; options
+  are only Yes/No). Several saved URLs are asked one at a time; never show a
+  source picker. Translate the answer through `portalDecisionChoices`.
   - **Yes**: run
     `record-portal-reuse --source-key <internal-source-key> --decision accept`,
     then pass the returned `portalUrl` directly to the guarded
     `set-portal-url` command. Never ask the Maker to type it.
-  - **No**: run
+  - **No** with a non-null `nextSourceKey`: record nothing and rerun
+    `portal-reuse-handoff --source-key <nextSourceKey>` to ask about the next
+    saved URL.
+  - **No** with `nextSourceKey` null (the last candidate): run
     `record-portal-reuse --source-key <internal-source-key> --decision decline`
     and continue to the plain-text URL question.
 

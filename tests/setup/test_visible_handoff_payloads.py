@@ -442,12 +442,16 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
     selector = _validate_payload(
         payloads[1],
         required_phrases=(
-            "Which ServiceNow connection should this agent use?",
+            "Use the ServiceNow connection {CANDIDATE_LABEL_1}?",
             "Fresh read-only inventory found multiple healthy exact",
             "No new connection will be created",
         ),
     )
     assert [option["label"] for option in completion["options"]] == [
+        "Yes",
+        "No",
+    ]
+    assert [option["label"] for option in selector["options"]] == [
         "Yes",
         "No",
     ]
@@ -497,9 +501,8 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
     assert "conditional remediation, not an observed current error" in (
         source_normalized
     )
-    assert "build the supported selector options directly from" in (
-        source_normalized
-    )
+    assert "Ask the candidates one at a time" in source_normalized
+    assert "never show a connection picker" in source_normalized
 
 
 @pytest.mark.parametrize(

@@ -160,31 +160,39 @@ If the Maker selects **No**, return
 `ACTION_RESULT = "waiting"` without running completion or recording evidence.
 
 For multiple healthy exact candidates discovered by the initial
-`inspect-admin-setup`, build the supported selector options directly from
-`credentialResolution.healthyExactCandidates`. If a post-Completed
-`resolve-credential` unexpectedly returns `choice-required` because inventory
-changed, use that command's returned candidates. In either case, each option
-label is the returned bounded `label`, and the corresponding internal value is
-its `selectionKey`. The Maker sees and selects only the non-secret label;
-never ask them to copy the key or connection ID.
+`inspect-admin-setup`, use `credentialResolution.healthyExactCandidates`. If a
+post-Completed `resolve-credential` unexpectedly returns `choice-required`
+because inventory changed, use that command's result instead: it carries the
+first candidate's Yes/No `question`, its `questionSelectionKey`, and the
+remaining candidates' `followUpQuestions` (each with its own `selectionKey`).
+The Maker sees only a Yes/No question per bounded, non-secret connection
+label; never show a connection picker and never ask them to copy the key or
+connection ID.
+
+Ask the candidates one at a time:
+
+1. Ask the first candidate's question (pass it through `adapt-question`).
+2. **Yes**: run `resolve-credential --selection-key <that candidate's selectionKey>`.
+3. **No**: ask the next `followUpQuestions` entry. After the last **No**,
+   return `ACTION_RESULT = "waiting"` and ask in plain chat which connection
+   to use or whether to create a new one; do not run a command.
 
 <!-- visible-handoff-question:v1-select-credential -->
 ```json
 [
   {
-    "header": "Which ServiceNow connection should this agent use?",
-    "question": "Fresh read-only inventory found multiple healthy exact ServiceNow connections in this environment. Each already uses Microsoft Entra ID User Login with the required Resource URI and Instance Name.\n\nChoose the connection to use for this agent. No new connection will be created. Make sure this agent's Connection Settings use the same connection.",
+    "header": "Use the ServiceNow connection {CANDIDATE_LABEL_1}?",
+    "question": "Fresh read-only inventory found multiple healthy exact ServiceNow connections in this environment. This one already uses Microsoft Entra ID User Login with the required Resource URI and Instance Name.\n\nNo new connection will be created. Make sure this agent's Connection Settings use the same connection.",
     "options": [
-      { "label": "{CANDIDATE_LABEL_1}" },
-      { "label": "{CANDIDATE_LABEL_2}" }
+      { "label": "Yes" },
+      { "label": "No" }
     ],
     "allowFreeformInput": false
   }
 ]
 ```
 
-Replace the example options with exactly one option per returned candidate.
-Map the selected label to its returned `selectionKey`, then run:
+On **Yes**, run:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} resolve-credential --selection-key <internal-selection-key>

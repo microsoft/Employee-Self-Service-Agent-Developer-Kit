@@ -58,13 +58,13 @@ portal URL, agent binding, Test, Publish, lifecycle plan, or consent.
 - `none`: continue the normal Entra direct-capture flow without a reuse question.
 - `already-recorded`: continue; the owning Entra and OIDC checkpoints still
   evaluate the current evidence.
-- `source-selection-required`: ask one label-only question from the returned
-  candidate labels, then rerun with the selected internal `sourceKey`. Do not
-  expose the key.
 - `question-required`: pass the returned `question` object unchanged through
   the question tool. Its body contains the exact target, source agent, and
-  eligible identity items; its `options` are label-only. Translate the
-  selected label through `reuseDecisionChoices`.
+  eligible identity items; its options are only Yes/No. Several sources are
+  asked one at a time; never show a source picker. Translate the selected
+  label through `reuseDecisionChoices`. When `moreCandidates` is true, a
+  **No** is recorded and then `shared-reuse-handoff` is rerun to ask about the
+  next source.
   - **Yes** (reuse the shared identity): run
     `record-shared-reuse --source-key <internal-source-key> --decision accept`.
     This rechecks only local source hash/scope/bindings and imports only the

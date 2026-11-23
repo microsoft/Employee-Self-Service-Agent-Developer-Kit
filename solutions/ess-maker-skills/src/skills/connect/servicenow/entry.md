@@ -61,7 +61,8 @@ scan the environment. Continue to the mandatory `resume-handoff` boundary only
 when the chooser returns `status: ready`.
 
 **Reuse an agent the maker already named in this conversation.** Do not show
-the **Choose agent** card when the maker already gave or settled on the agent
+the Yes/No agent question ("Connect {agent} to ServiceNow?") when the maker
+already gave or settled on the agent
 earlier in the same conversation: a Copilot Studio agent link pasted during
 Setup or any earlier turn, or an agent Setup or an earlier Connect turn already
 selected, attached, or prepared. Reuse it silently, without asking:
@@ -247,8 +248,8 @@ provider uses them.
   `portal-url`). The controller records `roleAttestations.{requiredRole}` in
   the same write as the group acknowledgement (and backfills it for an
   already-acknowledged group on resume). Do not show `permission-gate.md`'s
-  **Confirm role** question for those phases, so those phases never show
-  **Confirm role**. If `roleAttestations.{requiredRole}` is missing or invalid
+  Yes/No role question for those phases, so those phases never show a role
+  question. If `roleAttestations.{requiredRole}` is missing or invalid
   at a mutating phase, do not run the action or ask a role question there:
   rerun `resume-handoff` so the phase-start question is asked first. A **No**
   answer records nothing and mutates nothing.
@@ -1112,7 +1113,7 @@ the existing-identity situations to `existing-identity-handoff`; only the
 context-free situations below are shared.
 
 - `agent-chooser`: no saved state is needed. When the maker has not named an
-  agent, ask the plain question instead of the Choose agent card, then map the
+  agent, ask the plain question instead of the Yes/No agent card, then map the
   reply to `agent-chooser --selection-key "prepared:{AGENT_ID}"` (or
   `another-agent --agent-link`).
 - `instance-question` (first agent only): the plain question for the
