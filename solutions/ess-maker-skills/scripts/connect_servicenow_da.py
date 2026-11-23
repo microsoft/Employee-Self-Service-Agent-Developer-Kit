@@ -3528,15 +3528,74 @@ def _chooser_option_labels(choices: list[dict[str, Any]]) -> list[str]:
     return unique
 
 
+_AGENT_NAME_FILLER = frozenset(
+    {"the", "my", "our", "agent", "employee", "self", "service", "ess"}
+)
+
+
+def _normalize_agent_name(name: str) -> str:
+    """Reduce a typed or display agent name to its distinguishing words."""
+    words = re.findall(r"[a-z0-9]+", name.casefold())
+    return " ".join(word for word in words if word not in _AGENT_NAME_FILLER)
+
+
+def _agent_name_result(
+    agent_name: str,
+    prepared_choices: list[dict[str, Any]],
+    incomplete_agents: list[dict[str, Any]],
+    unsupported_agents: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Resolve an agent the maker named in chat; None means use the chooser."""
+    wanted = _normalize_agent_name(agent_name)
+    if not wanted:
+        return None
+    prepared = [
+        choice
+        for choice in prepared_choices
+        if _normalize_agent_name(str(choice["name"])) == wanted
+    ]
+    if len(prepared) == 1:
+        return _prepared_agent_result(prepared[0])
+    if prepared:
+        return None
+    unfinished = [
+        agent
+        for agent in incomplete_agents
+        if _normalize_agent_name(str(agent["name"])) == wanted
+    ]
+    if len(unfinished) == 1:
+        return _setup_incomplete_result(unfinished[0])
+    if unfinished:
+        return None
+    unsupported = [
+        agent
+        for agent in unsupported_agents
+        if _normalize_agent_name(str(agent["name"])) == wanted
+    ]
+    if unsupported:
+        return _unsupported_agent_result(unsupported[0])
+    # A bare HR or IT may be an ESS agent that is not prepared here yet.
+    if wanted in {"hr", "it"}:
+        return None
+    return _unsupported_agent_result({"id": None, "name": agent_name.strip()})
+
+
 def agent_chooser_handoff(
     root: Path = Path("."),
     *,
     selection_key: str | None = None,
     agent_link: str | None = None,
+    agent_name: str | None = None,
 ) -> dict[str, Any]:
     if agent_link is not None and selection_key not in (None, "another-agent"):
         raise ServiceNowConnectError(
             "An agent link can be supplied only for Use another agent."
+        )
+    if agent_name is not None and (
+        agent_link is not None or selection_key is not None
+    ):
+        raise ServiceNowConnectError(
+            "An agent name cannot be combined with an agent link or selection."
         )
     if _workspace_not_prepared(root):
         return _unprepared_workspace_handoff(agent_link)
@@ -3551,6 +3610,16 @@ def agent_chooser_handoff(
             incomplete_agents=incomplete_agents,
             unsupported_agents=unsupported_agents,
         )
+    if agent_name is not None:
+        named = _agent_name_result(
+            agent_name,
+            prepared_choices,
+            incomplete_agents,
+            unsupported_agents,
+        )
+        if named is not None:
+            return named
+        return _agent_candidate_result(environment, prepared_choices, 0)
     if selection_key is not None:
         if selection_key.startswith("next-agent:"):
             raw_index = selection_key.split(":", 1)[1]
@@ -13346,6 +13415,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     chooser_parser.add_argument("--selection-key")
     chooser_parser.add_argument("--agent-link")
+    chooser_parser.add_argument("--agent-name")
     claim_parser = subparsers.add_parser(
         "claim-confirmation-handoff",
         help=(
@@ -17483,6 +17553,7 @@ def main(argv: list[str] | None = None) -> int:
             result = agent_chooser_handoff(
                 selection_key=args.selection_key,
                 agent_link=args.agent_link,
+                agent_name=args.agent_name,
             )
         elif args.command == "claim-confirmation-handoff":
             result = claim_confirmation_handoff(

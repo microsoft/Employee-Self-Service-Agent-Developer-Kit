@@ -15654,6 +15654,59 @@ def test_agent_chooser_reports_unsupported_agent_for_link_to_other_agent_type(
     assert not (tmp_path / ".local" / "connect").exists()
 
 
+def test_agent_chooser_reports_unsupported_for_a_named_agent_outside_hr_and_it(
+    tmp_path: Path,
+) -> None:
+    setup_path, config_path = _seed_it_setup(tmp_path)
+    state = json.loads(setup_path.read_text(encoding="utf-8"))
+    state_before = setup_path.read_text(encoding="utf-8")
+    config_before = config_path.read_text(encoding="utf-8")
+
+    result = snow.agent_chooser_handoff(tmp_path, agent_name="my Benefits agent")
+
+    assert result["status"] == "unsupported-agent"
+    assert result["message"] == snow.UNSUPPORTED_AGENT_MESSAGE
+    assert result["stateChanged"] is False
+    assert "question" not in result
+    assert "setupHandoff" not in result
+    assert setup_path.read_text(encoding="utf-8") == state_before
+    assert config_path.read_text(encoding="utf-8") == config_before
+    assert not (tmp_path / ".local" / "connect").exists()
+
+    state["agents"][AGENT_ID]["agent"]["schema_name"] = "cr123_customAgent"
+    state["agents"][AGENT_ID]["agent"]["display_name"] = "Contoso Custom Agent"
+    setup_path.write_text(json.dumps(state), encoding="utf-8")
+    workspace_agent = snow.agent_chooser_handoff(
+        tmp_path,
+        agent_name="the Contoso custom agent",
+    )
+    assert workspace_agent["status"] == "unsupported-agent"
+    assert workspace_agent["agent"] == {
+        "id": AGENT_ID,
+        "name": "Contoso Custom Agent",
+    }
+
+
+def test_agent_chooser_resolves_a_named_ess_agent_without_a_card(
+    tmp_path: Path,
+) -> None:
+    _seed_it_setup(tmp_path)
+
+    ready = snow.agent_chooser_handoff(tmp_path, agent_name="the IT agent")
+    assert ready["status"] == "ready"
+    assert ready["selectedAgent"]["id"] == AGENT_ID
+
+    other = snow.agent_chooser_handoff(tmp_path, agent_name="HR")
+    assert other["status"] == "choice-required"
+
+    with pytest.raises(snow.ServiceNowConnectError):
+        snow.agent_chooser_handoff(
+            tmp_path,
+            agent_name="IT",
+            selection_key=f"prepared:{AGENT_ID}",
+        )
+
+
 def test_agent_chooser_keeps_unavailable_error_for_unknown_or_non_dev_agent(
     tmp_path: Path,
 ) -> None:

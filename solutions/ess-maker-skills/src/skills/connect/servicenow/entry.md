@@ -71,9 +71,12 @@ selected, attached, or prepared. Reuse it silently, without asking:
   `agent-chooser --selection-key "another-agent" --agent-link "{LINK}"`.
 - Otherwise, when the agent ID is known from the conversation (for example the
   ID Setup reported), run `agent-chooser --selection-key "prepared:{AGENT_ID}"`.
-- Otherwise, when the maker only named the agent, run plain `agent-chooser`
-  without showing its `question`, and use the `prepared:{ID}` key of the one
-  `agents` entry whose `name` exactly matches that name.
+- Otherwise, when the maker only named the agent (for example "my Benefits
+  agent"), run `agent-chooser --agent-name "{NAME_AS_TYPED}"` and follow its
+  result without showing a card: `ready` continues, `setup-incomplete` is the
+  Setup handoff, and `unsupported-agent` shows its `message` verbatim (see
+  **Unsupported agent**). Never ask for a Copilot Studio link for a named agent
+  and never start Setup for an unsupported one.
 - When the maker named no agent and wants a plain chat question instead of the
   card, get it from
   `python scripts/connect_servicenow_da.py --provider {PROVIDER} validation-notice --situation agent-chooser`
@@ -87,10 +90,11 @@ offer, which stays the maker's way to switch. Treat
 carrying the known link.
 
 Fall back to the normal chooser when the conversation names no agent, names
-more than one distinct agent, names an agent that does not match exactly one
-agent in this workspace, or the key returns an error such as the agent no
+more than one distinct agent, or the key returns an error such as the agent no
 longer being available. A single prepared agent that the maker never mentioned
-does not count as a choice already made: show the chooser.
+does not count as a choice already made: show the chooser. An agent the maker
+named that is not an ESS HR or IT agent is not a fallback case: use
+`--agent-name` as above and show the unsupported-agent message.
 
 `setup-required` (branch `workspace-not-prepared` or `explicit-agent-link`) and
 `setup-incomplete` (branch `setup-not-finished`: the agent is already in this

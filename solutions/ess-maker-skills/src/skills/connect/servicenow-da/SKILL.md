@@ -25,8 +25,12 @@ discussed earlier in the same conversation, do not show the question. Reuse
 that agent silently with the selection-key commands below (link form when a
 link is known, `prepared:{AGENT_ID}` otherwise) and continue only on
 `status: ready`. Follow the rules in `src/skills/connect/servicenow/entry.md`
-(**Choose the agent**); when the conversation names no agent, several agents,
-or an agent that is not in this workspace, show the chooser as usual.
+(**Choose the agent**); when the conversation names no agent or several agents,
+show the chooser as usual. When the maker names an agent only by name (for
+example "my Benefits agent"), run
+`agent-chooser --agent-name "{NAME_AS_TYPED}"`: an agent that is not an ESS HR
+or IT agent returns `unsupported-agent`; show its `message` verbatim, never ask
+for a link, and do not start Setup for it.
 
 When the maker answers **Yes**, rerun with the returned `prepared:{ID}`
 selection key. When the maker answers **No**, rerun with the returned
