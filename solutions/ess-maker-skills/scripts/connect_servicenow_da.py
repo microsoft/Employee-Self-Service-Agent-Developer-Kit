@@ -10825,8 +10825,17 @@ def _dev_empty_result_message(existing_kind: str | None = None) -> str:
 
 
 def _dev_untested_message(
-    existing_kind: str | None = None, custom_identifier: bool = False
+    existing_kind: str | None = None,
+    custom_identifier: bool = False,
+    other_agent: str | None = None,
 ) -> str:
+    if not (existing_kind or custom_identifier or other_agent):
+        return (
+            "**The setup steps are finished, but the integration hasn't "
+            "been tested.** Test it before employees use it.\n\n"
+            "Your progress is saved at the Test-pane request. When you "
+            "return, we'll continue there."
+        )
     audience = "ESS" if existing_kind else _product_audience()
     lead = "The" if custom_identifier else f"The {audience}"
     return (
@@ -11032,10 +11041,13 @@ def _current_task_guidance(
             or _custom_identifier_active(state)
             or _second_agent_audience(context, state)
         ):
+            product = _product_audience()
+            if _custom_identifier_active(state):
+                product = "HRSD" if product == "HR" else "ITSM"
             return (
                 "We'll save that portal URL for "
                 f"{_spec_agent_name()} and turn on its built-in ServiceNow "
-                f"{_product_audience()} topics, including system topics. "
+                f"{product} topics, including system topics. "
                 "Unrelated topics will stay unchanged."
             )
         return (
@@ -12574,6 +12586,7 @@ def record_test_attestation(
             "message": _dev_untested_message(
                 _existing_identity_kind(state),
                 _custom_identifier_active(state),
+                _second_agent_audience(context, state),
             ),
         }
     return attestation
@@ -14548,7 +14561,8 @@ def target_change_handoff(
                 "the earlier account",
             ),
         }[change]
-    if _existing_identity_kind(_realm_dev_state(context)):
+    dev_state = _realm_dev_state(context)
+    if _existing_identity_kind(dev_state):
         closing = (
             f"We won't assume that the connection or test evidence from "
             f"{earlier} applies there."
@@ -14557,11 +14571,32 @@ def target_change_handoff(
         closing = (
             f"We won't reuse evidence from {earlier} without those checks."
         )
-    text = (
-        f"{headline} We'll check your permission for **{subject}** and which "
-        "earlier setup information still applies.\n\n"
-        f"{closing}"
-    )
+    if _custom_identifier_active(dev_state) and not _existing_identity_kind(
+        dev_state
+    ):
+        text = (
+            f"{headline} We'll verify your permission for **{subject}** and "
+            "revalidate which earlier setup information applies.\n\n"
+            f"We won't assume the connection or test evidence from "
+            f"{earlier} applies there."
+        )
+    elif (
+        change == "environment"
+        and not _existing_identity_kind(dev_state)
+        and (context.get("environment") or {}).get("tenant_id")
+        and _second_agent_audience(context, dev_state)
+    ):
+        text = (
+            f"We'll use **{subject}**. We'll check your permission there and "
+            "which earlier setup information still applies before "
+            "continuing."
+        )
+    else:
+        text = (
+            f"{headline} We'll check your permission for **{subject}** and "
+            "which earlier setup information still applies.\n\n"
+            f"{closing}"
+        )
     if change == "instance" and _destination_realm_active(context):
         text = realms.instance_pause_text()
     return {

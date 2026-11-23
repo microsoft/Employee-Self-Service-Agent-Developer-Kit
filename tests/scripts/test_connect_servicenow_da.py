@@ -9984,19 +9984,17 @@ def test_record_test_attestation_accepts_maker_fail_without_category(
         (
             "hrsd",
             "list-my-open-hr-cases",
-            "**The HR setup steps are finished, but this integration "
-            "hasn't been tested.** Test Employee Self-Service HR before "
-            "employees use it.\n\n"
-            "Your progress is saved at the HR Test-pane request. When you "
+            "**The setup steps are finished, but the integration hasn't "
+            "been tested.** Test it before employees use it.\n\n"
+            "Your progress is saved at the Test-pane request. When you "
             "return, we'll continue there.",
         ),
         (
             "itsm",
             "list-my-open-it-tickets",
-            "**The IT setup steps are finished, but this integration "
-            "hasn't been tested.** Test Employee Self-Service IT before "
-            "employees use it.\n\n"
-            "Your progress is saved at the IT Test-pane request. When you "
+            "**The setup steps are finished, but the integration hasn't "
+            "been tested.** Test it before employees use it.\n\n"
+            "Your progress is saved at the Test-pane request. When you "
             "return, we'll continue there.",
         ),
     ),
@@ -17814,6 +17812,47 @@ def test_target_change_notice_is_fixed_for_every_change_kind() -> None:
     assert "Do not reuse evidence from the earlier target" in wrapped["afterReply"]
 
 
+def test_target_change_notice_follows_payroll_and_second_agent_wording(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = {
+        "environment": {
+            "id": "env-1",
+            "display_name": "Contoso Dev",
+            "tenant_id": "22222222-2222-4222-8222-222222222222",
+        },
+        "agent": {"id": "agent-1", "display_name": "Employee Self-Service HR"},
+    }
+    with snow.product_profile_context("hrsd"):
+        monkeypatch.setattr(
+            snow, "_custom_identifier_active", lambda state: True
+        )
+        payroll = snow.target_change_handoff(
+            context, "environment", "Contoso Dev 2"
+        )
+        monkeypatch.setattr(
+            snow, "_custom_identifier_active", lambda state: False
+        )
+        monkeypatch.setattr(
+            snow, "_second_agent_audience", lambda ctx, state: "IT"
+        )
+        second = snow.target_change_handoff(
+            context, "environment", "Contoso Dev 2"
+        )
+    assert payroll["renderBlock"]["text"] == (
+        "That changes the target environment. We'll verify your permission "
+        "for **Employee Self-Service HR in Contoso Dev 2** and revalidate "
+        "which earlier setup information applies.\n\n"
+        "We won't assume the connection or test evidence from Contoso Dev "
+        "applies there."
+    )
+    assert second["renderBlock"]["text"] == (
+        "We'll use **Employee Self-Service HR in Contoso Dev 2**. We'll "
+        "check your permission there and which earlier setup information "
+        "still applies before continuing."
+    )
+
+
 _VALIDATION_CONTEXT = {
     "environment": {
         "id": "env-1",
@@ -19010,12 +19049,17 @@ def test_payroll_id_messages_follow_the_spec_wording(
         ready = snow._dev_test_ready_message(custom_identifier=True)
         final = snow._dev_final_message("Contoso Dev", None, None, True)
         standard_untested = snow._dev_untested_message(None)
+        second_untested = snow._dev_untested_message(None, False, audience)
         standard_clarify = snow._dev_test_clarifying_question(None)
     assert untested.startswith(
         "**The setup steps are finished, but this integration hasn't been "
         "tested.**"
     )
     assert standard_untested.startswith(
+        "**The setup steps are finished, but the integration hasn't been "
+        "tested.**"
+    )
+    assert second_untested.startswith(
         f"**The {audience} setup steps are finished"
     )
     assert clarify == (
