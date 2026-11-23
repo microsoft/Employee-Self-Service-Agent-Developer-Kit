@@ -544,56 +544,33 @@ def test_servicenow_test_question_has_explicit_result_choices(
     assert "Required prompt" in doc and "do not add a \"Required prompt\"" in doc
 
 
-def test_portal_has_url_input_and_manual_fallback_payloads() -> None:
-    for provider, noun in (("servicenow-da-hrsd", "HR case"), ("servicenow-da-itsm", "IT ticket")):
+def test_portal_url_is_plain_text_with_manual_fallback_card_only() -> None:
+    for provider in ("servicenow-da-hrsd", "servicenow-da-itsm"):
         doc = (_CONNECT / provider / "actions" / "configure-portal-url.md").read_text(
             encoding="utf-8"
         )
-        sentence = (
-            f"Next, we'll make sure the agent's {noun} links open in the "
-            "right employee portal."
-        )
-        message = doc.split("**Message:**", 1)[1].split("**End message.**", 1)[0]
-        assert message.strip() == sentence
-        assert doc.index("**End message.**") < doc.index(
-            "<!-- visible-handoff-question:v1 -->"
-        )
-        assert sentence not in doc.split("<!-- visible-handoff-question:v1 -->", 1)[1]
+        assert "<!-- visible-handoff-question:v1 -->" not in doc
+        assert "**Message:**" not in doc
     payloads = _payloads(_ACTIONS / "configure-portal-url.md")
-    assert len(payloads) == 2
-    portal_input = _validate_payload(
-        payloads[0],
-        required_phrases=(
-            "full HTTPS base URL of your ServiceNow employee portal",
-        ),
-    )
-    assert portal_input["header"] == (
-        "What is the full HTTPS base URL of your ServiceNow employee portal?"
-    )
-    assert portal_input["question"] == (
-        "It may differ from the instance URL, so we won't assume `/sp` or "
-        "`/esc`."
-    )
+    assert len(payloads) == 1
     fallback = _validate_payload(
-        payloads[1],
+        payloads[0],
         required_phrases=(
             "couldn't update the portal URL automatically",
             "{PORTAL_URL}",
             "fresh read-only verification",
         ),
     )
-    assert portal_input["allowFreeformInput"] is True
     assert [option["label"] for option in fallback["options"]] == [
         "Yes",
         "No",
     ]
     assert fallback["allowFreeformInput"] is False
-    for payload in (portal_input, fallback):
-        question = payload["question"]
-        assert "Purpose:" not in question
-        assert "Owner:" not in question
-        assert "Open Copilot Studio" not in question
-        assert "1. Open" not in question
+    question = fallback["question"]
+    assert "Purpose:" not in question
+    assert "Owner:" not in question
+    assert "Open Copilot Studio" not in question
+    assert "1. Open" not in question
     source = (_ACTIONS / "configure-portal-url.md").read_text(
         encoding="utf-8"
     )
@@ -724,21 +701,3 @@ def test_servicenow_native_questions_have_no_technical_headers(
                     assert header not in body, (path.name, header)
                 checked += 1
     assert checked >= 5
-
-
-@pytest.mark.parametrize(
-    "provider",
-    ("servicenow-da-hrsd", "servicenow-da-itsm"),
-)
-def test_portal_url_question_is_one_plain_paragraph(provider: str) -> None:
-    portal_input = _payloads(
-        _CONNECT / provider / "actions" / "configure-portal-url.md"
-    )[0][0]
-    assert portal_input["header"] == (
-        "What is the full HTTPS base URL of your ServiceNow employee portal?"
-    )
-    assert portal_input["question"] == (
-        "It may differ from the instance URL, so we won't assume `/sp` or "
-        "`/esc`."
-    )
-    assert "\n" not in portal_input["question"]

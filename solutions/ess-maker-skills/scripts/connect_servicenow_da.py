@@ -10842,6 +10842,8 @@ def _custom_claim_identity(state: dict[str, Any] | None) -> bool:
         evidence.get("identityMapping") if isinstance(evidence, dict) else None
     )
     claim = mapping.get("tokenClaimName") if isinstance(mapping, dict) else None
+    if _custom_identifier_active(state):
+        return True
     return (
         isinstance(claim, str)
         and bool(claim.strip())
@@ -16002,6 +16004,8 @@ def _custom_claim_mode(state: dict[str, Any] | None) -> bool:
     claim = (
         mapping.get("tokenClaimName") if isinstance(mapping, dict) else None
     )
+    if _custom_identifier_active(state):
+        return True
     return (
         isinstance(claim, str)
         and bool(claim.strip())
