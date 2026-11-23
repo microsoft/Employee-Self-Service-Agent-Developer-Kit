@@ -513,7 +513,8 @@ custom-claim work and return the confirmation plus the exact configured claim
 name, and ignores `--servicenow-confirmed`; otherwise add
 `--servicenow-confirmed` when the ServiceNow
 administrator's saved-configuration confirmation with the matching User Claim
-and User Field is already supplied), send `chatMessage` verbatim and follow
+and User Field is already supplied; add `--second-agent` when the maker is
+adding a second agent that reuses another agent's setup), send `chatMessage` verbatim and follow
 `endTurn`/`afterReply`. The command records nothing and needs no agent state. The maker
 is not asked to select an identity mapping or invent a claim name; a proposed
 name, a name alone, or a vague "done" does not establish readiness. End the

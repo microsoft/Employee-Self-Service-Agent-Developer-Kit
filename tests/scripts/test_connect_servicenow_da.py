@@ -12765,7 +12765,7 @@ def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
         expected_test = (
             "We're ready to try an HR request.\n\n"
             "In **Employee Self-Service HR's Test pane**, run a request that "
-            "should return your real ServiceNow data—for example **\"Show "
+            "should return your real ServiceNow data—for example, **\"Show "
             "my open HR cases,\"** if you have open cases.\n\n"
             "Come back and tell us what happened and whether it matched what "
             "you expected. You don't need to paste case contents.\n\n"
@@ -12776,7 +12776,7 @@ def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
         expected_test = (
             "We're ready to try an IT request.\n\n"
             "In **Employee Self-Service IT's Test pane**, run a request that "
-            "should return your real ServiceNow data—for example **\"Show "
+            "should return your real ServiceNow data—for example, **\"Show "
             "my open IT tickets,\"** if you have open tickets.\n\n"
             "Come back and tell us what happened and whether it matched what "
             "you expected. You don't need to paste ticket contents.\n\n"
@@ -12934,7 +12934,7 @@ def test_topic_operational_guidance_is_in_ordinary_reply(
         ]["url"]
 
     assert ordinary == (
-        f"We'll turn on the built-in ServiceNow "
+        f"We'll save that portal URL and turn on the built-in ServiceNow "
         f"{'HR' if profile == 'hrsd' else 'IT'} topics, including system "
         "topics. Unrelated topics will stay unchanged."
     )
@@ -18992,6 +18992,71 @@ def test_custom_claim_planned_but_not_configured_asks_for_the_completed_work(
     assert output["endTurn"] is True
     assert output["recordsNothing"] is True
     assert "pendingCard" not in output
+
+
+@pytest.mark.parametrize(
+    ("profile", "audience", "records", "lookup"),
+    [
+        ("hrsd", "HR", "cases", "HR case lookup"),
+        ("itsm", "IT", "tickets", "IT ticket lookup"),
+    ],
+)
+def test_payroll_id_messages_follow_the_spec_wording(
+    profile: str, audience: str, records: str, lookup: str
+) -> None:
+    with snow.product_profile_context(profile):
+        untested = snow._dev_untested_message(None, True)
+        clarify = snow._dev_test_clarifying_question(None, True)
+        ready = snow._dev_test_ready_message(custom_identifier=True)
+        final = snow._dev_final_message("Contoso Dev", None, None, True)
+        standard_untested = snow._dev_untested_message(None)
+        standard_clarify = snow._dev_test_clarifying_question(None)
+    assert untested.startswith(
+        "**The setup steps are finished, but this integration hasn't been "
+        "tested.**"
+    )
+    assert standard_untested.startswith(
+        f"**The {audience} setup steps are finished"
+    )
+    assert clarify == (
+        "What did the request return, and was that what you expected?"
+    )
+    assert "your expected" in standard_clarify
+    assert "or your payroll ID." in ready
+    assert final.startswith(f"**Your {lookup} worked in Contoso Dev.**")
+    assert (
+        "This confirms the lookup for your tested account, agent, and "
+        f"environment\u2014not {records[:-1]} creation or other employees' "
+        "sign-in and payroll mapping."
+    ) in final
+
+
+@pytest.mark.parametrize(
+    "provider", ["servicenow-da-hrsd", "servicenow-da-itsm"]
+)
+def test_second_agent_custom_claim_confirmation_keeps_the_existing_values(
+    provider: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    previous = snow.ACTIVE_PROFILE
+    try:
+        assert snow.main(
+            [
+                "--provider",
+                provider,
+                "claim-confirmation-handoff",
+                "--custom-claim",
+                "--second-agent",
+            ]
+        ) == 0
+        output = json.loads(capsys.readouterr().out)
+    finally:
+        snow.ACTIVE_PROFILE = previous
+    audience = "HR" if provider.endswith("hrsd") else "IT"
+    message = output["chatMessage"]
+    assert f"can serve {audience}" in message
+    assert "The Client ID and tenant ID already supplied stay in place." in message
+    assert output["recordsNothing"] is True
 
 
 _EXISTING_SITUATIONS_WITH_TEXT = {

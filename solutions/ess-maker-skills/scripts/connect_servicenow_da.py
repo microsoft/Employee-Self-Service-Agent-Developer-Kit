@@ -9298,7 +9298,9 @@ def portal_url_confirmation(
     )
     header = f"Is {normalized_url} the employee portal URL?"
     question = f"You entered **{normalized_url}** as the employee portal URL."
-    if _existing_identity_kind(state):
+    if _existing_identity_kind(state) or _second_agent_audience(
+        context, state
+    ):
         copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
         header = (
             f"Is {normalized_url} the portal employees should use for "
@@ -10032,9 +10034,18 @@ def _dev_final_message(
     environment_display_name: str | None,
     existing_kind: str | None = None,
     other_agent: str | None = None,
+    custom_identifier: bool = False,
 ) -> str:
     lookup, records = _DEV_FINAL_SCOPE[ACTIVE_PROFILE.key]
     in_env = f" in {environment_display_name}" if environment_display_name else ""
+    if custom_identifier and not (existing_kind or other_agent):
+        return (
+            f"**Your {lookup} worked{in_env}.** {_spec_agent_name()} returned "
+            f"the {records} you expected for your account.\n\n"
+            "This confirms the lookup for your tested account, agent, and "
+            f"environment\u2014not {records[:-1]} creation or other "
+            "employees' sign-in and payroll mapping."
+        )
     return (
         f"**Your ServiceNow connection worked for the {lookup}{in_env}.** "
         f"{_spec_agent_name()} returned the {records} you expected in the "
@@ -10194,6 +10205,7 @@ def _build_phase_progress(
             environment_display_name,
             _existing_identity_kind(state),
             other_agent,
+            _custom_identifier_active(state),
         )
         if decision.get("decision") == "complete"
         and completed_count == len(items)
@@ -10748,23 +10760,38 @@ _DEV_TEST_COPY = {
 }
 
 
-def _dev_test_ready_message(existing_kind: str | None = None) -> str:
+def _dev_test_ready_message(
+    existing_kind: str | None = None,
+    *,
+    other_agent: str | None = None,
+    custom_identifier: bool = False,
+) -> str:
     copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
+    first_agent = not (existing_kind or other_agent or custom_identifier)
+    contents = f"{copy_['record']} contents"
+    if custom_identifier:
+        contents += " or your payroll ID"
     return (
         f"We're ready to try {copy_['article']} {copy_['audience']} request.\n\n"
         f"In **{_spec_agent_name()}'s Test pane**, run a request that should "
-        "return your real ServiceNow data—for example "
+        "return your real ServiceNow data—for example, "
         f"**\"{copy_['example']},\"** if you have open {copy_['records']}.\n\n"
-        "Come back and tell us what happened and whether it matched what you "
-        f"expected. You don't need to paste {copy_['record']} contents.\n\n"
+        f"{'Come back' if first_agent else 'Return here'} and tell us what "
+        "happened and whether it matched what you expected. You don't need "
+        f"to paste {contents}.\n\n"
         "You can also finish without testing; the "
-        f"{'ESS ' if existing_kind else ''}integration will "
-        "remain untested."
+        f"{'ESS ' if existing_kind else ''}"
+        f"{copy_['audience'] + ' ' if other_agent and not existing_kind else ''}"
+        "integration will remain untested."
     )
 
 
-def _dev_test_clarifying_question(existing_kind: str | None = None) -> str:
+def _dev_test_clarifying_question(
+    existing_kind: str | None = None, custom_identifier: bool = False
+) -> str:
     copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
+    if custom_identifier and not existing_kind:
+        return "What did the request return, and was that what you expected?"
     ask = (
         f"What did the request return\u2014your expected {copy_['records']}, "
         "an empty result, or an error? "
@@ -10797,10 +10824,13 @@ def _dev_empty_result_message(existing_kind: str | None = None) -> str:
     )
 
 
-def _dev_untested_message(existing_kind: str | None = None) -> str:
+def _dev_untested_message(
+    existing_kind: str | None = None, custom_identifier: bool = False
+) -> str:
     audience = "ESS" if existing_kind else _product_audience()
+    lead = "The" if custom_identifier else f"The {audience}"
     return (
-        f"**The {audience} setup steps are finished, but this integration "
+        f"**{lead} setup steps are finished, but this integration "
         f"hasn't been tested.** Test {_spec_agent_name()} before employees "
         "use it.\n\n"
         f"Your progress is saved at the {_product_audience()} Test-pane request. When "
@@ -10815,7 +10845,11 @@ def _dev_test_guidance(
     evidence = state.get("evidence")
     record = evidence.get("test") if isinstance(evidence, dict) else None
     if not (isinstance(record, dict) and record.get("status") == "untested"):
-        return _dev_test_ready_message(_existing_identity_kind(state))
+        return _dev_test_ready_message(
+            _existing_identity_kind(state),
+            other_agent=_second_agent_audience(context, state),
+            custom_identifier=_custom_identifier_active(state),
+        )
     environment = _recorded_environment_name(context)
     in_env = f" in {environment}" if environment else ""
     audience = _product_audience()
@@ -10993,10 +11027,21 @@ def _current_task_guidance(
             "to check sign-in and employee matching."
         )
     if phase_id == "topics":
+        if (
+            _existing_identity_kind(state)
+            or _custom_identifier_active(state)
+            or _second_agent_audience(context, state)
+        ):
+            return (
+                "We'll save that portal URL for "
+                f"{_spec_agent_name()} and turn on its built-in ServiceNow "
+                f"{_product_audience()} topics, including system topics. "
+                "Unrelated topics will stay unchanged."
+            )
         return (
-            f"We'll turn on the built-in ServiceNow {_product_audience()} "
-            "topics, including system topics. Unrelated topics will stay "
-            "unchanged."
+            "We'll save that portal URL and turn on the built-in ServiceNow "
+            f"{_product_audience()} topics, including system topics. "
+            "Unrelated topics will stay unchanged."
         )
     if phase_id == "portal-url":
         return _portal_url_ask_guidance(context, state)
@@ -12446,6 +12491,9 @@ def record_test_attestation(
         # Neither answer is evidence: nothing is recorded and the Test step
         # stays open.
         existing_kind = _existing_identity_kind(_realm_dev_state(context))
+        custom_identifier = _custom_identifier_active(
+            _realm_dev_state(context)
+        )
         return {
             "status": "open",
             "result": result,
@@ -12453,7 +12501,9 @@ def record_test_attestation(
             "message": (
                 _dev_empty_result_message(existing_kind)
                 if result == "empty"
-                else _dev_test_clarifying_question(existing_kind)
+                else _dev_test_clarifying_question(
+                    existing_kind, custom_identifier
+                )
             ),
         }
     if result not in {"pass", "fail", "untested"}:
@@ -12521,7 +12571,10 @@ def record_test_attestation(
     if result == "untested":
         return {
             **attestation,
-            "message": _dev_untested_message(_existing_identity_kind(state)),
+            "message": _dev_untested_message(
+                _existing_identity_kind(state),
+                _custom_identifier_active(state),
+            ),
         }
     return attestation
 
@@ -13209,6 +13262,7 @@ def build_parser() -> argparse.ArgumentParser:
     claim_parser.add_argument("--custom-claim", action="store_true")
     claim_parser.add_argument("--claim-name-given", action="store_true")
     claim_parser.add_argument("--servicenow-confirmed", action="store_true")
+    claim_parser.add_argument("--second-agent", action="store_true")
     metadata_parser = subparsers.add_parser(
         "metadata-url-handoff",
         help=(
@@ -14236,6 +14290,7 @@ def claim_confirmation_handoff(
     custom_claim: bool = False,
     claim_name_given: bool = False,
     servicenow_confirmed: bool = False,
+    second_agent: bool = False,
 ) -> dict[str, Any]:
     """Fixed reply for an identifier the Entra administrator has not confirmed.
 
@@ -14274,12 +14329,22 @@ def claim_confirmation_handoff(
         "intended employee.",
     ]
     if not servicenow_confirmed:
+        saved = (
+            f"saved and can serve {_product_audience()}"
+            if second_agent
+            else "saved"
+        )
         paragraphs.append(
             "Then ask your ServiceNow administrator to confirm that the "
-            "supported configuration is saved, with the matching User Claim "
-            "and User Field. Don't send employee identifiers or secrets."
+            f"supported configuration is {saved}, with the matching User "
+            "Claim and User Field. Don't send employee identifiers or "
+            "secrets."
         )
-    paragraphs.append("We'll keep the Client ID and tenant ID already supplied.")
+    paragraphs.append(
+        "The Client ID and tenant ID already supplied stay in place."
+        if second_agent
+        else "We'll keep the Client ID and tenant ID already supplied."
+    )
     return {
         "status": "claim-confirmation-required",
         "decision": "claim-confirmation-required",
@@ -15495,8 +15560,10 @@ def _existing_identity_message(
             "Ask them to use the compatibility guidance in their messages. "
             "We won't change the shared configuration or troubleshoot the "
             "conflict.\n\n"
-            f"Bring back their {mapping_items}. Don't include employee "
-            "identifiers or secrets.\n\n"
+            "Bring back their non-sensitive compatibility confirmation, "
+            "saved-configuration confirmation for ESS, User Claim, User "
+            "Field, and any changed registration or claim values. Don't "
+            "include employee identifiers or secrets.\n\n"
             "We'll recheck the affected setup before continuing. Unchanged "
             "applicable information stays in place.",
             waiting,
@@ -17159,6 +17226,7 @@ def main(argv: list[str] | None = None) -> int:
                 custom_claim=args.custom_claim,
                 claim_name_given=args.claim_name_given,
                 servicenow_confirmed=args.servicenow_confirmed,
+                second_agent=args.second_agent,
             )
         elif args.command == "metadata-url-handoff":
             result = metadata_url_handoff(args.metadata_url)
