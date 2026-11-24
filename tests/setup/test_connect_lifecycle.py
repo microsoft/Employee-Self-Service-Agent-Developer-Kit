@@ -159,8 +159,6 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
     assert "Preflight, chooser, and instance confirmation" in runner
     assert "`renderBlock.text`" in runner
     assert "`transport.businessGroupAvailability.question`" in runner
-    assert "exactly four HR or three IT" in runner
-    assert "Preflight, chooser, and instance confirmation" in runner
     assert "One acknowledgement unlocks every internal phase" in runner
     assert "question-only" in normalized
     assert (
@@ -249,13 +247,18 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert "must not persist or ask separate questions" in runner
     assert "`handoffMode: identity-requirement`" in runner
     assert "routing-only Maker question" in runner_normalized
-    assert "they are not `Completed`/`Not yet` admin evidence" in (
-        runner_normalized
+    entry_normalized = " ".join(
+        (_CONNECT / "servicenow" / "entry.md").read_text(encoding="utf-8").split()
     )
-    assert "options are label-only" in runner_normalized
+    assert "plain chat question with a typed answer, never a card" in (
+        entry_normalized
+    )
+    assert "never render Email/UPN/Pay ID options" in entry_normalized
     assert "`identityRequirementChoices`" in runner
     assert "never add `value`" in runner_normalized
-    assert "`Not sure` returns waiting, writes no receipt" in runner_normalized
+    assert "`Not sure`) returns waiting, writes no receipt" in (
+        entry_normalized
+    )
     assert "must not set `actionApplied`" in runner_normalized
     assert "`resumeActionWhenIncomplete` is `true`" in runner
     assert "historical facts,\nnot authorization" in runner

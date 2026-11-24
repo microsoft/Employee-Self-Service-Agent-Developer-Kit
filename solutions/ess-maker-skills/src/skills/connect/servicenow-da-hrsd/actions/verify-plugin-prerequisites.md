@@ -51,12 +51,11 @@ evidence summary and completion decision:
 ```json
 [
   {
-    "header": "HR Service Delivery Core",
-    "question": "Your ServiceNow administrator should see **Human Resources Scoped App: Core** (`com.sn_hr_core`) listed as Installed, with the message `Your application is installed and ready for you to use on your instance`.\n\nHas the ServiceNow administrator confirmed that all of this HR Service Delivery Core evidence is present?",
+    "header": "Has your ServiceNow administrator confirmed all of this is present?",
+    "question": "Your ServiceNow administrator should see **Human Resources Scoped App: Core** (`com.sn_hr_core`) listed as Installed, with the message `Your application is installed and ready for you to use on your instance`.",
     "options": [
-      { "label": "Yes, all listed installed-and-ready evidence is present" },
-      { "label": "No, one or more required items are missing" },
-      { "label": "Not sure, the administrator still needs to check" }
+      { "label": "Yes" },
+      { "label": "No" }
     ],
     "allowFreeformInput": false
   }
@@ -65,13 +64,12 @@ evidence summary and completion decision:
 
 Leave the selection unset.
 
-- **Yes, all listed installed-and-ready evidence is present:** record the phase
+- **Yes:** record the phase
   handoff with `reused` when it was already valid, or `completed` when the
   administrator completed the installation.
-- **No, one or more required items are missing** / **Not sure, the
-  administrator still needs to check:** show the direct link and identifiers
-  above, then show this fixed waiting text verbatim (do not paraphrase it),
-  return `ACTION_RESULT = "waiting"`, and do not record completion:
+- **No:** show only this fixed waiting text verbatim (do not paraphrase it
+  and do not repeat the link, plugin title, plugin id, version or message
+  details), return `ACTION_RESULT = "waiting"`, and do not record completion:
 
   ```text
   HR setup is waiting for your ServiceNow administrator to confirm that the HR Service Delivery Core plugin is installed and active.
@@ -85,4 +83,7 @@ After **Yes**, record the single phase handoff:
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-admin-phase --phase plugin-prerequisites --status <completed|reused>
 ```
 
-Return `ACTION_RESULT = "recorded"` after the whole step is recorded.
+Return `ACTION_RESULT = "recorded"` after the whole step is recorded, then run
+the `nextCommand` from that record output exactly as given. Do not run a bare
+`resume-handoff`; the flags in `nextCommand` tell the controller this action
+is already applied.

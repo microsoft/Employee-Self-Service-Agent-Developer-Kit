@@ -58,6 +58,7 @@ TARGET_IDENTITY_FIELDS = (
     "tenantId",
     "agentId",
     "agentSchemaName",
+    "agentDisplayName",
     "almFamilyId",
     "commitSha",
     "sourceAgentId",
@@ -84,6 +85,23 @@ class ServiceNowRealmError(RuntimeError):
         super().__init__(message)
         if remediation is not None:
             self.customer_remediation = remediation
+
+
+class ServiceNowRealmNotUniqueError(ServiceNowRealmError):
+    """Discovery found no promoted agent, or more than one environment."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: str,
+        searched: tuple[str, ...] = (),
+        matched: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.searched = searched
+        self.matched = matched
 
 
 def _access_failure(
@@ -277,10 +295,13 @@ def discover_realm_target(
         and _matches_realm(sibling.get("realm"), realm_value)
     ]
     if not matches:
-        raise ServiceNowRealmError(f"The {label} promotion is not visible yet.")
+        raise ServiceNowRealmNotUniqueError(
+            f"The {label} promotion is not visible yet.", kind="none"
+        )
     if len(matches) != 1:
-        raise ServiceNowRealmError(
-            f"Agent realm discovery returned multiple {label} targets."
+        raise ServiceNowRealmNotUniqueError(
+            f"Agent realm discovery returned multiple {label} targets.",
+            kind="multiple",
         )
     target_id = _guid(matches[0].get("botId"), f"Related {label} agent ID")
     if (
@@ -391,7 +412,7 @@ def discover_realm_target(
             "The Dev and promoted target environments belong to different "
             "Microsoft Entra tenants."
         )
-    return {
+    identity = {
         "environmentId": _guid(environment_id, "Target environment ID"),
         "environmentUrl": _environment_url(environment_url),
         "tenantId": str(target_client.tenant_id),
@@ -401,6 +422,19 @@ def discover_realm_target(
         "commitSha": commit_sha,
         "sourceAgentId": source_id,
     }
+    display_name = agent_display_name(direct_target)
+    if display_name:
+        identity["agentDisplayName"] = display_name
+    return identity
+
+
+def agent_display_name(agent: Mapping[str, Any]) -> str | None:
+    """The agent's own display name as the target environment reports it."""
+    for key in ("displayName", "fullBotName", "name", "shortBotName"):
+        value = agent.get(key)
+        if isinstance(value, str) and value.strip():
+            return " ".join(value.split())
+    return None
 
 
 def discover_promoted_realm(
@@ -421,6 +455,9 @@ def discover_promoted_realm(
     """Find the one environment that holds the verified sibling realm."""
     candidates = _environment_candidates(environments, environment_selector)
     explicit = bool(str(environment_selector or "").strip())
+    searched = tuple(
+        sorted({name for _id, _url, name in candidates if name}, key=str.casefold)
+    )
     labels = ", ".join(
         sorted(
             {name or url for _id, url, name in candidates},
@@ -428,9 +465,10 @@ def discover_promoted_realm(
         )
     )
     if not candidates:
-        raise ServiceNowRealmError(
+        raise ServiceNowRealmNotUniqueError(
             "The promoted target environment is not visible. Confirm maker "
-            "access or select the environment by name or URL."
+            "access or select the environment by name or URL.",
+            kind="none",
         )
     discovered: list[dict[str, str]] = []
     try:
@@ -459,6 +497,9 @@ def discover_promoted_realm(
                 if not explicit and exc.status_code == 404:
                     continue
                 raise
+    except ServiceNowRealmNotUniqueError as exc:
+        exc.searched = searched
+        raise
     except AgentBuilderError as exc:
         raise _access_failure(
             exc,
@@ -473,10 +514,23 @@ def discover_promoted_realm(
             else " No matching promoted agent was found in the checked environments."
         )
         choices = f" Available environments: {labels}." if labels else ""
-        raise ServiceNowRealmError(
+        matched_ids = {item["environmentId"].casefold() for item in discovered}
+        raise ServiceNowRealmNotUniqueError(
             "Automatic promoted-target discovery could not identify one "
             f"{str(realm).title()} environment.{detail}{choices} Select the "
-            "environment by name or URL and retry."
+            "environment by name or URL and retry.",
+            kind="multiple" if discovered else "none",
+            searched=searched,
+            matched=tuple(
+                sorted(
+                    {
+                        name
+                        for cid, _url, name in candidates
+                        if name and cid.casefold() in matched_ids
+                    },
+                    key=str.casefold,
+                )
+            ),
         )
     return discovered[0]
 
@@ -888,10 +942,11 @@ ADMIN_CASE_REUSE = "dev-reuse"
 ADMIN_CASE_INDEPENDENT = "independent"
 ADMIN_EXPLANATIONS = {
     ADMIN_CASE_REUSE: (
-        "We'll reuse the administrator-confirmed sign-in setup and employee "
-        "mapping from Dev for this ServiceNow instance. You don't need to ask "
-        "your administrators again. We'll only check the {label} connection, "
-        "topics, portal URL, and a real-data test."
+        "We'll retain the administrator-confirmed sign-in setup and employee "
+        "mapping that still applies to this ServiceNow instance. We won't "
+        "repeat completed administrator work. You don't need to resend "
+        "earlier replies unless a specific confirmation is missing or no "
+        "longer applies."
     ),
     ADMIN_CASE_INDEPENDENT: (
         "We couldn't find a completed Dev setup for this agent, so we'll run "
@@ -1127,6 +1182,10 @@ def record_target(
         target["adminSetup"] = copy.deepcopy(dict(admin_setup))
     elif same_identity and isinstance(previous.get("adminSetup"), dict):
         target["adminSetup"] = copy.deepcopy(previous["adminSetup"])
+    if same_identity:
+        for key in ("repairs", "instancePause"):
+            if previous.get(key):
+                target[key] = copy.deepcopy(previous[key])
     registry["targets"][realm] = target
     registry["activeTargetRealm"] = realm
     return target
@@ -1163,14 +1222,103 @@ def _item(label: str, status: str, detail: str | None = None) -> dict[str, str]:
     return item
 
 
-def _blocked_connection(finding: str) -> str:
-    return (
-        f"**Validation is paused:** {finding} This agent can't make the "
-        "request yet. Once the supported repair for this destination is "
-        "complete, return here and tell us, and we'll recheck before you run "
-        "the request. Your administrator-confirmed sign-in setup stays in "
-        "place."
+def connection_pause_text(
+    reason: str,
+    *,
+    agent: str = "this agent",
+    label: str = "this environment",
+    kind: str | None = None,
+    differences: list[Mapping[str, Any]] | None = None,
+    untested: bool = False,
+) -> str:
+    """Spec pause text for a connection blocker; never names a menu path.
+
+    The repair mechanism for the destination connection is an open
+    engineering question, so the text only pauses and asks the maker to
+    return once the supported repair is complete.
+    """
+    request = f"{kind} request" if kind else "request"
+    agent_ref = f"the {kind} agent" if kind else "this agent"
+    if reason == "connection-not-bound":
+        finding = (
+            f"a ServiceNow connection is available in {label}, but it isn't "
+            f"linked to {agent}. That prevents this agent from using it."
+        )
+        repair = "Once the supported destination linking repair is complete"
+        recheck = f"We'll recheck this agent's connection before you run the {request}."
+        kept = "We won't repeat completed administrator work."
+    elif reason == "connection-unhealthy":
+        finding = (
+            f"the ServiceNow connection in {label} is disconnected, so "
+            f"{agent_ref} can't use it."
+        )
+        repair = "Once the supported destination repair is complete"
+        recheck = f"We'll recheck the destination setup before you run the {request}."
+        kept = "We won't restart completed administrator work."
+    else:
+        if reason == "connection-mismatch":
+            finding = (
+                f"the ServiceNow connection in {label} doesn't use the "
+                f"expected sign-in values, so it can't make the {request} yet."
+            )
+        else:
+            finding = (
+                f"{agent} has no ServiceNow connection available for this "
+                f"setup in {label}, so it can't make the {request} yet."
+            )
+        repair = "Once the supported destination repair is complete"
+        recheck = f"We'll recheck the destination setup before you run the {request}."
+        kept = "The applicable administrator-confirmed sign-in setup stays in place."
+    if untested:
+        bold_agent = f"**{agent} in {label}**"
+        if reason == "connection-not-bound":
+            finding = (
+                f"a ServiceNow connection is available in {label}, but it "
+                f"isn't linked to {bold_agent}."
+            )
+        elif reason == "connection-mismatch":
+            finding = (
+                f"the ServiceNow connection in {label} doesn't use the "
+                "expected sign-in values."
+            )
+        elif reason != "connection-unhealthy":
+            finding = (
+                f"{bold_agent} has no ServiceNow connection available for "
+                "this setup."
+            )
+        recheck = (
+            "We'll recheck the destination setup before requesting your "
+            f"{kind or 'real-data'} test."
+        )
+        return "\n\n".join(
+            [
+                f"**Validation is paused:** {finding} This destination "
+                "remains untested; its setup isn't complete.",
+                "Your progress is saved at the destination connection "
+                "repair. Once the supported repair is complete, return here "
+                f"and tell us. {recheck}",
+            ]
+        )
+    lines = [f"**Validation is paused:** {finding}"]
+    for difference in differences or []:
+        lines.append(
+            f"- **{difference['item']}:** expected `{difference['expected']}`, "
+            f"found `{difference['actual']}`."
+        )
+    return "\n\n".join(
+        [
+            "\n".join(lines),
+            f"{repair}, return here and tell us. {recheck}",
+            kept,
+        ]
     )
+
+
+def _blocked_connection(
+    reason: str,
+    differences: list[Mapping[str, Any]] | None = None,
+) -> str:
+    return connection_pause_text(reason, differences=differences)
 
 
 def evaluate_connections(
@@ -1287,7 +1435,7 @@ def evaluate_connections(
             status="blocked",
             reason="connection-not-bound",
             finding=finding,
-            message=_blocked_connection(finding),
+            message=_blocked_connection("connection-not-bound"),
         )
     elif match is None:
         finding = (
@@ -1298,7 +1446,7 @@ def evaluate_connections(
             status="blocked",
             reason="connection-not-found",
             finding=finding,
-            message=_blocked_connection(finding),
+            message=_blocked_connection("connection-not-found"),
         )
     elif differences:
         finding = (
@@ -1310,7 +1458,7 @@ def evaluate_connections(
             reason="connection-mismatch",
             differences=differences,
             finding=finding,
-            message=_blocked_connection(finding),
+            message=_blocked_connection("connection-mismatch", differences),
         )
     elif not connected:
         finding = "The ServiceNow connection in this environment is disconnected."
@@ -1318,7 +1466,7 @@ def evaluate_connections(
             status="blocked",
             reason="connection-unhealthy",
             finding=finding,
-            message=_blocked_connection(finding),
+            message=_blocked_connection("connection-unhealthy"),
         )
     else:
         result.update(
@@ -1371,9 +1519,16 @@ def evaluate_runtime(
             "noTopics": not target_topics,
             "portalReason": None if portal_ok else str(reason),
             "message": (
-                "We only read topics and the portal URL in Test and Prod. "
-                "Fix them in Dev, promote again through your own deployment "
-                "process, then check again."
+                "We'll enable the affected built-in topic and leave "
+                "unrelated topics unchanged."
+                if off
+                else (
+                    "We need the employee portal URL for this agent."
+                    if target_topics and not portal_ok
+                    else "We only read topics and the portal URL in Test and "
+                    "Prod. Fix them in Dev, promote again through your own "
+                    "deployment process, then check again."
+                )
             ),
         }
     return {
@@ -1383,26 +1538,108 @@ def evaluate_runtime(
     }
 
 
+def instance_pause_text() -> str:
+    return "\n\n".join(
+        [
+            "That changes the shared-instance assumption behind this "
+            "promotion path. We can't treat the earlier administrator setup "
+            "as evidence for a different instance.",
+            "This destination run is paused while support for the "
+            "different-instance path is resolved. We'll retain the earlier "
+            "result only for its original instance and identify which setup "
+            "information needs review.",
+        ]
+    )
+
+
+def _retained_instance(target: Mapping[str, Any]) -> str:
+    setup = target.get("adminSetup") if isinstance(target, Mapping) else None
+    if isinstance(setup, Mapping) and setup.get("instanceName"):
+        return str(setup["instanceName"])
+    expected = target.get("expected") if isinstance(target, Mapping) else None
+    values = expected.get("values") if isinstance(expected, Mapping) else None
+    return str((values or {}).get("instanceName") or "")
+
+
+def request_instance_change(target: dict[str, Any], requested: str | None) -> bool:
+    """Pause the destination when the maker names a different instance.
+
+    Nothing about the retained instance is changed or reused for the new one.
+    Naming the retained instance again lifts the pause.
+    """
+    if not requested:
+        return bool(target.get("instancePause"))
+    candidate = _normalize_provided({"instanceName": requested})["instanceName"]
+    retained = _retained_instance(target)
+    if retained and candidate != retained:
+        target["instancePause"] = {
+            "retainedInstance": retained,
+            "requestedInstance": candidate,
+            "requestedAt": _utc_now(),
+        }
+        return True
+    target.pop("instancePause", None)
+    return False
+
+
+def record_portal_url_request(target: dict[str, Any], url: str) -> dict[str, Any]:
+    """Record the portal URL the agent should save for this destination."""
+    repairs = target.setdefault("repairs", {})
+    repairs["portalUrl"] = {
+        "status": "requested",
+        "url": url,
+        "requestedAt": _utc_now(),
+    }
+    return repairs["portalUrl"]
+
+
+def _sync_repairs(target: dict[str, Any], runtime: Mapping[str, Any]) -> None:
+    repairs = target.setdefault("repairs", {})
+    off = [str(name) for name in runtime.get("offTopics") or []]
+    if off:
+        repairs["enableTopics"] = {
+            "status": "requested",
+            "topics": off,
+            "requestedAt": _utc_now(),
+        }
+    elif "enableTopics" in repairs:
+        repairs["enableTopics"]["status"] = "done"
+    portal = repairs.get("portalUrl")
+    if isinstance(portal, dict) and not runtime.get("portalReason"):
+        if runtime.get("status") == "done":
+            portal["status"] = "done"
+
+
 def apply_checks(
     target: dict[str, Any],
     *,
     connections: dict[str, Any],
     runtime: dict[str, Any],
-) -> None:
-    """Record this realm's stage results; no other realm is consulted."""
+) -> bool:
+    """Record this realm's stage results; no other realm is consulted.
+
+    Returns True when the maker came back to a destination that was finished
+    untested, so the caller can say validation is continuing.
+    """
     stages = target["stages"]
     now = _utc_now()
     stages["connections"] = {**connections, "checkedAt": now}
     stages["runtime-configuration"] = {**runtime, "checkedAt": now}
+    _sync_repairs(target, runtime)
     validation = stages.get("maker-validation") or {}
     ready = connections.get("status") == "done" and runtime.get("status") == "done"
     bound = (validation.get("binding") or {}).get("connectionId")
-    if (
-        validation.get("status") in {"done", "untested"}
-        and ready
-        and _same_connection_id(bound, connections.get("connectionId"))
-    ):
-        return
+    same = _same_connection_id(bound, connections.get("connectionId"))
+    status = validation.get("status")
+    resumed = status == "untested"
+    if status in {"done", "untested"} and ready and same:
+        return resumed
+    if status == "reported" and connections.get("status") == "done" and same:
+        if ready:
+            stages["maker-validation"] = {**validation, "status": "done"}
+        return resumed
+    if resumed and not ready and validation.get("blockedBy"):
+        return resumed
     stages["maker-validation"] = (
         {
             "status": "needs-maker",
@@ -1420,6 +1657,7 @@ def apply_checks(
             "message": "Waiting for the earlier stages.",
         }
     )
+    return resumed
 
 
 def record_validation(
@@ -1443,18 +1681,36 @@ def record_validation(
     if result == "untested" and failure_category is not None:
         raise ServiceNowRealmError("An untested finish cannot have a failure category.")
     stages = target["stages"]
-    if (
-        stages["connections"].get("status") != "done"
-        or stages["runtime-configuration"].get("status") != "done"
-    ):
-        raise ServiceNowRealmError(
-            "Complete Connections and Runtime configuration before "
-            "recording the Test pane result."
-        )
+    connections = stages["connections"]
+    runtime = stages["runtime-configuration"]
     identity = target["identity"]
-    stage_status = {"pass": "done", "fail": "blocked", "untested": "untested"}
+    status_by_result = {"pass": "done", "fail": "blocked", "untested": "untested"}
+    stage_status = status_by_result[result]
+    blocked_by = None
+    if connections.get("status") != "done" or runtime.get("status") != "done":
+        if result == "untested" and "blocked" in {
+            connections.get("status"),
+            runtime.get("status"),
+        }:
+            blocked_by = (
+                connections.get("reason")
+                if connections.get("status") == "blocked"
+                else runtime.get("reason")
+            )
+        elif (
+            result == "pass"
+            and connections.get("status") == "done"
+            and runtime.get("status") == "blocked"
+            and not runtime.get("noTopics")
+        ):
+            stage_status = "reported"
+        else:
+            raise ServiceNowRealmError(
+                "Complete Connections and Runtime configuration before "
+                "recording the Test pane result."
+            )
     stages["maker-validation"] = {
-        "status": stage_status[result],
+        "status": stage_status,
         "kind": "maker-attestation",
         "promptCategory": prompt_category,
         "result": result,
@@ -1463,9 +1719,11 @@ def record_validation(
         "binding": {
             "environmentId": identity["environmentId"],
             "agentId": identity["agentId"],
-            "connectionId": stages["connections"].get("connectionId"),
+            "connectionId": connections.get("connectionId"),
         },
     }
+    if blocked_by:
+        stages["maker-validation"]["blockedBy"] = blocked_by
     return stages["maker-validation"]
 
 
@@ -1509,87 +1767,248 @@ def expected_summary(expected: Mapping[str, Any]) -> dict[str, Any]:
     return summary
 
 
-def _realm_finding(finding: str, agent: str, label: str) -> str:
-    return (
-        finding.replace("This agent", agent)
-        .replace("this agent", agent)
-        .replace("this environment", label)
-    )
-
-
 def _agent_reference(context: Mapping[str, Any]) -> str:
     agent = str(context["agent"])
     url = context.get("agentUrl")
     return f"[**{agent}**]({url})" if url else f"**{agent}**"
 
 
-def _connection_instruction(
-    stage: Mapping[str, Any],
-    expected: Mapping[str, Any],
+_REPAIR_SAFETY = (
+    "You don't need to paste a password, client secret, or token here. If "
+    "anything like that is requested, it comes from your administrator and "
+    "stays out of this chat."
+)
+
+
+def connection_repair_steps(
+    reason: str,
     label: str,
     context: Mapping[str, Any],
+    values: Mapping[str, Any] | None = None,
 ) -> str:
+    """Plain-language steps that follow the spec pause text for a connection.
+
+    Built only from recorded non-secret values. The Client ID doubles as the
+    Resource URI, as in the original connection step.
+    """
+    values = values or {}
     agent = str(context["agent"])
-    reference = _agent_reference(context)
-    values = expected.get("values", {})
-    reason = stage.get("reason")
-    lines = [
-        "**Validation is paused:** "
-        + _realm_finding(str(stage.get("finding") or ""), agent, label)
-        + f" {agent} can't make the request yet.",
-        "",
+    kind = str(context["kind"])
+    instance = str(values.get("instanceName") or "").strip()
+    client_id = str(values.get("clientId") or "").strip()
+    resource = (
+        f"`{client_id}`"
+        if client_id
+        else "the Application (client) ID your Microsoft Entra administrator "
+        "confirmed"
+    )
+    instance_text = (
+        f"`{instance}`—not the full URL"
+        if instance
+        else "the ServiceNow instance name your administrator confirmed—not "
+        "the full URL"
+    )
+    open_step = (
+        f"1. Open {_agent_reference(context)} in **{label}** and go to "
+        "**Settings > Connection Settings > ServiceNow**."
+    )
+    create_values = [
+        "   - **Authentication type:** Microsoft Entra ID User Login",
+        f"   - **Resource URI:** {resource}",
+        f"   - **Instance name:** {instance_text}",
     ]
-    open_agent = f"In Copilot Studio, open {reference} in {label}."
-    settings = "**Settings > Connection Settings > ServiceNow**"
     if reason == "connection-not-bound":
-        lines += [
-            "To link it:",
-            "",
-            f"1. {open_agent}",
-            f"2. Go to {settings}.",
-            f"3. Select the ServiceNow connection available in {label}, then "
-            "save the agent settings.",
-        ]
-    elif reason == "connection-unhealthy":
-        lines += [
-            "To reconnect it:",
-            "",
-            f"1. {open_agent}",
-            f"2. Go to {settings}.",
-            "3. Reconnect the ServiceNow connection and sign in with your own "
-            "Microsoft Entra account until Copilot Studio shows **Connected**.",
+        lead = (
+            f"A ServiceNow connection already exists in {label}, so you "
+            f"only need to link it to {agent}."
+        )
+        steps = [
+            open_step,
+            "2. Select the connection that shows **Connected** for this "
+            "agent.",
+            "3. If no connection is listed there, choose **Connect > Create "
+            "new connection** and use:",
+            *create_values,
+            "4. Complete the sign-in.",
         ]
     else:
-        if reason == "connection-mismatch":
-            for difference in stage.get("differences") or []:
-                lines.append(
-                    f"- **{difference['item']}:** expected "
-                    f"`{difference['expected']}`, found "
-                    f"`{difference['actual']}`."
-                )
-            lines.append("")
-        lines += [
-            f"To create the connection in {label}:",
-            "",
-            f"1. {open_agent}",
-            "2. Go to **Settings > Connection Settings > ServiceNow > Connect "
-            "> Create new connection**.",
-            "3. Enter these values:",
-            "   - **Authentication type:** Microsoft Entra ID User Login",
-            f"   - **Resource URI:** {values.get('clientId', 'the confirmed client ID')}",
-            f"   - **Instance name:** {values.get('instanceName', 'the confirmed instance')}",
-            "4. Sign in with your own Microsoft Entra account. Creating the "
-            "connection there also selects it for this agent.",
-            "",
-            f"Each environment needs its own connection, so use one created "
-            f"in {label}.",
+        if reason == "connection-unhealthy":
+            lead = (
+                f"The connection in {label} needs to be signed in again or "
+                "replaced."
+            )
+        elif reason == "connection-mismatch":
+            lead = (
+                f"The connection in {label} needs to use the values below. "
+                "Create a new connection that does, then use it for this "
+                "agent."
+            )
+        else:
+            lead = (
+                f"Connections don't travel with the agent when it moves to "
+                f"{label}, so the ServiceNow connection has to be created in "
+                f"{label} itself. Use the same confirmed sign-in values; you "
+                "don't need to repeat the administrator work."
+            )
+        steps = [
+            open_step,
+            "2. Select **Connect > Create new connection** and use:",
+            *create_values,
+            "3. Complete the sign-in.",
+            f"4. Select that connection for {agent} so it shows "
+            "**Connected**.",
         ]
-    lines += [
-        "",
-        "When that's done, reply \"Done\" and we'll recheck this step only. "
-        "Your administrator-confirmed sign-in setup stays in place.",
-    ]
-    return "\n".join(lines)
+    return "\n\n".join(
+        [
+            f"**How to fix the {kind} connection in {label}**",
+            lead,
+            "\n".join(steps),
+            "When it shows **Connected**, reply **Done** and we'll recheck "
+            "this step only.",
+            _REPAIR_SAFETY,
+        ]
+    )
+
+
+def missing_values_steps(missing: list[str] | None) -> str:
+    wanted = ", ".join(missing or []) or "the confirmed sign-in values"
+    return "\n\n".join(
+        [
+            "**How to provide what's missing**",
+            f"These values come from your administrators, not from Copilot "
+            f"Studio: {wanted}. Ask your Microsoft Entra administrator for "
+            "the Application (client) ID and your ServiceNow administrator "
+            "for the instance name, then paste their reply here.",
+            _REPAIR_SAFETY,
+        ]
+    )
+
+
+def _connection_instruction(
+    stage: Mapping[str, Any],
+    label: str,
+    context: Mapping[str, Any],
+    *,
+    untested: bool = False,
+    values: Mapping[str, Any] | None = None,
+) -> str:
+    """Spec pause text first, then the steps to repair the connection."""
+    reason = str(stage.get("reason") or "")
+    pause = connection_pause_text(
+        reason,
+        agent=str(context["agent"]),
+        label=label,
+        kind=str(context["kind"]),
+        differences=stage.get("differences") or [],
+        untested=untested,
+    )
+    return f"{pause}\n\n{connection_repair_steps(reason, label, context, values)}"
+
+
+def _portal_question(context: Mapping[str, Any]) -> str:
+    return (
+        "What is the full HTTPS base URL employees should use for "
+        f"{context['kind']} {context['record']}s?"
+    )
+
+
+def _portal_missing_instruction(
+    runtime: Mapping[str, Any],
+    label: str,
+    context: Mapping[str, Any],
+    request: Mapping[str, Any] | None,
+) -> str:
+    kind = context["kind"]
+    if request and request.get("status") == "requested":
+        return (
+            f"We'll save that URL for the {kind} agent in {label}. The "
+            "shared identity setup stays in place."
+        )
+    if runtime.get("portalReason") in {"missing", "portal-topic-missing"}:
+        finding = (
+            f"The {kind} agent in **{label}** is missing its employee portal "
+            f"URL, so its {context['record']} links may not open correctly."
+        )
+    else:
+        finding = (
+            f"The employee portal URL for the {kind} agent in **{label}** "
+            "isn't set to a valid ServiceNow URL, so its "
+            f"{context['record']} links may not open correctly."
+        )
+    return f"{finding}\n\n{_portal_question(context)}"
+
+
+def _portal_reported_instruction(
+    runtime: Mapping[str, Any],
+    label: str,
+    context: Mapping[str, Any],
+    request: Mapping[str, Any] | None,
+) -> str:
+    if request and request.get("status") == "requested":
+        return _portal_missing_instruction(runtime, label, context, request)
+    return (
+        f"Your {context['kind']} request returned the expected data, but "
+        f"the agent in **{label}** is missing its employee portal URL. We "
+        "need to fix that before this setup can be called complete.\n\n"
+        + _portal_question(context)
+    )
+
+
+def topics_repair_steps(label: str, context: Mapping[str, Any]) -> str:
+    agent = str(context["agent"])
+    return "\n\n".join(
+        [
+            f"**How to fix the {context['kind']} topics in {label}**",
+            f"{label} is a managed environment, so the topics can't be "
+            "edited there. Fix them in Dev, then deploy again:",
+            "\n".join(
+                [
+                    "1. Go back to Dev and turn the topics on: run "
+                    "`/connect servicenow` again.",
+                    "2. Publish the agent in Dev.",
+                    f"3. Deploy (promote) {agent} to {label} again through "
+                    "your own deployment process.",
+                    '4. Reply "Done" and we\'ll recheck this step only.',
+                ]
+            ),
+        ]
+    )
+
+
+def _topics_instruction(
+    runtime: Mapping[str, Any],
+    label: str,
+    context: Mapping[str, Any],
+    *,
+    reported: bool = False,
+) -> str | None:
+    off = [str(name) for name in runtime.get("offTopics") or []]
+    if not off:
+        return None
+    agent = str(context["agent"])
+    product = str(context.get("product") or context["kind"])
+    plural = len(off) > 1
+    topic = (
+        f"required ServiceNow {product} topics are"
+        if plural
+        else f"a required ServiceNow {product} topic is"
+    )
+    if reported:
+        lead = (
+            f"Your {context['kind']} request returned the expected data, "
+            f"but {topic} off in **{agent} in {label}**. We need to fix that "
+            "before this setup can be called complete."
+        )
+    else:
+        lead = (
+            f"{topic[0].upper()}{topic[1:]} off in **{agent} in {label}**, "
+            "so the agent can't complete that request."
+        )
+    return (
+        f"{lead}\n\nWe'll enable the affected built-in "
+        f"{'topics' if plural else 'topic'} and leave unrelated topics "
+        "unchanged."
+    )
 
 
 def _promoted_fix_instruction(
@@ -1723,12 +2142,26 @@ def render_realm_block(
     elif status == "needs-maker":
         connection = ("⏳", "Waiting for the missing sign-in details")
         instruction = str(connections.get("message") or "")
+        if connections.get("reason") == "expected-values-missing":
+            instruction = (
+                f"{instruction}\n\n"
+                f"{missing_values_steps(connections.get('missing'))}"
+            )
     elif status == "blocked":
         connection = ("❌", "Needs attention")
         instruction = _connection_instruction(
-            connections, target.get("expected", {}), label, context
+            connections,
+            label,
+            context,
+            untested=bool(
+                validation.get("status") == "untested"
+                and validation.get("blockedBy")
+            ),
+            values=(target.get("expected") or {}).get("values"),
         )
 
+    reported = validation.get("status") == "reported"
+    repairs = target.get("repairs") or {}
     if status == "done":
         items = runtime.get("items") or []
         statuses = [entry.get("status") for entry in items]
@@ -1739,29 +2172,29 @@ def render_realm_block(
             portal = ("✅", "Set")
         elif statuses and not topics_ok:
             topics = ("❌", "Needs attention")
-            off = [str(name) for name in runtime.get("offTopics") or []]
-            if off:
-                finding = (
-                    f"these ServiceNow topics aren't turned on in {label}: "
-                    + ", ".join(f"`{name}`" for name in off)
-                    + f". {agent} can't complete those requests yet."
+            instruction = _topics_instruction(
+                runtime, label, context, reported=reported
+            )
+            if instruction is not None:
+                instruction = (
+                    f"{instruction}\n\n{topics_repair_steps(label, context)}"
                 )
-            else:
-                finding = (
+            if instruction is None:
+                instruction = _promoted_fix_instruction(
                     f"no ServiceNow topics were found in {label}, so {agent} "
-                    "can't complete the request yet."
+                    "can't complete the request yet.",
+                    "the topics",
+                    label,
+                    agent,
                 )
-            instruction = _promoted_fix_instruction(finding, "the topics", label, agent)
         elif statuses and not portal_ok:
             topics = ("✅", "Required topics are turned on")
             portal = ("❌", "Needs attention")
-            instruction = _promoted_fix_instruction(
-                f"the employee portal URL isn't set to a valid ServiceNow URL "
-                f"in {label}, so {context['record']} links from {agent} may "
-                "not open correctly.",
-                "the portal URL",
-                label,
-                agent,
+            build = (
+                _portal_reported_instruction if reported else _portal_missing_instruction
+            )
+            instruction = build(
+                runtime, label, context, repairs.get("portalUrl")
             )
 
     if status == "done" and runtime.get("status") == "done":
@@ -1775,6 +2208,13 @@ def render_realm_block(
         elif result == "needs-maker":
             real_data = ("⏳", "Waiting for you")
             instruction = _test_pane_request(label, context)
+    elif status == "blocked" and validation.get("status") == "untested":
+        real_data = ("⏳", "Untested; your progress is saved")
+    elif reported:
+        real_data = ("⏳", "Returned the expected data; setup isn't complete yet")
+
+    if target.get("instancePause"):
+        instruction = instance_pause_text()
 
     rows = [
         ("Permission to configure this agent", permission),
@@ -1784,7 +2224,19 @@ def render_realm_block(
         ("Portal URL", portal),
         ("Real-data test in the Test pane", real_data),
     ]
-    lines = [
+    lines = []
+    if context.get("resume"):
+        lines += [
+            f"We're continuing ServiceNow validation for **{agent} in "
+            f"{label}**.",
+            "",
+            "We're rechecking your permission and the affected destination "
+            "setup before we continue. If those checks find no blocking "
+            "issue, the outstanding step is your real-data request in this "
+            "agent's Test pane.",
+            "",
+        ]
+    lines += [
         f"**ServiceNow validation: {agent} in {label}**",
         "",
         ADMIN_EXPLANATIONS[case].format(label=label),
@@ -1811,8 +2263,16 @@ def realm_status(
                 key: recorded["identity"][key]
                 for key in ("environmentId", "agentId", "agentSchemaName")
             }
+            if recorded["identity"].get("agentDisplayName"):
+                targets[realm]["identity"]["agentDisplayName"] = recorded[
+                    "identity"
+                ]["agentDisplayName"]
             targets[realm]["expected"] = expected_summary(recorded["expected"])
             targets[realm]["adminCase"] = admin_case(recorded)
+            if recorded.get("repairs"):
+                targets[realm]["repairs"] = dict(recorded["repairs"])
+            if recorded.get("instancePause"):
+                targets[realm]["instancePause"] = dict(recorded["instancePause"])
             if admin_case(recorded) == ADMIN_CASE_INDEPENDENT:
                 targets[realm]["adminPending"] = independent_pending(recorded)
     phases: list[dict[str, Any]] = []

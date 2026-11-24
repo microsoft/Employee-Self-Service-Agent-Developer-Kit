@@ -53,6 +53,7 @@ ACTIVE_CONFIG = Path(".local/config.json")
 SOLUTION_ROOT = Path(__file__).resolve().parents[1]
 CONNECTOR_ID = "/providers/Microsoft.PowerApps/apis/shared_service-now"
 CONNECTOR_NAME = "shared_service-now"
+SERVICENOW_CONNECTOR_CLIENT_ID = "c26b24aa-7874-4e06-ad55-7d06b1f79b63"
 CONNECTIVITY_API_VERSION = "1"
 CONNECTIVITY_READ_TIMEOUT_SECONDS = 60
 SETUP_SCHEMA_VERSION = 4
@@ -463,7 +464,7 @@ def maker_portal_links(
         },
         "copilotStudioAgent": {
             "label": (
-                f"Open {ACTIVE_PROFILE.agent_display_name} in Copilot Studio"
+                f"Open {_spec_agent_name()} in Copilot Studio"
             ),
             "url": (
                 f"{origins['copilotStudio']}/environments/{environment_id}/"
@@ -945,10 +946,11 @@ def adapt_question_to_ask_user(
             "A canonical question without options must allow freeform input."
         )
 
+    # The card title is the question itself. The explanation (`question`) is
+    # sent as the agent's chat response, never repeated inside the card.
     field: dict[str, Any] = {
         "type": "string",
         "title": "Selection" if normalized_options else "Input",
-        "description": body,
     }
     if normalized_options:
         field["oneOf"] = normalized_options
@@ -987,32 +989,30 @@ def _identity_direct_questions(
     if stage == "entra":
         canonical = [
             _native_question(
-                header="Application client ID",
+                header="What did your Entra administrator reply?",
                 question=(
-                    "Paste your Entra administrator's non-sensitive reply, or "
-                    "enter the Application (client) ID GUID they confirmed "
-                    "from the app registration Overview page for this exact "
-                    "target. If their reply names the claim ServiceNow should "
-                    "use, or says the standard email claim applies, we'll "
-                    "use that; otherwise we'll ask for the claim name next."
+                    "Paste your Entra administrator's non-sensitive reply, "
+                    "including the Application (client) ID. If it names the "
+                    "claim ServiceNow should use, or says the standard email "
+                    "claim applies, we'll use that; otherwise we'll ask for "
+                    "the claim name next."
                 ),
                 allow_freeform_input=True,
             ),
         ]
         if captured_client_id is not None:
-            recorded_client_id = normalize_client_id(captured_client_id)
+            normalize_client_id(captured_client_id)
             canonical = [
                 _native_question(
-                    header="Entra claim name",
+                    header="Which claim name did your Entra administrator confirm?",
                     question=(
-                        f"We have the Client ID `{recorded_client_id}`. "
-                        "Next, we need the **exact claim name** your Entra "
-                        "administrator configured for ServiceNow to use "
-                        "(`email`, `upn`, or a custom claim name).\n\n"
+                        "We have the Client ID. Next, we need the exact "
+                        "claim name your Entra administrator configured for "
+                        "ServiceNow to use (`email`, `upn`, or a custom "
+                        "claim name).\n\n"
                         "Ask your Entra administrator for that name, or paste "
                         "the rest of their non-sensitive reply. You don't "
-                        "need to resend the Client ID. Enter a claim name "
-                        "only; do not enter `aud` or a personal claim value."
+                        "need to resend the Client ID."
                     ),
                     allow_freeform_input=True,
                 )
@@ -1026,12 +1026,10 @@ def _identity_direct_questions(
         if captured_user_field is None:
             canonical = [
                 _native_question(
-                    header="ServiceNow internal user field",
+                    header="Which User Field did your administrator select?",
                     question=(
-                        "Enter the exact internal `sys_user` field that stores "
-                        "the same identity key as the locked Entra-confirmed "
-                        f"User Claim `{confirmed_claim_name}`. Do not enter a "
-                        "display label or employee value."
+                        "Ask your administrator which **User Field** they "
+                        "selected. Send that value on its own."
                     ),
                     allow_freeform_input=True,
                 )
@@ -1135,23 +1133,14 @@ def _identity_handoff_lead_in(stage: str) -> str:
             "administrator to prepare ServiceNow sign-in.\n\n"
             "When they reply, paste their response here without secrets. "
             "We'll use it to prepare the ServiceNow handoff; you don't need "
-            "to interpret the settings.\n\n"
-            "If your ServiceNow administrator identifies employees by "
-            "something other than email or UPN, such as a payroll ID, the "
-            "custom-claim part of the message applies. Ask your Entra "
-            "administrator to coordinate with them first, to confirm the "
-            "exact claim name, its format, and that its source attribute is "
-            "populated for every intended employee, and to say whether an "
-            "existing setup was reused and whether the setup is complete. "
-            "You don't need to choose the identifier or send anyone's "
-            "payroll ID."
+            "to interpret the settings."
         )
     return (
         "We have the Entra values. Send this message to your ServiceNow "
         "administrator to set up employee matching.\n\n"
         "It includes the values already supplied. When they reply, paste "
-        "their saved-configuration confirmation, **User Field**, and "
-        "same-value confirmation here without secrets."
+        "their saved-configuration confirmation, **User Claim**, and "
+        "**User Field** here without secrets."
     )
 
 
@@ -1209,6 +1198,7 @@ def identity_direct_handoff(
     stage: str,
     captured_client_id: str | None = None,
     captured_user_field: str | None = None,
+    custom_identifier: bool = False,
 ) -> dict[str, Any]:
     if stage not in {"entra", "servicenow"}:
         raise ServiceNowConnectError(
@@ -1280,11 +1270,8 @@ def identity_direct_handoff(
                 "askUserArguments": adapt_question_to_ask_user(question)[
                     "askUserArguments"
                 ],
-                "unavailableReply": (
-                    f"Please involve your {group['role']} for "
-                    f"{group['label']}, then answer the same question again."
-                    "\n\nNo business group, lifecycle phase, evidence, "
-                    "attestation, or accepted contract revision has advanced."
+                "unavailableReply": _availability_unavailable_reply(
+                    context, group
                 ),
             },
             "questions": [],
@@ -1344,6 +1331,92 @@ def identity_direct_handoff(
             "current target. It does not prove a real token, authentication, "
             "permission, Active-user match, or business result."
         )
+    existing_kind = _existing_identity_kind(state)
+    packet_text = source_text
+    lead_in = _identity_handoff_lead_in(stage)
+    if existing_kind:
+        instance_for_packet = normalize_instance_name(
+            expected_identity["instanceName"]
+        )
+        if stage == "entra":
+            packet_text = _existing_entra_packet(
+                context, existing_kind, instance_for_packet
+            )
+        else:
+            packet_text = _existing_servicenow_packet(
+                context,
+                existing_kind,
+                instance_name=instance_for_packet,
+                client_id=client_id,
+                tenant_id=_normalize_directory_tenant_id(
+                    expected_identity["tenantId"]
+                ),
+                claim_name=claim_name,
+            )
+        lead_in = _existing_identity_lead_in(
+            stage,
+            existing_kind,
+            claim_name=claim_name if stage == "servicenow" else None,
+        )
+    elif _custom_identifier_active(state, requested=custom_identifier):
+        instance_for_packet = normalize_instance_name(
+            expected_identity["instanceName"]
+        )
+        if stage == "entra":
+            packet_text = _custom_identifier_entra_packet(instance_for_packet)
+        else:
+            packet_text = _custom_identifier_servicenow_packet(
+                instance_name=instance_for_packet,
+                client_id=client_id,
+                tenant_id=_normalize_directory_tenant_id(
+                    expected_identity["tenantId"]
+                ),
+                claim_name=claim_name,
+            )
+        lead_in = _custom_identifier_lead_in(
+            stage,
+            claim_name=claim_name if stage == "servicenow" else None,
+        )
+        if custom_identifier:
+            _record_custom_identifier(context, state)
+    elif second_agent := _second_agent_reuse(context, state):
+        instance_for_packet = normalize_instance_name(
+            expected_identity["instanceName"]
+        )
+        if stage == "entra":
+            packet_text = _second_agent_entra_packet(
+                context, second_agent, instance_for_packet
+            )
+            lead_in = _second_agent_entra_lead_in(second_agent)
+        else:
+            packet_text = _second_agent_servicenow_packet(
+                context,
+                second_agent,
+                instance_name=instance_for_packet,
+                client_id=client_id,
+                tenant_id=_normalize_directory_tenant_id(
+                    expected_identity["tenantId"]
+                ),
+                claim_name=claim_name,
+            )
+            lead_in = _second_agent_servicenow_lead_in(
+                second_agent, claim_name
+            )
+    else:
+        instance_for_packet = normalize_instance_name(
+            expected_identity["instanceName"]
+        )
+        if stage == "entra":
+            packet_text = _first_agent_entra_packet(instance_for_packet)
+        else:
+            packet_text = _first_agent_servicenow_packet(
+                instance_name=instance_for_packet,
+                client_id=client_id,
+                tenant_id=_normalize_directory_tenant_id(
+                    expected_identity["tenantId"]
+                ),
+                claim_name=claim_name,
+            )
     target_text = (
         f"Target agent: `{_agent_slug(context)}` "
         f"(`{context['agent']['id']}`)\n"
@@ -1365,21 +1438,23 @@ def identity_direct_handoff(
             if captured_client_id is not None
             else {
                 "kind": "ordinary-agent-response",
-                "text": (
-                    f"I recorded the User Field "
-                    f"`{str(captured_user_field).strip()}`. I still need your "
-                    "ServiceNow administrator's confirmation that the "
-                    "configuration is saved and that this field holds exactly "
-                    f"the same value as the User Claim `{claim_name}`. You "
-                    "don't need to send the field again."
+                "text": _existing_identity_message(
+                    context, state, existing_kind, "servicenow-incomplete"
+                )[0]
+                if existing_kind
+                else (
+                    "Thanks—please ask your ServiceNow administrator to "
+                    "confirm that the configuration is saved and name both "
+                    "the **User Claim** and **User Field**.\n\n"
+                    "That will clarify which settings use "
+                    f"`{claim_name}` to identify the signed-in employee."
                 ),
             }
             if captured_user_field is not None
             else {
                 "kind": "ordinary-agent-response",
                 "text": (
-                    f"{_identity_handoff_lead_in(stage)}\n\n"
-                    f"{_ready_to_send_block(source_text)}"
+                    f"{lead_in}\n\n{_ready_to_send_block(packet_text)}"
                 ),
             }
         ),
@@ -3250,7 +3325,7 @@ def _prepared_agent_result(choice: dict[str, Any]) -> dict[str, Any]:
 
 def _agent_link_question() -> dict[str, Any]:
     return {
-        "header": "Use another agent",
+        "header": "What is the Copilot Studio link for the agent?",
         "question": (
             "Paste the full Copilot Studio link for the existing agent you "
             "want to use."
@@ -3330,8 +3405,20 @@ def _resolve_explicit_agent_link(
     prepared_choices: list[dict[str, Any]],
     incomplete_agents: list[dict[str, Any]],
     unsupported_agents: list[dict[str, Any]] | None = None,
+    promoted_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     target = _resolve_link_target(agent_link, "", "")
+    link_agent_id = str(target["agentId"]).casefold()
+    promoted_link = _promoted_agent_result(
+        [
+            record
+            for record in promoted_records or []
+            if record["agentId"].casefold() == link_agent_id
+        ],
+        "promoted-link",
+    )
+    if promoted_link is not None:
+        return promoted_link
     workspace_environment = str(environment.get("id") or "")
     if str(target["environmentId"]).casefold() != workspace_environment.casefold():
         return {
@@ -3427,15 +3514,346 @@ def _unprepared_workspace_handoff(agent_link: str | None) -> dict[str, Any]:
     }
 
 
+def _chooser_option_labels(choices: list[dict[str, Any]]) -> list[str]:
+    """Return display labels; IDs and slugs are never shown to the maker."""
+    labels = [str(choice["name"]) for choice in choices]
+    totals = {label: labels.count(label) for label in labels}
+    # Only agents sharing a display name get a differentiator.
+    labels = [
+        label
+        if totals[label] == 1
+        else f"{label} — {choice['product']}"
+        for label, choice in zip(labels, choices)
+    ]
+    totals = {label: labels.count(label) for label in labels}
+    seen: dict[str, int] = {}
+    unique: list[str] = []
+    for label in labels:
+        if totals[label] == 1:
+            unique.append(label)
+            continue
+        # Same name and product: only an ordinal can tell them apart.
+        seen[label] = seen.get(label, 0) + 1
+        unique.append(f"{label} ({seen[label]})")
+    return unique
+
+
+_AGENT_NAME_FILLER = frozenset(
+    {"the", "my", "our", "agent", "employee", "self", "service", "ess"}
+)
+
+
+def _normalize_agent_name(name: str) -> str:
+    """Reduce a typed or display agent name to its distinguishing words."""
+    words = re.findall(r"[a-z0-9]+", name.casefold())
+    return " ".join(word for word in words if word not in _AGENT_NAME_FILLER)
+
+
+_PRODUCT_WORD_PROFILE = {"hr": "hrsd", "it": "itsm"}
+
+# Words a maker may wrap around "HR" or "IT" in a request such as "Connect
+# ServiceNow for my HR agent". Any other word could be an unknown agent name.
+_REQUEST_FILLER = frozenset(
+    {
+        "connect", "servicenow", "now", "for", "to", "with", "and", "a", "an",
+        "i", "me", "we", "want", "need", "please", "help", "set", "up", "setup",
+        "add", "use", "integrate", "integration", "link", "hook", "on", "of",
+        "can", "you", "let", "s", "lets", "start", "begin", "do", "go", "ahead",
+    }
+)
+
+
+def _only_product_words(text: str) -> bool:
+    words = [
+        word
+        for word in _normalize_agent_name(text).split()
+        if word not in _REQUEST_FILLER
+    ]
+    return len(words) > 1 and all(word in _PRODUCT_WORD_PROFILE for word in words)
+
+
+def _product_word_in_request(text: str) -> str | None:
+    """Return "hr" or "it" when a request only wraps one product word.
+
+    A request that also contains another word (an unknown agent name such as
+    "Benefits") is never read as an HR or IT request.
+    """
+    words = [
+        word
+        for word in _normalize_agent_name(text).split()
+        if word not in _REQUEST_FILLER
+    ]
+    if len(words) == 1 and words[0] in _PRODUCT_WORD_PROFILE:
+        # "it" in a longer sentence is a pronoun unless it is written "IT".
+        if words[0] == "it" and not re.search(r"\bIT\b", text):
+            return None
+        return words[0]
+    return None
+
+_DESTINATION_WORDS = {"test": "test", "prod": "prod", "production": "prod"}
+_DESTINATION_PHRASE = re.compile(
+    r"\b(?:(?:in|on|for|from|to|into|at)\s+)?(?:the\s+)?"
+    r"(test|prod|production)\b(?:\s+(?:environment|env|realm|version|copy))?",
+    re.IGNORECASE,
+)
+_DESTINATION_MARKED = re.compile(
+    r"\b(?:in|on|for|from|to|into|at)\s+(?:the\s+)?(test|prod|production)\b"
+    r"|\b(test|prod|production)\s+(?:environment|env|realm|version|copy)\b",
+    re.IGNORECASE,
+)
+
+
+def _split_destination(agent_name: str) -> tuple[str | None, str]:
+    """Separate a typed destination ("in Prod") from the agent words.
+
+    A realm word that follows a preposition or precedes "environment" names the
+    destination; a bare "test" in "test the IT agent in Prod" is a verb.
+    """
+    marked = {
+        _DESTINATION_WORDS[(match.group(1) or match.group(2)).casefold()]
+        for match in _DESTINATION_MARKED.finditer(agent_name)
+    }
+    if len(marked) == 1:
+        found = marked
+    else:
+        found = {
+            _DESTINATION_WORDS[match.group(1).casefold()]
+            for match in _DESTINATION_PHRASE.finditer(agent_name)
+        }
+    if len(found) != 1:
+        return None, agent_name
+    return next(iter(found)), _DESTINATION_PHRASE.sub(" ", agent_name).strip()
+
+
+def _product_word_in_sentence(text: str) -> str | None:
+    """Return "HR" or "IT" when a sentence names exactly one of them.
+
+    "IT" counts only in capitals so the pronoun "it" is never read as an agent.
+    """
+    hr = bool(re.search(r"\bHR\b", text, re.IGNORECASE))
+    it = bool(re.search(r"\bIT\b", text))
+    if hr == it:
+        return None
+    return "HR" if hr else "IT"
+
+
+def _promoted_agent_records(
+    root: Path,
+    prepared_choices: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """List promoted agents recorded for the prepared Dev agents.
+
+    Only identities verified by realm discovery are recorded, so they are the
+    sole source for recognizing a promoted agent whose name differs.
+    """
+    records: list[dict[str, Any]] = []
+    for choice in prepared_choices:
+        try:
+            registry = realms.load_registry(
+                root,
+                str(choice["provider"]),
+                str(choice["slug"]),
+            )
+        except realms.ServiceNowRealmError:
+            continue
+        for realm, target in (registry.get("targets") or {}).items():
+            identity = target.get("identity") if isinstance(target, dict) else None
+            if not isinstance(identity, dict):
+                continue
+            records.append(
+                {
+                    "choice": choice,
+                    "realm": str(realm),
+                    "agentId": str(identity.get("agentId") or ""),
+                    "name": str(identity.get("agentDisplayName") or ""),
+                }
+            )
+    return records
+
+
+def _promoted_agent_result(
+    matches: list[dict[str, Any]],
+    resolved_by: str,
+) -> dict[str, Any] | None:
+    """Return the owning Dev agent only when exactly one agent matches."""
+    owners = {str(match["choice"]["id"]) for match in matches}
+    if len(owners) != 1:
+        return None
+    result = _prepared_agent_result(matches[0]["choice"])
+    result["resolvedBy"] = resolved_by
+    realm_names = {match["realm"] for match in matches}
+    if len(realm_names) == 1:
+        result["realmHint"] = next(iter(realm_names))
+    return result
+
+
+def _product_not_prepared_result(product_word: str) -> dict[str, Any]:
+    """Ask for the link of the named product's agent when none is prepared."""
+    label = f"ESS {product_word.upper()}"
+    return {
+        "schemaVersion": "servicenow.agent-chooser.v1",
+        "status": "agent-link-required",
+        "branch": "requested-product-not-prepared",
+        "requestedProduct": product_word.upper(),
+        "question": {
+            "header": f"I can't find a prepared {label} agent in this workspace.",
+            "question": (
+                f"Paste the link to your {label} agent and I'll set it up "
+                "first, or tell me if you want to prepare one first."
+            ),
+            "options": [],
+            "allowFreeformInput": True,
+        },
+        "afterReply": (
+            "When the maker replies: if they paste a Copilot Studio link, run "
+            'agent-chooser --selection-key "another-agent" --agent-link '
+            f'"{{LINK}}" and follow its result. If they want to prepare the '
+            f"agent first, send exactly: Prepare your {label} agent with "
+            "/setup, then ask me to connect ServiceNow again. Then end the "
+            f"turn. Stay on {label}: never offer or select the other "
+            "product's agent."
+        ),
+        "stateChanged": False,
+    }
+
+
+def _agent_name_result(
+    agent_name: str,
+    prepared_choices: list[dict[str, Any]],
+    incomplete_agents: list[dict[str, Any]],
+    unsupported_agents: list[dict[str, Any]],
+    promoted_records: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """Resolve an agent the maker named in chat; None means use the chooser.
+
+    A destination typed with the name ("the IT agent in Prod") is split off and
+    returned as `realmHint`; the promoted agent itself is then found by realm
+    discovery from the Dev agent, never by asking the maker for a link.
+    """
+    destination, agent_words = _split_destination(agent_name)
+    if destination is None:
+        return _agent_name_core(
+            agent_name,
+            prepared_choices,
+            incomplete_agents,
+            unsupported_agents,
+            promoted_records,
+            allow_unsupported=True,
+        )
+    sentence_product = _product_word_in_sentence(agent_words)
+    candidates = [agent_name, agent_words]
+    if sentence_product is not None:
+        candidates.append(sentence_product)
+    for words in candidates:
+        named = _agent_name_core(
+            words,
+            prepared_choices,
+            incomplete_agents,
+            unsupported_agents,
+            promoted_records,
+            allow_unsupported=False,
+        )
+        if named is not None:
+            if named.get("status") == "ready":
+                named.setdefault("realmHint", destination)
+                named["nextStep"] = (
+                    "Run discover-realm-target --realm "
+                    f"{named['realmHint']} for this agent now; it finds the "
+                    "promoted agent and its link by itself. Do not ask the "
+                    "maker for a link or write your own question."
+                )
+            return named
+    return None
+
+
+def _agent_name_core(
+    agent_name: str,
+    prepared_choices: list[dict[str, Any]],
+    incomplete_agents: list[dict[str, Any]],
+    unsupported_agents: list[dict[str, Any]],
+    promoted_records: list[dict[str, Any]] | None = None,
+    *,
+    allow_unsupported: bool,
+) -> dict[str, Any] | None:
+    wanted = _normalize_agent_name(agent_name)
+    if not wanted:
+        return None
+    prepared = [
+        choice
+        for choice in prepared_choices
+        if _normalize_agent_name(str(choice["name"])) == wanted
+    ]
+    if len(prepared) == 1:
+        return _prepared_agent_result(prepared[0])
+    if prepared:
+        return None
+    promoted = [
+        record
+        for record in promoted_records or []
+        if record["name"] and _normalize_agent_name(record["name"]) == wanted
+    ]
+    if promoted:
+        return _promoted_agent_result(promoted, "promoted-name")
+    unfinished = [
+        agent
+        for agent in incomplete_agents
+        if _normalize_agent_name(str(agent["name"])) == wanted
+    ]
+    if len(unfinished) == 1:
+        return _setup_incomplete_result(unfinished[0])
+    if unfinished:
+        return None
+    unsupported = [
+        agent
+        for agent in unsupported_agents
+        if _normalize_agent_name(str(agent["name"])) == wanted
+    ]
+    if unsupported:
+        return _unsupported_agent_result(unsupported[0])
+    product_word = (
+        wanted
+        if wanted in _PRODUCT_WORD_PROFILE
+        else _product_word_in_request(agent_name)
+    )
+    if product_word is not None:
+        by_product = [
+            choice
+            for choice in prepared_choices
+            if choice["profile"] == _PRODUCT_WORD_PROFILE[product_word]
+        ]
+        if len(by_product) == 1:
+            result = _prepared_agent_result(by_product[0])
+            result["resolvedBy"] = "product"
+            return result
+        if not by_product:
+            # The named product is never swapped for the other one.
+            return _product_not_prepared_result(product_word)
+        # Several prepared agents of that kind: ask, never guess.
+        return None
+    if not allow_unsupported:
+        return None
+    if _only_product_words(agent_name):
+        # "HR and IT" names both supported agents: ask which one.
+        return None
+    return _unsupported_agent_result({"id": None, "name": agent_name.strip()})
+
+
 def agent_chooser_handoff(
     root: Path = Path("."),
     *,
     selection_key: str | None = None,
     agent_link: str | None = None,
+    agent_name: str | None = None,
 ) -> dict[str, Any]:
     if agent_link is not None and selection_key not in (None, "another-agent"):
         raise ServiceNowConnectError(
             "An agent link can be supplied only for Use another agent."
+        )
+    if agent_name is not None and (
+        agent_link is not None or selection_key is not None
+    ):
+        raise ServiceNowConnectError(
+            "An agent name cannot be combined with an agent link or selection."
         )
     if _workspace_not_prepared(root):
         return _unprepared_workspace_handoff(agent_link)
@@ -3449,8 +3867,31 @@ def agent_chooser_handoff(
             prepared_choices=prepared_choices,
             incomplete_agents=incomplete_agents,
             unsupported_agents=unsupported_agents,
+            promoted_records=_promoted_agent_records(root, prepared_choices),
         )
+    if agent_name is not None:
+        named = _agent_name_result(
+            agent_name,
+            prepared_choices,
+            incomplete_agents,
+            unsupported_agents,
+            _promoted_agent_records(root, prepared_choices),
+        )
+        if named is not None:
+            return named
+        return _agent_candidate_result(environment, prepared_choices, 0)
     if selection_key is not None:
+        if selection_key.startswith("next-agent:"):
+            raw_index = selection_key.split(":", 1)[1]
+            if not raw_index.isdigit():
+                raise ServiceNowConnectError(
+                    "The agent selection is invalid. Choose again."
+                )
+            return _agent_candidate_result(
+                environment,
+                prepared_choices,
+                int(raw_index),
+            )
         if selection_key == "another-agent":
             return {
                 "schemaVersion": "servicenow.agent-chooser.v1",
@@ -3484,30 +3925,33 @@ def agent_chooser_handoff(
             )
         return _prepared_agent_result(prepared)
 
-    options = [
-        {
-            "label": f"{choice['name']} — {choice['product']}",
-            "selectionKey": f"prepared:{choice['id']}",
+    return _agent_candidate_result(environment, prepared_choices, 0)
+
+
+def _agent_candidate_result(
+    environment: dict[str, Any],
+    prepared_choices: list[dict[str, Any]],
+    index: int,
+) -> dict[str, Any]:
+    """Ask Yes/No about one prepared agent; No moves to the next candidate.
+
+    After the last candidate (or with none prepared) the typed agent-link
+    question is returned instead of a card.
+    """
+    if index >= len(prepared_choices):
+        return {
+            "schemaVersion": "servicenow.agent-chooser.v1",
+            "status": "agent-link-required",
+            "branch": "explicit-agent-link",
+            "question": _agent_link_question(),
+            "stateChanged": False,
         }
-        for choice in prepared_choices
-    ]
-    options.append(
-        {
-            "label": "Use another agent (paste link)",
-            "selectionKey": "another-agent",
-        }
-    )
-    question_text = (
-        "Which Employee Self-Service HR or IT agent should we connect to "
-        "ServiceNow?\n\nThe listed agents are prepared in this workspace. "
-        "This is not a list of every agent in the environment."
-        if prepared_choices
-        else (
-            "Which Employee Self-Service HR or IT agent should we connect to "
-            "ServiceNow?\n\nNo Employee Self-Service agents are prepared in "
-            "this workspace. Use another agent by pasting its Copilot Studio "
-            "link."
-        )
+    labels = _chooser_option_labels(prepared_choices)
+    choice = prepared_choices[index]
+    no_key = (
+        f"next-agent:{index + 1}"
+        if index + 1 < len(prepared_choices)
+        else "another-agent"
     )
     return {
         "schemaVersion": "servicenow.agent-chooser.v1",
@@ -3515,10 +3959,21 @@ def agent_chooser_handoff(
         "branch": "choose-agent",
         "environmentId": environment.get("id"),
         "agents": prepared_choices,
+        "candidateIndex": index,
+        "candidateCount": len(prepared_choices),
         "question": {
-            "header": "Choose agent",
-            "question": question_text,
-            "options": options,
+            "header": f"Connect {labels[index]} to ServiceNow?",
+            "question": (
+                "This agent is prepared in this workspace. This is not a "
+                "list of every agent in the environment."
+            ),
+            "options": [
+                {
+                    "label": "Yes",
+                    "selectionKey": f"prepared:{choice['id']}",
+                },
+                {"label": "No", "selectionKey": no_key},
+            ],
             "allowFreeformInput": False,
         },
         "stateChanged": False,
@@ -3666,6 +4121,7 @@ def load_context(
     pinned_account = _recorded_maker_account(context)
     context["accountPin"] = pinned_account
     context["account"] = explicit_account or pinned_account or preferred_account
+    _remember_agent_name(context)
     return context
 
 
@@ -3808,7 +4264,7 @@ def summarize_components(components: dict[str, Any]) -> dict[str, Any]:
             "key": ACTIVE_PROFILE.key,
             "provider": ACTIVE_PROFILE.provider_key,
             "productName": ACTIVE_PROFILE.product_name,
-            "agentDisplayName": ACTIVE_PROFILE.agent_display_name,
+            "agentDisplayName": _spec_agent_name(),
             "testPrompt": ACTIVE_PROFILE.test_prompt,
         },
         "botComponentCount": len(components.get("botComponentChanges") or []),
@@ -5915,7 +6371,20 @@ def record_preflight_instance(
         "status": "pending"
     }
     _write_lifecycle_state(context, state)
-    return copy.deepcopy(preflight)
+    recorded = copy.deepcopy(preflight)
+    discovery = recorded.get("discovery")
+    if isinstance(discovery, dict):
+        # The instance is recorded now; returning the saved question would
+        # make the output ask it again and end the turn.
+        discovery["instanceInputRequired"] = False
+        for stale in (
+            "instanceQuestion",
+            "manualInstanceQuestion",
+            "instanceChoices",
+            "instanceFollowUps",
+        ):
+            discovery.pop(stale, None)
+    return recorded
 
 
 def _discovered_instance_candidates(
@@ -5945,62 +6414,89 @@ def _preflight_instance_question(
     dict[str, str],
     dict[str, Any],
 ]:
-    agent_label = (
-        f"{ACTIVE_PROFILE.agent_display_name} (`{_agent_slug(context)}`)"
-    )
-    environment_id = context["environment"]["id"]
-    realm = str(context["agent"].get("realm") or "dev").title()
+    agent_label = _spec_agent_name()
     error_text = ""
     if discovery_error is not None:
         error_text = (
-            "\n\nAutomatic connection discovery failed: "
-            f"{discovery_error['message']}. This is not an empty inventory. "
-            "You can still provide the intended public ServiceNow URL; later "
-            "credential verification must succeed."
+            "\n\nWe couldn't check your existing connections automatically. "
+            "You can still send the public ServiceNow address; we'll verify "
+            "it when the connection is created."
         )
     manual_question = {
-        "header": "ServiceNow instance URL",
+        "header": f"Which ServiceNow instance should {agent_label} use?",
         "question": (
-            f"For {agent_label} in environment `{environment_id}` and "
-            f"{realm} realm, which ServiceNow instance should Employee "
-            "Self-Service use? Send its public HTTPS root URL, not "
-            "credentials.\n\nExample: `https://<your-instance>.service-now.com`\n\n"
-            "Use only the instance root (`https://<instance>.service-now.com`). "
-            "Do not enter a portal or module path such as `/sp`, `/esc`, or "
-            "`/now/...`. Do not enter a username, password, credential, token, "
-            "secret, or certificate. If you do not know the URL, ask your "
-            f"ServiceNow administrator for the public instance root.{error_text}"
+            "Send its public HTTPS URL, not credentials.\n\n"
+            "Example: `https://<your-instance>.service-now.com`\n\n"
+            "Use only the instance address, without a portal path such as "
+            "`/sp` or `/esc`. If you don't know it, ask your ServiceNow "
+            f"administrator.{error_text}"
         ),
         "allowFreeformInput": True,
     }
     if candidates:
-        choices = {
-            f"Use https://{candidate}.service-now.com": (
-                f"https://{candidate}.service-now.com"
-            )
-            for candidate in candidates
-        }
-        choices["Provide another ServiceNow instance URL"] = "manual"
-        question = {
-            "header": "Confirm ServiceNow instance",
-            "question": (
-                f"We found ServiceNow instance candidate"
-                f"{'s' if len(candidates) != 1 else ''} in existing connection "
-                f"metadata for {agent_label} in environment "
-                f"`{environment_id}` and {realm} realm. Which instance should "
-                "this agent use for the current connection setup?\n\n"
-                "Choose one discovered public root URL below, or choose "
-                "**Provide another ServiceNow instance URL** to enter a "
-                f"different public HTTPS root URL.{error_text}"
-            ),
-            "options": [
-                {"label": label}
-                for label in choices
-            ],
-            "allowFreeformInput": False,
-        }
+        question, choices = _instance_candidate_card(
+            agent_label=agent_label,
+            candidate=candidates[0],
+            error_text=error_text,
+            is_last=len(candidates) == 1,
+        )
         return question, choices, manual_question
     return manual_question, {}, manual_question
+
+
+def _instance_candidate_card(
+    *,
+    agent_label: str,
+    candidate: str,
+    error_text: str,
+    is_last: bool,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Yes/No card for one discovered instance.
+
+    **No** opens the manual question after the last candidate; otherwise it
+    moves to the next follow-up card.
+    """
+    choices = {
+        "Yes": f"https://{candidate}.service-now.com",
+        "No": "manual" if is_last else "next",
+    }
+    question = {
+        "header": (
+            f"Should {agent_label} use the ServiceNow instance {candidate}?"
+        ),
+        "question": (
+            f"We found **{candidate}** in your existing "
+            f"connections.{error_text}"
+        ),
+        "options": [{"label": label} for label in choices],
+        "allowFreeformInput": False,
+    }
+    return question, choices
+
+
+def _instance_follow_up_questions(
+    *,
+    candidates: list[str],
+    discovery_error: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    agent_label = _spec_agent_name()
+    error_text = ""
+    if discovery_error is not None:
+        error_text = (
+            "\n\nWe couldn't check your existing connections automatically. "
+            "You can still send the public ServiceNow address; we'll verify "
+            "it when the connection is created."
+        )
+    follow_ups = []
+    for index, candidate in enumerate(candidates[1:], start=1):
+        question, choices = _instance_candidate_card(
+            agent_label=agent_label,
+            candidate=candidate,
+            error_text=error_text,
+            is_last=index == len(candidates) - 1,
+        )
+        follow_ups.append({"question": question, "choiceValues": choices})
+    return follow_ups
 
 
 def _credential_selection_key(connection_id: str) -> str:
@@ -6029,6 +6525,134 @@ def _connection_matches_expected_credential(
         )
     except ServiceNowConnectError:
         return False
+
+
+_CONNECTION_DIFFERENCE_TEXT = {
+    "signIn": "its sign-in type isn't Microsoft Entra ID User Login",
+    "instance": "its Instance Name isn't the one listed below",
+    "resourceUri": "its Resource URI isn't the one listed below",
+}
+
+
+def _connection_differences(
+    connection: dict[str, Any],
+    *,
+    expected_instance: str | None,
+    expected_client_id: str | None,
+) -> list[str]:
+    """Which required settings a listed connection does not match."""
+    differences: list[str] = []
+    if connection.get("authMode") != AUTH_MODE:
+        differences.append("signIn")
+    values = connection.get("parameterValues")
+    values = values if isinstance(values, dict) else {}
+    try:
+        instance_ok = bool(expected_instance) and normalize_instance_name(
+            str(values.get("token:InstanceName") or values.get("instance"))
+        ) == expected_instance
+    except ServiceNowConnectError:
+        instance_ok = False
+    try:
+        resource_ok = bool(expected_client_id) and normalize_client_id(
+            str(values.get("token:ResourceUri"))
+        ) == expected_client_id
+    except ServiceNowConnectError:
+        resource_ok = False
+    if not instance_ok:
+        differences.append("instance")
+    if not resource_ok:
+        differences.append("resourceUri")
+    return differences
+
+
+def _no_matching_connection_message(
+    connections: list[dict[str, Any]],
+    *,
+    expected_instance: str | None,
+    expected_client_id: str | None,
+) -> tuple[str, dict[str, Any]]:
+    """Plain-language reason no listed connection matches, with details."""
+    expected_lines = (
+        "Use these values:\n"
+        "- **Authentication type:** Microsoft Entra ID User Login\n"
+        f"- **Resource URI:** `{expected_client_id or 'not yet confirmed'}`\n"
+        f"- **Instance name:** `{expected_instance or 'not yet confirmed'}`"
+        "—not the full URL\n"
+    )
+    create_steps = (
+        "In Copilot Studio, open Settings > Connection Settings > "
+        "ServiceNow > Connect > Create new connection. "
+        f"{expected_lines}"
+    )
+    if not connections:
+        return (
+            "We can't see any ServiceNow connection in this environment "
+            f"yet. {create_steps}\nThen tell me again.",
+            {"connectionsSeen": 0, "closestDifferences": []},
+        )
+    closest = min(
+        (
+            _connection_differences(
+                connection,
+                expected_instance=expected_instance,
+                expected_client_id=expected_client_id,
+            )
+            for connection in connections
+        ),
+        key=len,
+    )
+    count = len(connections)
+    seen = (
+        "We can see 1 ServiceNow connection in this environment, but it "
+        "doesn't match this setup"
+        if count == 1
+        else f"We can see {count} ServiceNow connections in this "
+        "environment, but none matches this setup"
+    )
+    reasons = [_CONNECTION_DIFFERENCE_TEXT[item] for item in closest]
+    lead = "The closest one differs because " if count > 1 else "It differs because "
+    reason_text = f"{lead}{' and '.join(reasons)}. " if reasons else ""
+    resource_hint = (
+        "If the Resource URI above isn't the Client ID your Entra "
+        "administrator gave you, send us the correct Client ID from them and "
+        "we'll update this agent's setup. "
+        if "resourceUri" in closest
+        else ""
+    )
+    return (
+        f"{seen}. {reason_text}{create_steps}\nIf you chose an existing "
+        "connection instead, its Resource URI, Instance Name, and sign-in "
+        f"type must match these values. {resource_hint}Then tell me "
+        "again.",
+        {"connectionsSeen": count, "closestDifferences": closest},
+    )
+
+
+def _credential_candidate_questions(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """One Yes/No question per healthy connection, asked in order.
+
+    **No** on a candidate moves to the next one; after the last **No** the
+    maker is asked in plain chat which connection to use.
+    """
+    return [
+        {
+            "selectionKey": candidate["selectionKey"],
+            "question": {
+                "header": f"Use the ServiceNow connection {candidate['label']}?",
+                "question": (
+                    "It already uses Microsoft Entra ID User Login with the "
+                    "required Resource URI and Instance Name. No new "
+                    "connection will be created. Make sure this agent's "
+                    "Connection Settings use the same connection."
+                ),
+                "options": [{"label": "Yes"}, {"label": "No"}],
+                "allowFreeformInput": False,
+            },
+        }
+        for candidate in candidates
+    ]
 
 
 def _credential_resolution(
@@ -6072,6 +6696,19 @@ def _credential_resolution(
             str(connection.get("connectionId") or ""),
         ),
     )
+    candidates = [
+        {
+            "selectionKey": _credential_selection_key(
+                str(connection["connectionId"])
+            ),
+            "label": (
+                f"{connection.get('displayName') or 'ServiceNow connection'} "
+                f"(Connected, option {index})"
+            ),
+        }
+        for index, connection in enumerate(healthy, start=1)
+        if connection.get("connectionId")
+    ]
     return {
         "expected": {
             "authMode": AUTH_MODE,
@@ -6080,19 +6717,7 @@ def _credential_resolution(
         },
         "healthyExactCount": len(healthy),
         "unhealthyExactCount": len(unhealthy),
-        "healthyExactCandidates": [
-            {
-                "selectionKey": _credential_selection_key(
-                    str(connection["connectionId"])
-                ),
-                "label": (
-                    f"{connection.get('displayName') or 'ServiceNow connection'} "
-                    f"(Connected, option {index})"
-                ),
-            }
-            for index, connection in enumerate(healthy, start=1)
-            if connection.get("connectionId")
-        ],
+        "healthyExactCandidates": candidates,
     }
 
 
@@ -6422,70 +7047,47 @@ def portal_value_reuse_handoff(
             "candidates": [],
         }
     if source_key is None and len(candidates) > 1:
-        choices = [
-            {
-                "label": (
-                    f"Use {candidate['portalUrl']} "
-                    f"({len(candidate['sources'])} saved source"
-                    f"{'s' if len(candidate['sources']) != 1 else ''})"
-                ),
-                "sourceKey": candidate["sourceKey"],
-            }
+        # No picker: ask Yes/No about the first candidate; **No** moves to
+        # `nextSourceKey` and only the last **No** records the decline.
+        source_key = candidates[0]["sourceKey"]
+    selected = next(
+        (
+            candidate
             for candidate in candidates
-        ]
-        return {
-            "schemaVersion": "servicenow.portal-value-reuse.v1",
-            "decision": "source-selection-required",
-            "candidates": copy.deepcopy(candidates),
-            "portalSourceChoices": choices,
-            "question": {
-                "header": "Choose a saved portal URL",
-                "question": (
-                    "Compatible administrator-confirmed ServiceNow employee "
-                    "portal URLs were saved for other agents in this workspace. "
-                    "Which value should this agent use?"
-                ),
-                "options": [
-                    {"label": choice["label"]} for choice in choices
-                ],
-                "allowFreeformInput": False,
-            },
-        }
-    selected = (
-        candidates[0]
-        if source_key is None
-        else next(
-            (
-                candidate
-                for candidate in candidates
-                if candidate["sourceKey"] == source_key
-            ),
-            None,
-        )
+            if source_key is None or candidate["sourceKey"] == source_key
+        ),
+        None,
     )
     if selected is None:
         raise ServiceNowConnectError(
             "The selected saved portal URL source is stale or unavailable."
         )
+    selected_index = candidates.index(selected)
+    next_source_key = (
+        candidates[selected_index + 1]["sourceKey"]
+        if selected_index + 1 < len(candidates)
+        else None
+    )
     decision_choices = [
-        {"label": "Reuse saved portal URL", "decision": "accept"},
-        {"label": "Enter separately", "decision": "decline"},
-        {"label": "Not now", "decision": "not-now"},
+        {"label": "Yes", "decision": "accept"},
+        {"label": "No", "decision": "decline"},
     ]
     return {
         "schemaVersion": "servicenow.portal-value-reuse.v1",
         "decision": "question-required",
         "candidate": copy.deepcopy(selected),
+        "nextSourceKey": next_source_key,
         "portalDecisionChoices": decision_choices,
         "question": {
-            "header": "Reuse saved portal URL",
+            "header": (
+                f"Reuse the saved employee portal URL "
+                f"{selected['portalUrl']}?"
+            ),
             "question": (
-                "An administrator-confirmed employee portal URL is already "
-                f"saved for another agent in this workspace: "
-                f"`{selected['portalUrl']}` "
-                f"(from {', '.join(selected['sourceLabels'])}).\n\n"
-                "Do you want to reuse it for this agent? We'll still check "
-                "and update this agent's own portal setting if needed."
+                "An employee portal URL confirmed by an administrator is "
+                "already saved for another agent in this workspace "
+                f"(from {', '.join(selected['sourceLabels'])}). We'll still "
+                "check and update this agent's own portal setting if needed."
             ),
             "options": [
                 {"label": choice["label"]} for choice in decision_choices
@@ -6975,23 +7577,8 @@ def shared_reuse_handoff(
             "decision": "already-recorded",
             "record": copy.deepcopy(prior),
         }
-    if source_key is None and len(candidates) > 1:
-        return {
-            "schemaVersion": "servicenow.shared-reuse-handoff.v1",
-            "decision": "source-selection-required",
-            "candidates": [
-                {
-                    "sourceKey": candidate["sourceKey"],
-                    "label": (
-                        f"{candidate['sourceProfile'].upper()} "
-                        f"{candidate['sourceAgentSlug']} "
-                        f"({len(candidate['items'])} reusable items)"
-                    ),
-                    "items": copy.deepcopy(candidate["items"]),
-                }
-                for candidate in candidates
-            ],
-        }
+    # No picker: the first candidate is asked as a Yes/No question. After a
+    # decline its items are filtered out, so a rerun asks the next candidate.
     if source_key is not None:
         candidates = [
             candidate
@@ -7016,34 +7603,36 @@ def shared_reuse_handoff(
     )
     decision_choices = [
         {
-            "label": "Reuse shared identity",
+            "label": "Yes",
             "decision": "accept",
         },
         {
-            "label": "Configure separately",
+            "label": "No",
             "decision": "decline",
         },
-        {
-            "label": "Not now",
-            "decision": "not-now",
-        },
     ]
+    source_label = {"hrsd": "HR", "itsm": "IT"}.get(
+        str(candidate["sourceProfile"]),
+        str(candidate["sourceProfile"]).upper(),
+    )
     return {
         "schemaVersion": "servicenow.shared-reuse-handoff.v1",
         "decision": "question-required",
         "candidate": copy.deepcopy(candidate),
+        "moreCandidates": len(candidates) > 1,
         "reuseDecisionChoices": decision_choices,
         "question": {
-            "header": "Reuse shared identity",
+            "header": (
+                f"Reuse the shared setup from your existing "
+                f"{source_label} agent?"
+            ),
             "question": (
-                f"The {candidate['sourceProfile'].upper()} agent "
-                f"`{candidate['sourceAgentSlug']}` in this workspace already "
-                "has compatible administrator setup for ServiceNow instance "
-                f"`{candidate['instanceName']}`. You can reuse these "
+                f"Your {source_label} agent in this "
+                "workspace already has compatible administrator setup for "
+                f"this ServiceNow instance. You can reuse these "
                 f"items:\n\n{item_lines}\n\n"
                 "Reuse avoids repeating compatible administrator setup, but "
-                "each owning readiness check still runs for this agent.\n\n"
-                "What would you like to do?"
+                "each readiness check still runs for this agent."
             ),
             "options": [
                 {"label": choice["label"]}
@@ -7390,6 +7979,14 @@ def inspect_admin_setup(context: dict[str, Any]) -> dict[str, Any]:
         "instanceQuestion": instance_question,
         "manualInstanceQuestion": manual_instance_question,
         "instanceChoices": instance_choices,
+        "instanceFollowUps": (
+            _instance_follow_up_questions(
+                candidates=instance_candidates,
+                discovery_error=discovery_error,
+            )
+            if instance_name is None
+            else []
+        ),
         "discoveryError": discovery_error,
         "requiredPlugins": required_servicenow_prerequisites(
             setup["scope"],
@@ -7499,36 +8096,49 @@ def resolve_credential_completion(
             "evidence": evidence,
         }
     if len(healthy) > 1:
+        candidate_questions = _credential_candidate_questions(
+            resolution["healthyExactCandidates"]
+        )
         return {
             "status": "choice-required",
             "candidates": resolution["healthyExactCandidates"],
+            "question": candidate_questions[0]["question"],
+            "questionSelectionKey": candidate_questions[0]["selectionKey"],
+            "followUpQuestions": candidate_questions[1:],
             "message": (
                 "Multiple exact healthy ServiceNow connections are available. "
-                "Select one candidate by label."
+                "Ask the Yes/No question for the first connection. On Yes run "
+                "resolve-credential with its selection key; on No ask the "
+                "next follow-up question. After the last No, ask in chat "
+                "which connection to use or whether to create a new one."
             ),
         }
     unhealthy_exact = int(resolution.get("unhealthyExactCount") or 0)
+    no_match_message, no_match_details = _no_matching_connection_message(
+        connections,
+        expected_instance=resolution["expected"]["instanceName"],
+        expected_client_id=resolution["expected"]["resourceUri"],
+    )
     return {
         "status": "not-ready",
         "expected": resolution["expected"],
         "unhealthyExactCount": resolution["unhealthyExactCount"],
+        "connectionsSeen": no_match_details["connectionsSeen"],
+        "closestDifferences": no_match_details["closestDifferences"],
         "remediation": (
             (
                 "A ServiceNow connection with these settings exists, but it "
                 "doesn't show Connected. In Copilot Studio, open Settings > "
                 "Connection Settings > ServiceNow, sign in again so it shows "
-                "Connected, and save the agent settings. Then tell me again."
+                "Connected, and save the agent settings. These are the "
+                "values the connection should use:\n"
+                "- **Authentication type:** Microsoft Entra ID User Login\n"
+                f"- **Resource URI:** `{resolution['expected']['resourceUri']}`\n"
+                f"- **Instance name:** `{resolution['expected']['instanceName']}`\n"
+                "Then tell me again."
             )
             if unhealthy_exact
-            else (
-                "I couldn't find a Connected ServiceNow connection that "
-                "matches this setup (Microsoft Entra ID User Login, the "
-                "instance name, and the Resource URI shown in the card) in "
-                "this environment. Finish creating it in Copilot Studio "
-                "(Settings > Connection Settings > ServiceNow > Connect > "
-                "Create new connection), or check that you used the same "
-                "values and environment. Then tell me again."
-            )
+            else no_match_message
         ),
     }
 
@@ -9214,14 +9824,28 @@ def portal_url_confirmation(
         typed_url,
         expected_instance_name=instance_name,
     )
+    header = f"Is {normalized_url} the employee portal URL?"
+    question = f"You entered **{normalized_url}** as the employee portal URL."
+    if _existing_identity_kind(state) or _second_agent_audience(
+        context, state
+    ):
+        copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
+        header = (
+            f"Is {normalized_url} the portal employees should use for "
+            f"{copy_['audience']} {copy_['records']}?"
+        )
+        question = (
+            f"Is **{normalized_url}** the portal employees should use for "
+            f"{copy_['audience']} {copy_['records']}?"
+        )
     return {
         "schemaVersion": "servicenow.portal-url-confirmation.v1",
         "portalUrl": normalized_url,
-        "header": "Confirm employee portal URL",
-        "question": f"Is **{normalized_url}** the employee portal URL?",
+        "header": header,
+        "question": question,
         "options": [
-            {"label": "Yes, that's the portal URL"},
-            {"label": "No, use a different URL"},
+            {"label": "Yes"},
+            {"label": "No"},
         ],
         "allowFreeformInput": False,
         "savedMessage": "We'll save that portal URL.",
@@ -9828,9 +10452,8 @@ def topic_action_handoff(
         + "\n".join(f"- {name}" for name in inactive_names)
     )
     question = (
-        "Do you want to enable all listed inactive ServiceNow topics, or "
-        "keep their current states? Only topics in the inventory listed "
-        "above are in scope; unrelated topics remain unchanged."
+        "Only topics in the inventory listed above are in scope; unrelated "
+        "topics remain unchanged."
     )
     return {
         **base,
@@ -9838,13 +10461,9 @@ def topic_action_handoff(
         "actionResult": None,
         "replyBeforeQuestion": reply_before_question,
         "question": _native_question(
-            header="ServiceNow topic states",
+            header="Should we enable the inactive ServiceNow topics?",
             question=question,
-            option_labels=[
-                "Enable all listed inactive ServiceNow topics",
-                "Keep the current topic states for this configuration",
-                "Not now, leave the phase incomplete",
-            ],
+            option_labels=["Yes", "No"],
         ),
     }
 
@@ -9876,12 +10495,14 @@ def _phase_customer_label(
 ) -> str:
     labels = {
         "preflight": "Review the current setup",
-        "plugin-prerequisites": "Confirm HR ServiceNow prerequisite",
-        "entra-registration": "Confirm the Microsoft Entra identity details",
-        "servicenow-oidc": "Confirm ServiceNow user mapping",
+        "plugin-prerequisites": "Confirm HR ServiceNow prerequisites",
+        "entra-registration": "Confirm Microsoft Entra identity details",
+        "servicenow-oidc": (
+            "Confirm ServiceNow single sign-on and user mapping"
+        ),
         "credential": _CONNECTION_STEP_LABEL,
-        "topics": "Turn on the ServiceNow topics",
-        "portal-url": "Set employee portal URL",
+        "topics": "Turn on ServiceNow topics",
+        "portal-url": "Set the employee portal URL",
         "test": "Test a ServiceNow request",
         "publish": "Publish agent",
     }
@@ -9912,39 +10533,40 @@ def _phase_responsible_roles(
     return defaults.get(phase_id, ["ESS Maker / Agent Developer"])
 
 
-def _phase_status_icon(status: str) -> str:
-    icons = {
-        "complete-checked": "✅",
-        "complete-manual": "✅",
-        "complete-reused": "✅",
-        "rechecking": "🔄",
-        "checking": "🔄",
-        "current": "🔄",
-        "pending": "⬜",
-        "needs-attention": "❌",
-    }
-    try:
-        return icons[status]
-    except KeyError as exc:
-        raise ServiceNowConnectError(
-            "ServiceNow lifecycle progress status is invalid."
-        ) from exc
-
-
 _DEV_FINAL_SCOPE = {
     "hrsd": ("HR case lookup", "cases"),
     "itsm": ("IT ticket lookup", "tickets"),
 }
 
 
-def _dev_final_message(environment_display_name: str | None) -> str:
+def _dev_final_message(
+    environment_display_name: str | None,
+    existing_kind: str | None = None,
+    other_agent: str | None = None,
+    custom_identifier: bool = False,
+) -> str:
     lookup, records = _DEV_FINAL_SCOPE[ACTIVE_PROFILE.key]
     in_env = f" in {environment_display_name}" if environment_display_name else ""
+    if custom_identifier and not (existing_kind or other_agent):
+        return (
+            f"**Your {lookup} worked{in_env}.** {_spec_agent_name()} returned "
+            f"the {records} you expected for your account.\n\n"
+            "This confirms the lookup for your tested account, agent, and "
+            f"environment\u2014not {records[:-1]} creation or other "
+            "employees' sign-in and payroll mapping."
+        )
     return (
         f"**Your ServiceNow connection worked for the {lookup}{in_env}.** "
         f"{_spec_agent_name()} returned the {records} you expected in the "
         f"Test pane.\n\nCreating {records} and sign-in for other employees "
         "haven't been verified."
+        + (
+            f" {_EXISTING_IDENTITY_KINDS[existing_kind]['retest']}"
+            if existing_kind
+            else f" {other_agent} wasn't retested in this setup."
+            if other_agent
+            else ""
+        )
     )
 
 
@@ -9957,11 +10579,10 @@ _STAGE_WAITING_TEXT = {
     ),
     "servicenow-oidc": (
         "We're waiting for your ServiceNow administrator's "
-        "saved-configuration confirmation, User Field, and same-value "
-        "confirmation.\n\n"
-        "When you return, paste their non-sensitive reply. Don't include "
-        "employee identifiers or secrets. You won't need to repeat the Entra "
-        "values."
+        "saved-configuration confirmation, User Claim, and User Field.\n\n"
+        "When you return, paste their non-sensitive reply or send those "
+        "items individually. Don't include employee identifiers or secrets. "
+        "You won't need to repeat the Entra values."
     ),
 }
 
@@ -9974,6 +10595,7 @@ def _build_phase_progress(
     executed_actions: frozenset[str],
     verified_phases: frozenset[str],
     environment_display_name: str | None = None,
+    other_agent: str | None = None,
 ) -> dict[str, Any]:
     phases = contract.get("phases")
     if not isinstance(phases, list) or not phases:
@@ -10068,12 +10690,7 @@ def _build_phase_progress(
     has_prior_progress = any(
         item["status"] not in {"pending", "current"} for item in items
     )
-    display_name = str(contract.get("displayName") or "ServiceNow")
-    headline = (
-        f"Resuming {display_name} connection."
-        if has_prior_progress
-        else f"Starting the {display_name} connection."
-    )
+    headline = _setup_title()
 
     def render_grouped(
         *,
@@ -10084,7 +10701,7 @@ def _build_phase_progress(
             if current_status is not None and current_id is not None
             else None
         )
-        return _render_grouped_phases(
+        return _render_setup_checklist(
             contract,
             items,
             title=headline,
@@ -10093,7 +10710,12 @@ def _build_phase_progress(
 
     grouped = render_grouped()
     final_message = (
-        _dev_final_message(environment_display_name)
+        _dev_final_message(
+            environment_display_name,
+            _existing_identity_kind(state),
+            other_agent,
+            _custom_identifier_active(state),
+        )
         if decision.get("decision") == "complete"
         and completed_count == len(items)
         else None
@@ -10134,7 +10756,14 @@ def _build_phase_progress(
             "groupedErrorText": render_grouped(
                 current_status=("❌", "Needs attention")
             ),
-            "waitingText": _STAGE_WAITING_TEXT.get(
+            "waitingText": (
+                _existing_waiting_text()
+                if _existing_identity_kind(state)
+                and str(current_item["id"])
+                in {"entra-registration", "servicenow-oidc"}
+                else None
+            )
+            or _STAGE_WAITING_TEXT.get(
                 str(current_item["id"]),
                 f"Waiting — {label}: please provide the requested information to continue.",
             ),
@@ -10347,25 +10976,14 @@ def _business_group_availability_question(
     copy_by_group = {
         "hr-prerequisite": {
             "question": "Is your ServiceNow administrator available to complete this step?",
-            "yes": "Yes, the ServiceNow admin is available now",
-            "no": "No, I need to bring the ServiceNow admin in",
         },
         "entra-identity": {
             "question": "Is your Microsoft Entra administrator available to complete this step?",
-            "yes": "Yes, the Entra admin is available now",
-            "no": "No, I need to bring the Entra admin in",
         },
         "servicenow-sso": {
             "question": (
-                "Is the ServiceNow admin with security_admin available now?"
-            ),
-            "yes": (
-                "Yes, the ServiceNow admin with security_admin is available "
-                "now"
-            ),
-            "no": (
-                "No, I need to bring the ServiceNow admin with "
-                "security_admin in"
+                "Is your ServiceNow administrator available to complete "
+                "this step?"
             ),
         },
         "maker-configuration": {
@@ -10373,8 +10991,6 @@ def _business_group_availability_question(
                 "Are you available, with the ESS Maker / Agent Developer "
                 "role, to complete this step?"
             ),
-            "yes": "Yes, the Maker is available now",
-            "no": "No, I need to bring the Maker in",
         },
     }
     configured = copy_by_group.get(str(group.get("id") or ""))
@@ -10383,9 +10999,54 @@ def _business_group_availability_question(
             "ServiceNow business-group availability copy is missing."
         )
     return _native_question(
-        header=str(group.get("label") or ""),
-        question=configured["question"],
-        option_labels=[configured["yes"], configured["no"]],
+        header=configured["question"],
+        question=str(group.get("label") or configured["question"]),
+        option_labels=["Yes", "No"],
+    )
+
+
+def _availability_unavailable_reply(
+    context: dict[str, Any],
+    group: dict[str, Any],
+) -> str:
+    """Plain waiting message for a maker whose collaborator is not available.
+
+    The ServiceNow administrator wording follows spec S2 step 9. Every other
+    group uses the same structure. Nothing here names internal state.
+    """
+    agent = _display_agent_name(context)
+    audience = _product_audience()
+    group_id = str(group.get("id") or "")
+    if group_id == "hr-prerequisite":
+        return (
+            "We're waiting for your ServiceNow administrator to confirm "
+            f"the HR prerequisites for **{agent}**. When they're ready, "
+            "tell us and we'll continue from here. Don't include employee "
+            "identifiers or secrets."
+        )
+    if group_id == "entra-identity":
+        return (
+            "We're waiting for your Microsoft Entra administrator to "
+            f"confirm the Client ID and User Claim for **{agent}**. When "
+            "they reply, paste their non-sensitive message or send those "
+            "items individually. Don't include employee identifiers or "
+            "secrets."
+        )
+    if group_id == "servicenow-sso":
+        return (
+            f"The Entra values are confirmed for {audience}. Next, we're "
+            "waiting for your ServiceNow administrator to confirm the "
+            f"saved configuration, User Claim, and User Field for "
+            f"**{agent}**. When they reply, paste their non-sensitive "
+            "message or send those items individually. Don't include "
+            "employee identifiers or secrets. You won't need to repeat "
+            "the Entra values."
+        )
+    return (
+        "The administrator steps are confirmed. Next, we're waiting for "
+        "you to continue in Copilot Studio with the ESS Maker or Agent "
+        f"Developer role for **{agent}**. When you're ready, tell us and "
+        "we'll continue from here."
     )
 
 
@@ -10420,12 +11081,6 @@ def _first_text(container: Any, keys: tuple[str, ...]) -> str | None:
     return None
 
 
-def _display_agent_name(context: dict[str, Any]) -> str:
-    return _first_text(
-        context.get("agent"), ("display_name", "displayName", "name")
-    ) or ACTIVE_PROFILE.agent_display_name
-
-
 def _display_environment_name(context: dict[str, Any]) -> str:
     return _first_text(
         context.get("environment"),
@@ -10440,14 +11095,95 @@ def _recorded_environment_name(context: dict[str, Any]) -> str | None:
     )
 
 
+ACTIVE_AGENT_NAME: str | None = None
+
+
+def _remember_agent_name(context: dict[str, Any] | None) -> None:
+    """Record the selected agent's own name as the one maker-facing name."""
+    global ACTIVE_AGENT_NAME
+    name = _first_text(
+        context.get("agent") if isinstance(context, dict) else None,
+        ("display_name", "displayName", "name"),
+    )
+    if name:
+        ACTIVE_AGENT_NAME = name
+
+
 def _spec_agent_name() -> str:
+    if ACTIVE_AGENT_NAME:
+        return ACTIVE_AGENT_NAME
     return ACTIVE_PROFILE.agent_display_name.replace("(", "").replace(")", "")
+
+
+def _display_agent_name(context: dict[str, Any]) -> str:
+    _remember_agent_name(context)
+    return _spec_agent_name()
 
 
 _DEV_OPENING_PURPOSE = {
     "hrsd": "create and track their own HR cases",
     "itsm": "create and track their own ServiceNow IT tickets",
 }
+
+
+def _other_agent_already_connected(
+    context: dict[str, Any],
+    state: dict[str, Any] | None,
+) -> bool:
+    """True when another ESS agent in this environment has recorded shared setup.
+
+    Uses the same local lifecycle records as the shared-configuration reuse
+    offer: same tenant, environment and ring, a different agent, a completed
+    shared-identity phase, and the same ServiceNow instance when this run has
+    already recorded one.
+    """
+    return bool(_other_agent_reuse_sources(context, state))
+
+
+def _other_agent_reuse_sources(
+    context: dict[str, Any],
+    state: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Local records of other agents with shared setup this run can reuse."""
+    sources: list[dict[str, Any]] = []
+    target_setup = state.get("adminSetup") if isinstance(state, dict) else None
+    target_preflight = (
+        target_setup.get("preflight") if isinstance(target_setup, dict) else None
+    )
+    target_instance = (
+        target_preflight.get("instanceName")
+        if isinstance(target_preflight, dict)
+        else None
+    )
+    try:
+        target_instance = (
+            normalize_instance_name(target_instance)
+            if isinstance(target_instance, str) and target_instance.strip()
+            else None
+        )
+    except ServiceNowConnectError:
+        target_instance = None
+    for source in _local_compatible_agent_states(context):
+        setup = source["state"].get("adminSetup")
+        if not isinstance(setup, dict) or setup.get("authMode") != AUTH_MODE:
+            continue
+        if not any(
+            _completed_handoff(setup, phase) is not None
+            for phase in ("entra-registration", "servicenow-oidc")
+        ):
+            continue
+        preflight = setup.get("preflight")
+        source_instance = (
+            preflight.get("instanceName") if isinstance(preflight, dict) else None
+        )
+        if target_instance and source_instance:
+            try:
+                if normalize_instance_name(str(source_instance)) != target_instance:
+                    continue
+            except ServiceNowConnectError:
+                continue
+        sources.append(source)
+    return sources
 
 
 def _dev_opening_text(
@@ -10458,14 +11194,28 @@ def _dev_opening_text(
     environment = _recorded_environment_name(context)
     in_bold = f" in **{environment}**" if environment else ""
     in_plain = f" in {environment}" if environment else ""
-    lines = [
-        f"We'll connect **{_spec_agent_name()}** to ServiceNow{in_bold} so "
-        f"employees can {_DEV_OPENING_PURPOSE[ACTIVE_PROFILE.key]}.",
-        "",
-        "You'll need help from your ServiceNow and Microsoft Entra "
-        "administrators. We'll confirm their setup, create the connection "
-        "in Copilot Studio, then test it with your account.",
-    ]
+    reuse = _other_agent_already_connected(context, state)
+    copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
+    if reuse:
+        lines = [
+            f"We'll add **{_spec_agent_name()}**{in_bold} so employees can "
+            f"{_DEV_OPENING_PURPOSE[ACTIVE_PROFILE.key]}.",
+            "",
+            f"Your administrators will confirm whether {copy_['audience']} "
+            "can use the existing sign-in setup. Then we'll select a "
+            f"connection, configure {copy_['audience']}'s portal and topics, "
+            f"and test {copy_['article']} {copy_['audience']} request with "
+            "your account.",
+        ]
+    else:
+        lines = [
+            f"We'll connect **{_spec_agent_name()}** to ServiceNow{in_bold} so "
+            f"employees can {_DEV_OPENING_PURPOSE[ACTIVE_PROFILE.key]}.",
+            "",
+            "You'll need help from your ServiceNow and Microsoft Entra "
+            "administrators. We'll confirm their setup, create the connection "
+            "in Copilot Studio, then test it with your account.",
+        ]
     setup = state.get("adminSetup") if isinstance(state, dict) else None
     preflight = setup.get("preflight") if isinstance(setup, dict) else None
     instance = (
@@ -10487,7 +11237,8 @@ def _dev_opening_text(
     lines.extend(
         [
             "",
-            "We're checking whether your account can configure this agent"
+            "We're checking whether your account can configure "
+            f"{_spec_agent_name() if reuse else 'this agent'}"
             f"{in_plain} before setup begins.",
         ]
     )
@@ -10504,7 +11255,12 @@ def _take_dev_opening(
         return None
     if state.get("openingShown"):
         return None
-    text = _dev_opening_text(context, state)
+    kind = _existing_identity_kind(state)
+    text = (
+        _existing_identity_opening(context, state, kind)
+        if kind
+        else _dev_opening_text(context, state)
+    )
     state["openingShown"] = {"shownAt": _utc_now()}
     _write_lifecycle_state(context, state)
     return text
@@ -10528,54 +11284,90 @@ _DEV_TEST_COPY = {
 }
 
 
-def _dev_test_ready_message() -> str:
+def _dev_test_ready_message(
+    existing_kind: str | None = None,
+    *,
+    other_agent: str | None = None,
+    custom_identifier: bool = False,
+) -> str:
     copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
+    first_agent = not (existing_kind or other_agent or custom_identifier)
+    contents = f"{copy_['record']} contents"
+    if custom_identifier:
+        contents += " or your payroll ID"
     return (
         f"We're ready to try {copy_['article']} {copy_['audience']} request.\n\n"
         f"In **{_spec_agent_name()}'s Test pane**, run a request that should "
-        "return your real ServiceNow data, for example "
+        "return your real ServiceNow data—for example, "
         f"**\"{copy_['example']},\"** if you have open {copy_['records']}.\n\n"
-        "Come back and tell us what happened and whether it matched what you "
-        f"expected. You don't need to paste {copy_['record']} contents.\n\n"
-        "You can also finish without testing; the integration will "
-        "remain untested."
+        f"{'Come back' if first_agent else 'Return here'} and tell us what "
+        "happened and whether it matched what you expected. You don't need "
+        f"to paste {contents}.\n\n"
+        "You can also finish without testing; the "
+        f"{'ESS ' if existing_kind else ''}"
+        f"{copy_['audience'] + ' ' if other_agent and not existing_kind else ''}"
+        "integration will remain untested."
     )
 
 
-def _dev_test_clarifying_question() -> str:
+def _dev_test_clarifying_question(
+    existing_kind: str | None = None, custom_identifier: bool = False
+) -> str:
     copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
-    return (
-        f"What did the request return: your expected {copy_['records']}, an "
-        "empty result, or an error? No need to share "
-        f"{copy_['record']} contents."
+    if custom_identifier and not existing_kind:
+        return "What did the request return, and was that what you expected?"
+    ask = (
+        f"What did the request return\u2014your expected {copy_['records']}, "
+        "an empty result, or an error? "
     )
+    if existing_kind:
+        return (
+            f"{ask}Don't share {copy_['record']} contents, employee "
+            "identifiers, tokens, or other secrets."
+        )
+    return f"{ask}No need to share {copy_['record']} contents."
 
 
-def _dev_empty_result_message() -> str:
+def _dev_empty_result_message(existing_kind: str | None = None) -> str:
     copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
+    if existing_kind:
+        why = (
+            "it doesn't confirm that the agent can retrieve your real "
+            f"{copy_['audience']} data."
+        )
+    else:
+        why = (
+            "an empty result alone doesn't show whether the agent can "
+            f"retrieve your {copy_['audience']} data."
+        )
     return (
-        "An empty result alone doesn't show whether the agent can retrieve "
-        f"your {copy_['audience']} data.\n\n"
+        f"That matches what you expected, but {why}\n\n"
         "Try a supported request for ServiceNow data you know exists for "
         "your account, then tell us whether the result matches. You can "
         "also finish without testing."
     )
 
 
-def _dev_untested_message() -> str:
-    if ACTIVE_PROFILE.key == "hrsd":
+def _dev_untested_message(
+    existing_kind: str | None = None,
+    custom_identifier: bool = False,
+    other_agent: str | None = None,
+) -> str:
+    if not (existing_kind or custom_identifier or other_agent):
         return (
             "**The setup steps are finished, but the integration hasn't "
             "been tested.** Test it before employees use it.\n\n"
             "Your progress is saved at the Test-pane request. When you "
             "return, we'll continue there."
         )
+    audience = "ESS" if existing_kind else _product_audience()
+    lead = "The" if custom_identifier else f"The {audience}"
     return (
-        "**The IT setup steps are finished, but this integration hasn't "
-        f"been tested.** Test {_spec_agent_name()} before employees use "
-        "it.\n\n"
-        "Your progress is saved at the IT Test-pane request. When you "
-        "return, we'll continue there."
+        f"**{lead} setup steps are finished, but this integration "
+        f"hasn't been tested.** Test {_spec_agent_name()} before employees "
+        "use it.\n\n"
+        f"Your progress is saved at the {_product_audience()} Test-pane request. When "
+        "you return, we'll continue there."
     )
 
 
@@ -10586,7 +11378,11 @@ def _dev_test_guidance(
     evidence = state.get("evidence")
     record = evidence.get("test") if isinstance(evidence, dict) else None
     if not (isinstance(record, dict) and record.get("status") == "untested"):
-        return _dev_test_ready_message()
+        return _dev_test_ready_message(
+            _existing_identity_kind(state),
+            other_agent=_second_agent_audience(context, state),
+            custom_identifier=_custom_identifier_active(state),
+        )
     environment = _recorded_environment_name(context)
     in_env = f" in {environment}" if environment else ""
     audience = _product_audience()
@@ -10596,6 +11392,76 @@ def _dev_test_guidance(
         f"Run {_DEV_TEST_COPY[ACTIVE_PROFILE.key]['article']} {audience} "
         "request that should return your real ServiceNow data, then tell us "
         "whether it returned what you expected."
+    )
+
+
+_PORTAL_URL_RECORD_COPY = {
+    "hrsd": {"audience": "HR", "singular": "case", "plural": "cases"},
+    "itsm": {"audience": "IT", "singular": "ticket", "plural": "tickets"},
+}
+_PORTAL_URL_STANDARD_CLAIMS = frozenset({"email", "upn"})
+
+
+def _custom_claim_identity(state: dict[str, Any] | None) -> bool:
+    """True when the confirmed identity uses a custom token claim (spec S4)."""
+    evidence = state.get("evidence") if isinstance(state, dict) else None
+    mapping = (
+        evidence.get("identityMapping") if isinstance(evidence, dict) else None
+    )
+    claim = mapping.get("tokenClaimName") if isinstance(mapping, dict) else None
+    if _custom_identifier_active(state):
+        return True
+    return (
+        isinstance(claim, str)
+        and bool(claim.strip())
+        and claim.strip().casefold() not in _PORTAL_URL_STANDARD_CLAIMS
+    )
+
+
+def _portal_url_ask_guidance(
+    context: dict[str, Any],
+    state: dict[str, Any],
+) -> str:
+    """Plain-text lead-in and URL question for the portal URL step.
+
+    Wording follows the spec variant for the setup mode: existing sign-in
+    (S3), a second agent (S2), a custom identity claim (S4), or the first
+    agent (S1).
+    """
+    copy_ = _PORTAL_URL_RECORD_COPY[ACTIVE_PROFILE.key]
+    audience = copy_["audience"]
+    singular = copy_["singular"]
+    plural = copy_["plural"]
+    if _existing_identity_kind(state):
+        return (
+            f"Next, we'll make sure the agent's {singular} links open in the "
+            "employee portal.\n\n"
+            "What is the full HTTPS base URL employees should use for "
+            f"{audience} {plural}? It may differ from the ServiceNow "
+            "instance URL."
+        )
+    if _other_agent_already_connected(context, state):
+        other = "IT" if audience == "HR" else "HR"
+        return (
+            f"Next, we'll make sure the {audience} agent's {singular} links "
+            "open in the right employee portal.\n\n"
+            "What is the full HTTPS base URL of the portal employees should "
+            f"use for {audience} {plural}? It may differ from the {other} "
+            "portal."
+        )
+    if _custom_claim_identity(state):
+        return (
+            f"Next, we'll make sure {audience} {singular} links open in the "
+            "employee portal.\n\n"
+            "What is the full HTTPS base URL employees should use for "
+            f"{audience} {plural}?"
+        )
+    return (
+        f"Next, we'll make sure the agent's {audience} {singular} links open "
+        "in the right employee portal.\n\n"
+        "What is the full HTTPS base URL of your ServiceNow employee portal? "
+        "It may differ from the instance URL, so we won't assume `/sp` or "
+        "`/esc`."
     )
 
 
@@ -10628,13 +11494,15 @@ def _current_task_guidance(
                 "ServiceNow instance URL."
             )
         instance_url = instance_url.rstrip("/")
+        if _existing_identity_kind(state):
+            return _existing_plugin_prerequisite_guidance(instance_url)
         return (
             "First, your ServiceNow administrator needs to confirm that this "
             "instance supports the HR scenarios.\n\n"
             "Send them this message. When they reply, paste their "
             "confirmation here.\n\n"
         ) + _ready_to_send_block(
-            "We're connecting **Employee Self-Service HR** to ServiceNow HR "
+            f"We're connecting **{_spec_agent_name()}** to ServiceNow HR "
             f"Service Delivery on [**{instance_url}**]({instance_url}).\n\n"
             "Please confirm that the **HR Service Delivery Core** plugin "
             "(`com.sn_hr_core`) is installed and active:\n\n"
@@ -10651,9 +11519,31 @@ def _current_task_guidance(
         return ""
     if phase_id == "credential":
         audience = _product_audience()
+        existing_kind = _existing_identity_kind(state)
+        if existing_kind:
+            return _existing_connection_guidance(
+                context,
+                state,
+                existing_kind,
+                client_id=client_id,
+                instance_name=instance_name,
+            )
+        if _custom_identifier_active(state):
+            return _custom_identifier_connection_guidance(
+                context,
+                state,
+                client_id=client_id,
+                instance_name=instance_name,
+            )
+        second_agent = _second_agent_reuse(context, state)
+        if second_agent:
+            return _second_agent_connection_guidance(
+                context, state, second_agent
+            )
         return _credential_lead_in(state) + (
-            "Next, create the sign-in connection that Employee Self-Service "
-            f"{audience} will use to access ServiceNow. This part happens in "
+            "Next, create the sign-in connection that "
+            f"{_spec_agent_name()} will use to access ServiceNow. This part "
+            "happens in "
             "Copilot Studio:\n\n"
             f"1. Open **{_display_agent_name(context)}** in "
             f"**{_display_environment_name(context)}**.\n"
@@ -10662,7 +11552,7 @@ def _current_task_guidance(
             "3. Use:\n"
             "   - **Authentication type:** Microsoft Entra ID User Login\n"
             f"   - **Resource URI:** `{client_id or 'not yet confirmed'}`\n"
-            f"   - **Instance name:** `{instance_name}`, not the full URL\n"
+            f"   - **Instance name:** `{instance_name}`—not the full URL\n"
             "4. Complete the connection creation.\n\n"
             "Return here and tell us which connection you used. You won't "
             "need to resend the administrator replies.\n\n"
@@ -10670,17 +11560,27 @@ def _current_task_guidance(
             "to check sign-in and employee matching."
         )
     if phase_id == "topics":
+        if (
+            _existing_identity_kind(state)
+            or _custom_identifier_active(state)
+            or _second_agent_audience(context, state)
+        ):
+            product = _product_audience()
+            if _custom_identifier_active(state):
+                product = "HRSD" if product == "HR" else "ITSM"
+            return (
+                "We'll save that portal URL for "
+                f"{_spec_agent_name()} and turn on its built-in ServiceNow "
+                f"{product} topics, including system topics. "
+                "Unrelated topics will stay unchanged."
+            )
         return (
-            f"We'll turn on the built-in ServiceNow {_product_audience()} "
-            "topics, including system topics. Unrelated topics will stay "
-            "unchanged."
+            "We'll save that portal URL and turn on the built-in ServiceNow "
+            f"{_product_audience()} topics, including system topics. "
+            "Unrelated topics will stay unchanged."
         )
     if phase_id == "portal-url":
-        record_noun = "case" if ACTIVE_PROFILE.key == "hrsd" else "ticket"
-        return (
-            f"Next, we'll make sure the agent's {_product_audience()} "
-            f"{record_noun} links open in the right employee portal."
-        )
+        return _portal_url_ask_guidance(context, state)
     if phase_id == "test":
         return _dev_test_guidance(context, state)
     raise ServiceNowConnectError(
@@ -10688,57 +11588,109 @@ def _current_task_guidance(
     )
 
 
-def _render_grouped_phases(
+REDO_STEPS = ("connection", "portal-url", "topics", "test")
+_REDO_STEP_PHASES = {
+    "connection": "credential",
+    "portal-url": "portal-url",
+    "topics": "topics",
+    "test": "test",
+}
+_REDO_LEAD = "That step didn't finish. Here's how to do it again."
+_REDO_CONNECTION_SAFETY = (
+    "You don't need to paste a password, client secret, or token here. If "
+    "anything like that is requested, it comes from your administrator and "
+    "stays out of this chat."
+)
+_REDO_TOPICS_CLOSER = (
+    "Reply **Try again** when you're ready and we'll run this step again."
+)
+
+
+def redo_step_notice(
+    context: dict[str, Any],
+    step: str,
+) -> dict[str, Any]:
+    """Fallback "how to redo this step" message for a failure with no spec text.
+
+    Reuses the step instructions the maker saw originally, built only from
+    recorded non-secret values (instance name, Client ID used as the Resource
+    URI, connection settings). Never replaces a spec-defined message and
+    records nothing.
+    """
+    if step not in _REDO_STEP_PHASES:
+        raise ServiceNowConnectError(
+            f"Redo step must be one of: {', '.join(REDO_STEPS)}."
+        )
+    state = _load_lifecycle_state(context) or {}
+    guidance = _current_task_guidance(
+        context,
+        state,
+        phase_id=_REDO_STEP_PHASES[step],
+        role="Maker",
+    )
+    parts = [_REDO_LEAD, guidance]
+    if step == "connection":
+        parts.append(_REDO_CONNECTION_SAFETY)
+    elif step == "topics":
+        parts.append(_REDO_TOPICS_CLOSER)
+    return {
+        "status": "redo-step-notice",
+        "decision": "redo-step-instructions",
+        "step": step,
+        "recordsNothing": True,
+        "renderBlock": {
+            "kind": "waiting",
+            "text": "\n\n".join(part for part in parts if part),
+        },
+    }
+
+
+def _setup_title() -> str:
+    return (
+        "Set up ServiceNow IT"
+        if ACTIVE_PROFILE.key == "itsm"
+        else "Set up ServiceNow HR"
+    )
+
+
+def _render_setup_checklist(
     contract: dict[str, Any],
     items: list[dict[str, Any]],
     *,
     title: str,
     current_override: tuple[str, str, str] | None = None,
 ) -> str:
-    """Render the grouped phase view used by every Connect transition.
+    """Render the flat setup checklist used by every Connect transition.
 
+    One checkbox line per phase, in group order. Done phases are checked and
+    the rest are unchecked; only a phase that needs attention gets a note.
     ``current_override`` is ``(phase_id, icon, text)`` for the current step.
     """
-    visible_by_id = {
-        str(item["id"]): item for item in items
-    }
-    hidden_ids = {
-        str(item["id"]) for item in items if str(item["id"]) not in visible_by_id
-    }
     items_by_id = {str(item["id"]): item for item in items}
 
-    def status_line(item: dict[str, Any]) -> str:
-        icon = _phase_status_icon(item["status"])
-        text = item["text"]
+    def task_line(item: dict[str, Any]) -> str:
+        status = str(item["status"])
+        needs_attention = status == "needs-attention"
         if current_override is not None and item["id"] == current_override[0]:
-            icon, text = current_override[1], current_override[2]
-        return f"{icon} {item['customerLabel']} — {text}"
+            status = "current"
+            needs_attention = current_override[1] == "❌"
+        label = item["customerLabel"]
+        if needs_attention:
+            return f"- ❌ {label} — needs attention"
+        icon = "✅" if status.startswith("complete-") else "⬜"
+        return f"- {icon} {label}"
 
-    automatic = items_by_id.get("preflight")
-    lines = [title]
-    if isinstance(automatic, dict):
-        lines.extend(
-            ["", "**Automatic setup**", "", f"- {status_line(automatic)}"]
-        )
-    lines.extend(["", "**Phases**", ""])
-    for index, group in enumerate(_business_groups(contract), start=1):
-        lines.append(
-            f"{index}. **{group['label']}** — Responsible role: "
-            f"{group['role']}"
-        )
+    lines = [
+        f"**{title}**",
+        "",
+        "Complete these tasks to finish setup.",
+        "",
+    ]
+    for group in _business_groups(contract):
         for phase_id in group["phaseIds"]:
-            if phase_id in hidden_ids:
-                continue
-            lines.append(f"   - {status_line(visible_by_id[phase_id])}")
-    lines.extend(
-        [
-            "",
-            (
-                "✅ Complete — admin confirmed or reused means current "
-                "compatible evidence was accepted."
-            ),
-        ]
-    )
+            item = items_by_id.get(phase_id)
+            if item is not None:
+                lines.append(task_line(item))
     return "\n".join(lines)
 
 
@@ -10755,7 +11707,7 @@ def _business_group_transport(
     availability_context_sha256: str | None,
 ) -> dict[str, Any]:
     groups = _business_groups(contract)
-    ordinary_text = _render_grouped_phases(
+    ordinary_text = _render_setup_checklist(
         contract, phase_items, title=title
     )
     group_context = (
@@ -10805,7 +11757,9 @@ def _business_group_transport(
             role=current_group["role"],
         )
         if guidance:
-            ordinary_text += "\n\n" + guidance
+            ordinary_text = (
+                f"{ordinary_text}\n\n{guidance}" if ordinary_text else guidance
+            )
     question = (
         _business_group_availability_question(current_group)
         if gate_required
@@ -10849,10 +11803,7 @@ def _business_group_transport(
             "available": roles_available,
             "stateChanged": False,
             "unavailableReply": (
-                f"Please involve your {current_group['role']} for "
-                f"{current_group['label']}, then answer the same question "
-                "again.\n\nNo business group, lifecycle phase, evidence, "
-                "attestation, or accepted contract revision has advanced."
+                _availability_unavailable_reply(context, current_group)
                 if current_group is not None
                 else None
             ),
@@ -10889,6 +11840,7 @@ def _resume_progress(
         executed_actions=executed_actions,
         verified_phases=verified_phases,
         environment_display_name=_recorded_environment_name(context),
+        other_agent=_second_agent_audience(context, state),
     )
 
 
@@ -10930,6 +11882,8 @@ def _pending_preflight_input(
         manual_question = None
     choices = discovery.get("instanceChoices")
     choices = choices if isinstance(choices, dict) else {}
+    follow_ups = discovery.get("instanceFollowUps")
+    follow_ups = follow_ups if isinstance(follow_ups, list) else []
     return {
         "schemaVersion": "servicenow.pending-input.v1",
         "kind": "instance-confirmation",
@@ -10937,6 +11891,7 @@ def _pending_preflight_input(
         "question": copy.deepcopy(question),
         "manualQuestion": copy.deepcopy(manual_question),
         "choiceValues": copy.deepcopy(choices),
+        "followUpQuestions": copy.deepcopy(follow_ups),
     }
 
 
@@ -11134,10 +12089,7 @@ def _shared_reuse_before_availability(
     ):
         return None, False
     handoff = shared_reuse_handoff(context)
-    if handoff.get("decision") in {
-        "question-required",
-        "source-selection-required",
-    }:
+    if handoff.get("decision") == "question-required":
         return handoff, True
     return handoff, False
 
@@ -11339,14 +12291,25 @@ def resume_handoff(
         ),
     }
     if (
-        isinstance(pre_action_handoff, dict)        and pre_action_handoff.get("decision")
-        in {"question-required", "source-selection-required"}
+        isinstance(pre_action_handoff, dict)
+        and pre_action_handoff.get("decision") == "question-required"
     ):
         result["status"] = "shared-identity-reuse-required"
         result["preActionHandoff"] = pre_action_handoff
         return result
     availability = transport["businessGroupAvailability"]
     group_question = availability["question"]
+    if group_question is not None and roles_available is False:
+        # Any answer other than a clear Yes is "not available": send the
+        # waiting message as plain chat and end the turn without a card.
+        availability["question"] = None
+        result["status"] = "business-group-unavailable"
+        result["waitsForMaker"] = True
+        result["renderBlock"] = {
+            "kind": "waiting",
+            "text": availability["unavailableReply"],
+        }
+        return result
     if group_question is not None and roles_available is not True:
         result["status"] = "business-group-availability-required"
         return result
@@ -11814,7 +12777,9 @@ def record_checkpoint_results(
         "acknowledged": sorted(acknowledgements),
         "reasons": reasons,
         "resumeArguments": (
-            ["--verified-phase", phase_id] if outcome == "done" else []
+            _verified_prefix_arguments(context, phase_id, include_self=True)
+            if outcome == "done"
+            else []
         ),
     }
     block = _checkpoint_render_block(
@@ -11823,6 +12788,37 @@ def record_checkpoint_results(
     if block is not None:
         result = {"renderBlock": block, **result}
     return result
+
+
+def _verified_prefix_arguments(
+    context: dict[str, Any],
+    phase_id: str,
+    *,
+    include_self: bool,
+) -> list[str]:
+    """`--verified-phase` pairs for the done phases up to ``phase_id``.
+
+    Only the contract-order prefix is listed, so a later done phase that has not
+    been reached yet is still re-verified by the controller.
+    """
+    contract = _load_json(Path(context["root"]) / CONTRACT_PATH)
+    state = _load_json(_lifecycle_state_path(context))
+    phases = state.get("phases") if isinstance(state, dict) else None
+    arguments: list[str] = []
+    if not isinstance(phases, dict):
+        return arguments
+    for phase in contract.get("phases") or []:
+        current = phase.get("id") if isinstance(phase, dict) else None
+        if not isinstance(current, str):
+            continue
+        if current == phase_id and not include_self:
+            break
+        value = phases.get(current)
+        if isinstance(value, dict) and value.get("status") == "done":
+            arguments.extend(["--verified-phase", current])
+        if current == phase_id:
+            break
+    return arguments
 
 
 def _recovery_handoff(
@@ -12073,18 +13069,30 @@ def record_test_attestation(
         raise ServiceNowConnectError(
             "Unsupported privacy-safe Test pane prompt category."
         )
-    if result == "empty":
+    if result in {"empty", "unclear"}:
         if failure_category is not None:
             raise ServiceNowConnectError(
                 "An empty-result answer cannot have a failure category."
+                if result == "empty"
+                else "An unclear answer cannot have a failure category."
             )
-        # An empty result is not evidence: nothing is recorded and the Test
-        # step stays open.
+        # Neither answer is evidence: nothing is recorded and the Test step
+        # stays open.
+        existing_kind = _existing_identity_kind(_realm_dev_state(context))
+        custom_identifier = _custom_identifier_active(
+            _realm_dev_state(context)
+        )
         return {
             "status": "open",
-            "result": "empty",
+            "result": result,
             "recorded": False,
-            "message": _dev_empty_result_message(),
+            "message": (
+                _dev_empty_result_message(existing_kind)
+                if result == "empty"
+                else _dev_test_clarifying_question(
+                    existing_kind, custom_identifier
+                )
+            ),
         }
     if result not in {"pass", "fail", "untested"}:
         raise ServiceNowConnectError(
@@ -12149,7 +13157,14 @@ def record_test_attestation(
     state["connectionBindingHash"] = connection_binding_hash
     _write_lifecycle_state(context, state)
     if result == "untested":
-        return {**attestation, "message": _dev_untested_message()}
+        return {
+            **attestation,
+            "message": _dev_untested_message(
+                _existing_identity_kind(state),
+                _custom_identifier_active(state),
+                _second_agent_audience(context, state),
+            ),
+        }
     return attestation
 
 
@@ -12174,10 +13189,11 @@ REALM_COMMANDS = frozenset(
         "check-realm",
         "record-realm-test",
         "record-realm-admin",
+        "record-realm-portal-url",
         "select-realm",
     }
 )
-REALM_RECOVERY_CHOICES = ("Check again", "Choose another environment", "Not now")
+REALM_RECOVERY_CHOICES = ("Yes", "No")
 
 
 def _realm_dev_state(context: dict[str, Any]) -> dict[str, Any]:
@@ -12314,18 +13330,48 @@ def _realm_target_context(
     target: dict[str, Any],
 ) -> dict[str, Any]:
     identity = target["identity"]
+    agent = {**context["agent"], "id": identity["agentId"]}
+    if identity.get("agentDisplayName"):
+        agent["display_name"] = identity["agentDisplayName"]
     return {
         **context,
         "environment": {**context["environment"], "id": identity["environmentId"]},
-        "agent": {**context["agent"], "id": identity["agentId"]},
+        "agent": agent,
     }
+
+
+def _realm_target_agent_name(
+    context: dict[str, Any],
+    target: dict[str, Any] | None,
+) -> str:
+    """The destination agent's own name; the Dev name when none is recorded."""
+    name = ((target or {}).get("identity") or {}).get("agentDisplayName")
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return _display_agent_name(context)
+
+
+def _realm_agent_name(context: dict[str, Any], realm: str) -> str:
+    try:
+        registry = realms.load_registry(
+            Path(context["root"]), ACTIVE_PROFILE.provider_key, _agent_slug(context)
+        )
+        target = registry["targets"].get(realm)
+    except (OSError, ValueError, KeyError, realms.ServiceNowRealmError):
+        target = None
+    return _realm_target_agent_name(
+        context, target if isinstance(target, dict) else None
+    )
 
 
 def _realm_run_checks(
     context: dict[str, Any],
     target: dict[str, Any],
-) -> None:
-    """Re-read the promoted realm; nothing here writes to the agent."""
+) -> bool:
+    """Re-read the promoted realm; nothing here writes to the agent.
+
+    Returns True when this recheck follows an untested finish.
+    """
     environment = context["environment"]
     ring = environment["ring"]
     identity = target["identity"]
@@ -12339,6 +13385,10 @@ def _realm_run_checks(
         api_version=environment.get("api_version", "2024-10-01"),
     )
     target_components = target_client.fetch_components(identity["agentId"])
+    bot = target_components.get("bot")
+    recorded_name = realms.agent_display_name(bot) if isinstance(bot, dict) else None
+    if recorded_name and identity.get("agentDisplayName") != recorded_name:
+        identity["agentDisplayName"] = recorded_name
     try:
         reference = summarize_components(target_components)["reference"]
     except ServiceNowConnectError:
@@ -12365,7 +13415,7 @@ def _realm_run_checks(
         )
     except ServiceNowConnectError:
         portal = {"valid": False, "reason": "portal-topic-missing"}
-    realms.apply_checks(
+    return realms.apply_checks(
         target,
         connections=realms.evaluate_connections(
             expected,
@@ -12387,12 +13437,12 @@ REALM_COMPLETION_SCOPE = {
 REALM_COMPLETION_LIMIT = {"test": "Prod behavior", "prod": "release readiness"}
 
 
-def _realm_completion_message(realm: str) -> str:
+def _realm_completion_message(realm: str, agent: str | None = None) -> str:
     lookup, not_covered = REALM_COMPLETION_SCOPE[ACTIVE_PROFILE.key]
     label = realm.title()
     return (
         f"**Your {lookup} worked in {label}.** "
-        f"{ACTIVE_PROFILE.agent_display_name} "
+        f"{agent or _spec_agent_name()} "
         "returned the result you expected for your account. This confirms the "
         f"lookup for your tested account and this agent in {label}, not "
         f"{not_covered}, other employees' sign-in mapping, or "
@@ -12411,24 +13461,49 @@ def _realm_untested_message(realm: str) -> str:
     )
 
 
+def _realm_empty_result_message(realm: str) -> str:
+    record = "case" if ACTIVE_PROFILE.key == "hrsd" else "ticket"
+    return (
+        "That doesn't match the result you expected. We'll check the "
+        f"available setup information for the agent in **{realm.title()}** "
+        "before asking you for anything else.\n\n"
+        "We can't identify the cause from the information available yet.\n\n"
+        "Did the Test pane show an error or only an empty result? If there "
+        f"was an error, send only its text without {record} contents, "
+        "employee identifiers, tokens, or other secrets."
+    )
+
+
 def _realm_render_context(
     context: dict[str, Any],
     registry: dict[str, Any],
     realm: str,
+    *,
+    resume: bool = False,
 ) -> dict[str, Any] | None:
     target = registry["targets"].get(realm)
     if realm not in realms.PROMOTED_REALMS or not isinstance(target, dict):
         return None
     hr = ACTIVE_PROFILE.key == "hrsd"
     status = realms.target_status(registry, realm)
+    agent_name = _realm_target_agent_name(context, target)
     footer = None
     if status == "ready":
-        footer = _realm_completion_message(realm)
+        footer = _realm_completion_message(realm, agent_name)
     elif status == "untested":
         footer = _realm_untested_message(realm)
+    else:
+        validation = target["stages"].get("maker-validation") or {}
+        if (
+            validation.get("result") == "fail"
+            and validation.get("failureCategory") == "empty-result"
+        ):
+            footer = _realm_empty_result_message(realm)
     return {
-        "agent": ACTIVE_PROFILE.agent_display_name,
+        "agent": agent_name,
         "kind": "HR" if hr else "IT",
+        "product": ACTIVE_PROFILE.product_name.removeprefix("ServiceNow "),
+        "resume": resume,
         "record": "case" if hr else "ticket",
         "example": "Show my open HR cases" if hr else "Show my open IT tickets",
         "agentUrl": maker_portal_links(_realm_target_context(context, target))[
@@ -12453,9 +13528,12 @@ def _realm_check_result(
     context: dict[str, Any],
     registry: dict[str, Any],
     realm: str,
+    *,
+    resume: bool = False,
 ) -> dict[str, Any]:
     result = realms.realm_status(
-        registry, render=_realm_render_context(context, registry, realm)
+        registry,
+        render=_realm_render_context(context, registry, realm, resume=resume),
     )
     target = registry["targets"][realm]
     result["realm"] = realm
@@ -12466,8 +13544,12 @@ def _realm_check_result(
             _realm_target_context(context, target)
         )["copilotStudioAgent"]["url"],
     }
-    if realms.target_status(registry, realm) == "ready":
-        result["message"] = _realm_completion_message(realm)
+    if target.get("instancePause"):
+        result["message"] = realms.instance_pause_text()
+    elif realms.target_status(registry, realm) == "ready":
+        result["message"] = _realm_completion_message(
+            realm, _realm_target_agent_name(context, target)
+        )
     elif realms.target_status(registry, realm) == "untested":
         result["message"] = _realm_untested_message(realm)
     return result
@@ -12522,6 +13604,11 @@ def _run_realm_command(
             and previous["identity"]["agentId"] == identity["agentId"]
             and previous["identity"]["environmentId"] == identity["environmentId"]
         )
+        if same_target and realms.request_instance_change(
+            previous, getattr(args, "expected_instance", None)
+        ):
+            realms.save_registry(root, registry)
+            return _realm_check_result(context, registry, realm)
         admin_setup = previous.get("adminSetup") if same_target else None
         if not isinstance(admin_setup, dict):
             admin_setup = realms.new_admin_setup(_realm_admin_case(context, identity))
@@ -12557,6 +13644,13 @@ def _run_realm_command(
             raise ServiceNowConnectError(
                 f"The {realm.title()} realm has not been discovered yet."
             )
+        if realms.request_instance_change(
+            target, getattr(args, "expected_instance", None)
+        ):
+            realms.save_registry(root, registry)
+            return _realm_check_result(context, registry, realm)
+        if command == "record-realm-portal-url":
+            return _record_realm_portal_url(context, registry, realm, target, args)
         if command == "record-realm-admin":
             _record_realm_admin(context, target, args)
         elif command == "check-realm":
@@ -12575,9 +13669,15 @@ def _run_realm_command(
                     ),
                 )
 
+    resumed = False
     if command in {"discover-realm-target", "check-realm", "record-realm-admin"}:
         if realms.independent_pending(target) is None:
+            finished_untested = (
+                (target["stages"].get("maker-validation") or {}).get("status")
+                == "untested"
+            )
             _realm_run_checks(context, target)
+            resumed = finished_untested
     else:
         realms.record_validation(
             target,
@@ -12587,7 +13687,72 @@ def _run_realm_command(
             failure_category=args.failure_category,
         )
     realms.save_registry(root, registry)
-    return _realm_check_result(context, registry, realm)
+    result = _realm_check_result(context, registry, realm, resume=resumed)
+    if command == "record-realm-test" and args.failure_category == "empty-result":
+        result["afterReply"] = (
+            "Send chatMessage verbatim with nothing before or after it and "
+            "end your turn. Do not add a statement about what was recorded. "
+            "When the maker replies with an error text, record nothing from "
+            "it; use realm-reply-notice --situation identity-mismatch only "
+            "when it names a sign-in claim or user-field mismatch."
+        )
+    return result
+
+
+def _record_realm_portal_url(
+    context: dict[str, Any],
+    registry: dict[str, Any],
+    realm: str,
+    target: dict[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    """Record the portal URL request for the destination agent.
+
+    Destination environments are managed, so this only records the confirmed URL; the
+    change itself is made by the supported destination repair and the next
+    check reads the result.
+    """
+    runtime = target["stages"].get("runtime-configuration") or {}
+    if runtime.get("status") != "blocked" or not runtime.get("portalReason"):
+        raise ServiceNowConnectError(
+            "The employee portal URL isn't flagged for this destination. "
+            "Run the destination check first."
+        )
+    instance = target["expected"]["values"].get("instanceName")
+    if not instance:
+        raise ServiceNowConnectError(
+            "We need the ServiceNow instance name before the employee portal "
+            "URL can be recorded."
+        )
+    kind = "HR" if ACTIVE_PROFILE.key == "hrsd" else "IT"
+    raw = str(args.portal_url or "").strip()
+    has_scheme = "://" in raw
+    candidate = normalize_portal_url(
+        raw if has_scheme else f"https://{raw}",
+        expected_instance_name=instance,
+    )
+    if not has_scheme and not args.confirm_portal_url:
+        return {
+            "status": "portal-url-confirmation",
+            "realm": realm,
+            "recordsNothing": True,
+            "candidate": candidate,
+            "message": (
+                f"Should the {kind} agent use **{candidate}**? Reply to "
+                "confirm and we'll save it, or send the full HTTPS base URL "
+                "you want instead."
+            ),
+        }
+    request = realms.record_portal_url_request(target, candidate)
+    realms.save_registry(Path(context["root"]), registry)
+    result = _realm_check_result(context, registry, realm)
+    label = realm.title()
+    result["portalUrlRequest"] = request
+    result["message"] = (
+        f"We'll save that URL for the {kind} agent in {label}. The shared "
+        "identity setup stays in place."
+    )
+    return result
 
 
 def _realm_apply_independent_args(
@@ -12656,12 +13821,84 @@ def _record_realm_admin(
     )
 
 
+def _realm_names_text(names: tuple[str, ...]) -> str:
+    quoted = [f"**{name}**" for name in names]
+    if len(quoted) <= 1:
+        return "".join(quoted)
+    return ", ".join(quoted[:-1]) + f" and {quoted[-1]}"
+
+
+def realm_target_not_unique_result(
+    context: dict[str, Any],
+    realm: str | None,
+    exc: realms.ServiceNowRealmNotUniqueError,
+) -> dict[str, Any]:
+    """Fixed reply when discovery finds no promoted agent or several environments.
+
+    Asking the maker is the last resort: it only happens after the read-only
+    search ran, and the reply says what was searched. Records nothing.
+    """
+    agent = _display_agent_name(context)
+    label = (realm or "promoted").title()
+    if exc.kind == "multiple" and exc.matched:
+        text = (
+            f"We found the promoted copy of **{agent}** in more than one "
+            f"{label} environment: {_realm_names_text(exc.matched)}. Reply "
+            "with the name of the one to use, and we'll continue with it."
+        )
+        after = (
+            "Send chatMessage verbatim and end your turn. When the maker "
+            "names one, rerun discover-realm-target with --environment "
+            "\"{NAME_AS_TYPED}\"."
+        )
+    else:
+        where = (
+            f" in the environments your account can see "
+            f"({_realm_names_text(exc.searched)})"
+            if exc.searched
+            else " in the environments your account can see"
+        )
+        found = (
+            f"We found more than one promoted copy of **{agent}** for {label}"
+            if exc.kind == "multiple"
+            else f"We searched for the promoted copy of **{agent}**{where} and "
+            f"didn't find one for {label}"
+        )
+        pick = (
+            "the link of the one to use"
+            if exc.kind == "multiple"
+            else "the link of the promoted agent"
+        )
+        text = (
+            f"{found}. Paste the Copilot Studio link of {pick} here, and "
+            "we'll continue with it. Your setup progress is saved."
+        )
+        after = (
+            "Send chatMessage verbatim and end your turn. When the maker "
+            "pastes the agent link, rerun discover-realm-target with "
+            "--agent-link \"{PASTED_AGENT_LINK}\"."
+        )
+    return {
+        "status": "realm-target-not-found",
+        "decision": "realm-discovery-needs-maker",
+        "realm": realm,
+        "discovery": exc.kind,
+        "recordsNothing": True,
+        "renderBlock": {"kind": "waiting", "text": text},
+        "afterReply": after,
+    }
+
+
 def run_realm_command(
     context: dict[str, Any],
     args: argparse.Namespace,
 ) -> dict[str, Any]:
     try:
         return _run_realm_command(context, args)
+    except realms.ServiceNowRealmNotUniqueError as exc:
+        return realm_target_not_unique_result(
+            context, getattr(args, "realm", None), exc
+        )
     except realms.ServiceNowRealmError as exc:
         raise ServiceNowConnectError(
             str(exc),
@@ -12739,6 +13976,150 @@ def build_parser() -> argparse.ArgumentParser:
     )
     chooser_parser.add_argument("--selection-key")
     chooser_parser.add_argument("--agent-link")
+    chooser_parser.add_argument("--agent-name")
+    claim_parser = subparsers.add_parser(
+        "claim-confirmation-handoff",
+        help=(
+            "Return the fixed reply for a custom claim the Entra "
+            "administrator has not confirmed; records nothing."
+        ),
+    )
+    claim_parser.add_argument("--custom-claim", action="store_true")
+    claim_parser.add_argument("--claim-name-given", action="store_true")
+    claim_parser.add_argument("--servicenow-confirmed", action="store_true")
+    claim_parser.add_argument("--second-agent", action="store_true")
+    metadata_parser = subparsers.add_parser(
+        "metadata-url-handoff",
+        help=(
+            "Return the fixed reply when the administrator reports a /v2.0 "
+            "metadata URL; records nothing."
+        ),
+    )
+    metadata_parser.add_argument("--metadata-url", required=True)
+    target_change_parser = subparsers.add_parser(
+        "target-change-handoff",
+        help=(
+            "Fixed notice when the maker changes the target environment, "
+            "agent, instance, tenant, or signed-in user."
+        ),
+    )
+    target_change_parser.add_argument(
+        "--change", choices=_TARGET_CHANGES, required=True
+    )
+    target_change_parser.add_argument(
+        "--target",
+        help="Friendly name of the new environment or agent (never an ID or URL).",
+    )
+    test_failure_parser = subparsers.add_parser(
+        "test-failure-handoff",
+        help=(
+            "Fixed reply when this agent's Test pane request fails although "
+            "another ESS agent worked with the same connection; records "
+            "nothing."
+        ),
+    )
+    test_failure_parser.add_argument("--reported-claim")
+    test_failure_parser.add_argument("--reported-user-field")
+    existing_parser = subparsers.add_parser(
+        "existing-identity-handoff",
+        help=(
+            "Fixed reply when the maker says ESS should reuse an existing "
+            "ServiceNow Knowledge, single sign-on, or Microsoft Graph "
+            "sign-in setup; records only a non-identity marker so every "
+            "later administrator message keeps the compatibility-review "
+            "wording."
+        ),
+    )
+    existing_parser.add_argument(
+        "--existing",
+        choices=tuple(_EXISTING_IDENTITY_KINDS),
+        required=True,
+    )
+    existing_parser.add_argument(
+        "--situation",
+        choices=_EXISTING_IDENTITY_SITUATIONS,
+        default="disclosure",
+    )
+    existing_parser.add_argument("--connection-name")
+    existing_parser.add_argument("--metadata-url")
+    service_areas_parser = subparsers.add_parser(
+        "empty-service-areas-handoff",
+        help=(
+            "Return the fixed reply when the maker reports an empty HR "
+            "service-area list; records nothing."
+        ),
+    )
+    service_areas_parser.add_argument(
+        "--realm", choices=("dev", "test", "prod"), default="dev"
+    )
+    realm_reply_parser = subparsers.add_parser(
+        "realm-reply-notice",
+        help=(
+            "Fixed maker-facing reply for a destination-agent situation (maker "
+            "pauses, reports a result from another realm, offers the Dev "
+            "connection, says Dev was never tested, reports an empty or "
+            "missing result, or reports a sign-in identity mismatch); records "
+            "nothing."
+        ),
+    )
+    realm_reply_parser.add_argument(
+        "--realm", choices=("test", "prod"), required=True
+    )
+    realm_reply_parser.add_argument(
+        "--situation", choices=REALM_REPLY_SITUATIONS, required=True
+    )
+    realm_reply_parser.add_argument(
+        "--reported-realm",
+        choices=("dev", "test"),
+        default="dev",
+        help="Realm the maker's result came from (wrong-realm only).",
+    )
+    validation_parser = subparsers.add_parser(
+        "validation-notice",
+        help=(
+            "Return the fixed maker-facing message for one validation "
+            "situation; records nothing."
+        ),
+    )
+    validation_parser.add_argument(
+        "--situation", choices=_VALIDATION_SITUATIONS, required=True
+    )
+    validation_parser.add_argument(
+        "--scenario",
+        choices=_VALIDATION_SCENARIOS,
+        help=(
+            "Defaults to existing-identity, second-agent, or first-agent "
+            "from the recorded state. Pass payroll explicitly (HR only)."
+        ),
+    )
+    validation_parser.add_argument("--connection-name")
+    validation_parser.add_argument(
+        "--waiting-for", choices=_VALIDATION_WAITING_FOR
+    )
+    validation_parser.add_argument("--entra-claim")
+    validation_parser.add_argument("--servicenow-claim")
+    validation_parser.add_argument("--claim-name")
+    redo_step_parser = subparsers.add_parser(
+        "redo-step-notice",
+        help=(
+            "Fallback 'how to do this step again' instructions for a failure "
+            "that has no fixed spec message; non-secret values only; records "
+            "nothing."
+        ),
+    )
+    redo_step_parser.add_argument(
+        "--step", choices=REDO_STEPS, required=True
+    )
+    realm_setup_parser = subparsers.add_parser(
+        "realm-setup-handoff",
+        help=(
+            "Return the destination-validation wording for basic ADK setup "
+            "(incomplete, or complete and continuing); records nothing."
+        ),
+    )
+    realm_setup_parser.add_argument(
+        "--situation", choices=("incomplete", "complete"), required=True
+    )
 
     inspect_parser = subparsers.add_parser(
         "inspect",
@@ -12819,6 +14200,16 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     direct_handoff_parser.add_argument(
+        "--custom-identifier",
+        action="store_true",
+        help=(
+            "The maker or administrators say ServiceNow identifies employees "
+            "by a custom identifier such as a payroll ID. Records only a "
+            "non-identity marker so later handoffs keep the custom-claim "
+            "wording."
+        ),
+    )
+    direct_handoff_parser.add_argument(
         "--client-id",
         help=(
             "Current-turn Application client ID already accepted by the "
@@ -12862,6 +14253,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,
     )
     direct_mapping_parser.add_argument("--claim-name")
+    direct_mapping_parser.add_argument(
+        "--claim-setup-confirmed",
+        action="store_true",
+        help=(
+            "The Entra administrator confirmed the custom claim setup is "
+            "complete. Required to record a claim other than email or upn."
+        ),
+    )
     direct_mapping_parser.add_argument("--user-field")
     direct_mapping_parser.add_argument("--yes", action="store_true")
     saved_mapping_group = direct_mapping_parser.add_mutually_exclusive_group()
@@ -13010,6 +14409,17 @@ def build_parser() -> argparse.ArgumentParser:
     resume_parser.add_argument("--executed-action", action="append", default=[])
     resume_parser.add_argument("--verified-phase", action="append", default=[])
     resume_parser.add_argument(
+        "--existing",
+        choices=tuple(_EXISTING_IDENTITY_KINDS),
+        help=(
+            "Pass when the maker said the organization already uses "
+            "ServiceNow Knowledge (knowledge), single sign-on (sso) or the "
+            "Microsoft Graph connector (graph). Records the existing-sign-in "
+            "marker and leads the output with the fixed compatibility "
+            "opening."
+        ),
+    )
+    resume_parser.add_argument(
         "--roles-available",
         choices=("yes", "no"),
         help=(
@@ -13114,7 +14524,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     test_parser.add_argument(
         "--result",
-        choices=("pass", "fail", "untested", "empty"),
+        choices=("pass", "fail", "untested", "empty", "unclear"),
         required=True,
     )
     test_parser.add_argument(
@@ -13216,6 +14626,20 @@ def build_parser() -> argparse.ArgumentParser:
     realm_admin_parser.add_argument("--directory-tenant-id")
     realm_admin_parser.add_argument(
         "--confirm-saved-mapping", action="store_true"
+    )
+    portal_url_parser = subparsers.add_parser(
+        "record-realm-portal-url",
+        help=(
+            "Record the employee portal URL a destination agent should use; "
+            "records the request only and writes nothing to the destination."
+        ),
+    )
+    portal_url_parser.add_argument(
+        "--realm", choices=("test", "prod"), required=True
+    )
+    portal_url_parser.add_argument("--portal-url", required=True)
+    portal_url_parser.add_argument(
+        "--confirm-portal-url", action="store_true"
     )
     select_realm_parser = subparsers.add_parser(
         "select-realm",
@@ -13540,12 +14964,26 @@ def _command_error_recovery(
 
 
 AGENT_RULES = (
+    "When chatMessage is present, send it verbatim as plain Markdown before "
+    "any other tool call (no code fence around it unless it already has "
+    "one); never reword it, write your own checklist or a Check/Status "
+    "table, or print internal fields, JSON, or file paths. Terminal output "
+    "is not shown to the maker. Without chatMessage, send renderBlock.text "
+    "or the ordinaryReply/recovery text verbatim instead.",
+    "If endTurn is true, END YOUR TURN right after sending chatMessage: the "
+    "message asks the maker to reply, return, paste, send, or act outside "
+    "chat, and the maker's reply arrives as the next message. Do not read "
+    "the next document or run another command before that reply. When "
+    "afterReply is present, follow it once the maker replies.",
+    "If endTurn is false, do NOT stop and do NOT wait: right after sending "
+    "chatMessage, do exactly what nextCommand says in the same turn.",
+    "When pendingCard is present, ask it with one ask_user call using "
+    "pendingCard.askUserArguments exactly as given: the card title is the "
+    "question, so add no body text, examples, or notes to the card; all "
+    "explanation was already sent in chatMessage. Option labels stay as "
+    "given (Yes/No or very short).",
     "Run every command with the launcher resolved by /setup (py -3, "
     "python3, then python), never assuming bare `python`.",
-    "Emit renderBlock.text verbatim (the grouped phases view), or the "
-    "ordinaryReply/recovery text a guide output returns, as an assistant "
-    "message before any other tool call; never write your own checklist or "
-    "a Check/Status table, and terminal output is not shown to the maker.",
     "Never edit lifecycle.json by hand; record results with "
     "record-checkpoint-results or the matching record-* command.",
     "Never hide command output (no `*> $null`, no `| Out-Null`); read the "
@@ -13554,15 +14992,3508 @@ AGENT_RULES = (
     "this chat, read it now.",
 )
 
+# Wording that asks the maker to reply or act: the turn must end there.
+WAIT_CUE_PATTERN = re.compile(
+    r"return here|come back|tell us|let us know|\breplies\b|\breply\b|"
+    r"\bpaste\b|please send|\bsend (?:back|them|us|it|that|this|the)\b|"
+    r"once you have|when you have|when they|full https base url|\?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_WAIT_RENDER_KINDS = frozenset({"waiting", "error", "final"})
+_WAIT_STATUS_MARKERS = ("-required", "maker-action", "input-required")
+# Outputs whose only maker-facing text is `message`; they end the turn.
+_MESSAGE_STOP_STATUSES = frozenset(
+    {"unsupported-agent", "portal-url-confirmation"}
+)
+
+
+def _test_reply_message(result: dict[str, Any]) -> str | None:
+    """`message` of a Test-pane result that is a reply to the maker, not a record."""
+    message = result.get("message")
+    if not isinstance(message, str) or not message.strip():
+        return None
+    reply_only = (
+        result.get("status") == "open" and result.get("recorded") is False
+    )
+    untested = (
+        result.get("kind") == "maker-attestation"
+        and result.get("result") == "untested"
+    )
+    return message if reply_only or untested else None
+
+
+def has_wait_cue(text: str) -> bool:
+    """True when maker-facing text asks the maker to reply or act."""
+    return bool(WAIT_CUE_PATTERN.search(text or ""))
+
+
+def _is_raw_card(value: dict[str, Any]) -> bool:
+    return (
+        isinstance(value.get("header"), str)
+        and isinstance(value.get("question"), str)
+        and isinstance(value.get("allowFreeformInput"), bool)
+    )
+
+
+def _is_typed_question(value: dict[str, Any]) -> bool:
+    """A free-text question: no options, the maker types the answer in chat."""
+    return (
+        _is_raw_card(value)
+        and value["allowFreeformInput"] is True
+        and not value.get("options")
+    )
+
+
+def _pending_cards(
+    value: Any,
+    *,
+    typed: bool = False,
+) -> list[dict[str, Any]]:
+    """Canonical card questions this output asks, in order, without duplicates.
+
+    Free-text questions are never cards; ``typed=True`` returns only those so
+    they can be sent as plain chat text.
+    """
+    found: list[dict[str, Any]] = []
+
+    def visit(node: Any) -> None:
+        if isinstance(node, dict):
+            if _is_raw_card(node):
+                if _is_typed_question(node) == typed:
+                    found.append(node)
+                return
+            for key, item in node.items():
+                if (
+                    key in {"canonicalQuestion", "followUpQuestions"}
+                    or str(key).startswith("manual")
+                ):
+                    continue
+                visit(item)
+        elif isinstance(node, list):
+            for item in node:
+                visit(item)
+
+    visit(value)
+    unique: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for card in found:
+        key = json.dumps([card["header"], card["question"]])
+        if key not in seen:
+            seen.add(key)
+            unique.append(card)
+    return unique
+
+
+_CLAIM_CONFIRMATION_AFTER_REPLY = (
+    "When the maker returns, any message means they want to continue. "
+    "Do not ask a Yes/No question. Record only the administrators' "
+    "non-sensitive reply with the existing record-identity-direct "
+    "commands; a proposed name, a name alone or a vague \"done\" is "
+    "not confirmation, so keep waiting and ask only for what is "
+    "still missing."
+)
+
+
+def _recorded_entra_claim_reply(
+    context: dict[str, Any],
+    state: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Reply that skips the claim ask when this agent already has the answer.
+
+    Returns None unless the Entra administrator's confirmation, with a claim
+    name, is already recorded for this agent. A changed claim is handled by
+    ``--custom-claim`` and never reaches this check.
+    """
+    admin = state.get("adminSetup")
+    handoffs = admin.get("phaseHandoffs") if isinstance(admin, dict) else None
+    entra = handoffs.get("entra-registration") if isinstance(handoffs, dict) else None
+    evidence = entra.get("evidence") if isinstance(entra, dict) else None
+    if not (
+        isinstance(entra, dict)
+        and entra.get("status") == "completed"
+        and isinstance(evidence, dict)
+        and evidence.get("selectedClaimName")
+    ):
+        return None
+    return {
+        "status": "claim-already-recorded",
+        "decision": "claim-already-recorded",
+        "recordsNothing": True,
+        "waitsForMaker": False,
+        "provider": PROVIDER_KEY,
+        "agentSlug": _agent_slug(context),
+        "renderBlock": {
+            "kind": "progress",
+            "text": (
+                "Your Entra administrator's confirmation for this agent is "
+                "already saved, so we won't ask for it again. We'll continue "
+                "from where setup left off."
+            ),
+        },
+    }
+
+
+def claim_confirmation_handoff(
+    *,
+    custom_claim: bool = False,
+    claim_name_given: bool = False,
+    servicenow_confirmed: bool = False,
+    second_agent: bool = False,
+) -> dict[str, Any]:
+    """Fixed reply for an identifier the Entra administrator has not confirmed.
+
+    The Part 4 custom-claim instructions are sent only when the maker says a
+    custom claim is wanted. The maker is never asked to pick a mapping, invent
+    a claim name or fall back to email; only the missing confirmations are
+    requested. With a custom claim whose name is already given, spec S4-F's
+    fixed reply asks the Entra administrator to complete the custom-claim work.
+    """
+    if not custom_claim:
+        return {
+            "status": "claim-confirmation-required",
+            "decision": "claim-confirmation-required",
+            "recordsNothing": True,
+            "renderBlock": {
+                "kind": "waiting",
+                "text": (
+                    "We need your Entra administrator to confirm which claim "
+                    "the app sends for ServiceNow before we continue.\n\n"
+                    "Ask them to reply with the exact claim name. Don't send "
+                    "employee identifiers or secrets.\n\n"
+                    "We'll keep the Client ID already supplied."
+                ),
+            },
+            "afterReply": _CLAIM_CONFIRMATION_AFTER_REPLY,
+        }
+    if claim_name_given:
+        return _custom_identifier_claim_planned_reply()
+    paragraphs = [
+        "We need the Entra administrator to confirm the custom claim before "
+        "ServiceNow can use it to identify employees.",
+        "Ask them to complete the custom-claim work in Part 4 of their "
+        "instructions. Bring back the exact configured claim name and "
+        "confirmation that the setup is complete, including the "
+        "appropriate format and populated source attribute for every "
+        "intended employee.",
+    ]
+    if not servicenow_confirmed:
+        saved = (
+            f"saved and can serve {_product_audience()}"
+            if second_agent
+            else "saved"
+        )
+        paragraphs.append(
+            "Then ask your ServiceNow administrator to confirm that the "
+            f"supported configuration is {saved}, with the matching User "
+            "Claim and User Field. Don't send employee identifiers or "
+            "secrets."
+        )
+    paragraphs.append(
+        "The Client ID already supplied stays in place."
+        if second_agent
+        else "We'll keep the Client ID already supplied."
+    )
+    return {
+        "status": "claim-confirmation-required",
+        "decision": "claim-confirmation-required",
+        "recordsNothing": True,
+        "renderBlock": {"kind": "waiting", "text": "\n\n".join(paragraphs)},
+        "afterReply": _CLAIM_CONFIRMATION_AFTER_REPLY,
+    }
+
+
+_STANDARD_USER_CLAIMS = frozenset({"email", "upn"})
+
+_V2_METADATA_URL_RE = re.compile(
+    r"^https://login\.microsoftonline\.com/"
+    r"(?P<tenant>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+    r"/v2\.0/\.well-known/openid-configuration/?$",
+    re.IGNORECASE,
+)
+
+_METADATA_URL_AFTER_REPLY = (
+    "When the maker returns, any message means they want to continue. Do not "
+    "ask a Yes/No question. Record only the administrators' non-sensitive "
+    "reply with the existing record-identity-direct commands, then recheck "
+    "the affected setup before the maker repeats the request in the Test "
+    "pane. Run this diagnosis only when the maker reported the actual "
+    "metadata URL; never infer it from a generic failure."
+)
+
+
+_SERVICE_AREAS_AFTER_REPLY = (
+    "When the maker returns, any message means they want to continue. Do not "
+    "ask a Yes/No question. Record only the administrator's non-sensitive "
+    "reply with the existing commands, rerun the recheck of the affected "
+    "setup, then ask the maker to repeat the HR request in the Test pane and "
+    "tell us whether the service areas appear. Never claim the employee's "
+    "roles were checked, never assign a role, and never treat the empty list "
+    "alone as proof of the cause."
+)
+
+_HR_ACCESS_ROLES = (
+    "`sn_hr_core.basic`, `sn_hr_core.manager`, or `sn_hr_core.admin`"
+)
+
+
+def empty_service_areas_handoff(realm: str = "dev") -> dict[str, Any]:
+    """Fixed reply when the maker reports an empty HR service-area list.
+
+    Used only for the HR agent. Nothing is recorded, no role is checked or
+    assigned, and the empty list alone is not treated as proof of the cause.
+    """
+    if ACTIVE_PROFILE.key != "hrsd":
+        return {
+            "status": "no-diagnosis",
+            "decision": "not-an-hr-agent",
+            "recordsNothing": True,
+            "note": (
+                "HR service areas exist only for the HR agent, so this "
+                "diagnosis does not apply. Continue the normal flow."
+            ),
+        }
+    if realm == "dev":
+        text = (
+            "An empty HR service-area list can occur when the signed-in "
+            "employee doesn't have the required ServiceNow HR access.\n\n"
+            "Ask your ServiceNow administrator to review the access for the "
+            "account used in this request through your organization's normal "
+            "process. The administrator instructions identify the applicable "
+            f"roles: {_HR_ACCESS_ROLES}.\n\n"
+            "Return with their non-sensitive reply after any required access "
+            "work is complete. We'll recheck the applicable setup. Then "
+            "repeat the HR request in this agent's Test pane and tell us "
+            "whether the service areas appear."
+        )
+    else:
+        text = (
+            "The HR service-area list is empty. Employees using HR scenarios "
+            f"need one of the ServiceNow roles {_HR_ACCESS_ROLES}.\n\n"
+            "Ask your ServiceNow administrator to review the access for the "
+            "account used in this request. This skill doesn't check or "
+            "assign those roles.\n\n"
+            "Bring back their non-sensitive reply after any required access "
+            "work is complete. We'll recheck the applicable setup before you "
+            "repeat the request in the destination agent's Test pane."
+        )
+    return {
+        "status": "service-access-review-required",
+        "decision": "service-access-review-required",
+        "recordsNothing": True,
+        "renderBlock": {"kind": "waiting", "text": text},
+        "afterReply": _SERVICE_AREAS_AFTER_REPLY,
+    }
+
+
+REALM_REPLY_SITUATIONS = (
+    "pause",
+    "wrong-realm",
+    "dev-connection",
+    "dev-untested",
+    "empty-matches",
+    "no-result",
+    "identity-mismatch",
+)
+_REALM_REPLY_AFTER_PLAIN = (
+    "Send chatMessage verbatim with nothing before or after it and end your "
+    "turn. Nothing is recorded by this command; do not write a statement "
+    "about what was or was not recorded."
+)
+_REALM_REPLY_AFTER_IDENTITY = (
+    "Send chatMessage verbatim with nothing before or after it and end your "
+    "turn. Use this only when the maker's pasted error or a supported check "
+    "shows the sign-in claim value does not match the confirmed ServiceNow "
+    "user field; never infer it from a generic failure. When the maker "
+    "returns, any message means they want to continue: record only the "
+    "administrators' non-sensitive reply with the existing "
+    "record-identity-direct commands (never secrets or employee "
+    "identifiers), do not change an existing OIDC configuration serving SSO "
+    "or the Microsoft Graph connector, then run check-realm for this realm "
+    "to recheck the affected setup. Do not present earlier Dev or Test "
+    "success as current validation of the changed configuration; a fresh "
+    "Test-pane request from this agent is still required. Nothing is "
+    "recorded by this command."
+)
+
+
+def _quote_block(paragraphs: list[str]) -> str:
+    return "\n>\n".join(
+        "\n".join(f"> {line}" for line in paragraph.splitlines())
+        for paragraph in paragraphs
+    )
+
+
+def _realm_instance_name(context: dict[str, Any], realm: str) -> str | None:
+    try:
+        registry = realms.load_registry(
+            Path(context["root"]),
+            ACTIVE_PROFILE.provider_key,
+            _agent_slug(context),
+        )
+        target = registry["targets"].get(realm) or {}
+        instance = (target.get("expected") or {}).get("values", {}).get(
+            "instanceName"
+        )
+        if isinstance(instance, str) and instance.strip():
+            return normalize_instance_name(instance)
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        AttributeError,
+        ServiceNowConnectError,
+        realms.ServiceNowRealmError,
+    ):
+        pass
+    return _state_instance_name(_realm_dev_state(context))
+
+
+def realm_reply_notice(
+    context: dict[str, Any],
+    realm: str,
+    situation: str,
+    reported_realm: str = "dev",
+) -> dict[str, Any]:
+    """Fixed maker-facing reply for a Test-pane situation at a destination.
+
+    Wording follows spec scenarios S5-P (waiting), S5-J, S5-H, S5-O, and
+    S5-L. The caller names the situation only after the maker's reply or a
+    supported check shows it. Nothing is recorded.
+    """
+    if realm not in realms.PROMOTED_REALMS:
+        raise ServiceNowConnectError("Realm must be a destination realm.")
+    if situation not in REALM_REPLY_SITUATIONS:
+        raise ServiceNowConnectError("Unsupported destination situation.")
+    agent = _realm_agent_name(context, realm)
+    label = realm.title()
+    agent_in = f"**{agent} in {label}**"
+    after_reply = _REALM_REPLY_AFTER_PLAIN
+    if situation == "pause":
+        record = "case" if ACTIVE_PROFILE.key == "hrsd" else "ticket"
+        text = (
+            f"We're waiting for your real-data request in {agent_in}.\n\n"
+            "When you return, tell us what happened and whether it matched "
+            f"what you expected. Don't include {record} contents, employee "
+            "identifiers, tokens, or other secrets. The completed setup "
+            "information stays in place."
+        )
+    elif situation == "wrong-realm":
+        if reported_realm not in ("dev", "test") or reported_realm == realm:
+            raise ServiceNowConnectError(
+                "--reported-realm must name a different realm than --realm."
+            )
+        text = (
+            f"That's a {reported_realm.title()} result; we still need a "
+            f"result from **{label}**.\n\n"
+            f"Open {agent_in} and run the request in that agent's **Test "
+            "pane**. Then tell us whether it returns the expected data."
+        )
+    elif situation == "dev-connection":
+        text = (
+            "A working Dev connection doesn't tell us whether a usable "
+            "connection is available and linked to this agent in "
+            f"**{label}**.\n\n"
+            "We'll check the destination's connection and agent link. You "
+            "don't need to resend applicable administrator confirmations."
+        )
+    elif situation == "dev-untested":
+        text = (
+            "The Dev integration was left untested, so we don't have a "
+            "working result from that realm.\n\n"
+            f"This run will establish the result for {agent_in}. We still "
+            "need its destination connection and agent link, followed by "
+            "your real-data request."
+        )
+    elif situation == "empty-matches":
+        text = _dev_empty_result_message()
+    elif situation == "no-result":
+        text = (
+            f"What did the request from {agent_in} return, and was that "
+            "what you expected?"
+        )
+    else:
+        instance = _realm_instance_name(context, realm)
+        if not instance:
+            raise ServiceNowConnectError(
+                "The ServiceNow instance name is not recorded yet; do not "
+                "write an instance address that is not confirmed."
+            )
+        intro = [
+            "The supplied evidence shows that the sign-in claim value "
+            "doesn't match the administrator-confirmed ServiceNow user "
+            "field.",
+            "Send the message below to your ServiceNow administrator. It "
+            "asks them to review the mapping with your Entra "
+            "administrator, including its existing uses.",
+            "Bring back their non-sensitive confirmation of the completed "
+            "setup and exact mapping. We'll recheck the affected setup "
+            "before you repeat the request in the destination agent's "
+            "Test pane.",
+            "Don't include employee identifiers or secrets. We'll retain "
+            "unrelated healthy work and recheck any dependencies affected "
+            "by the identity repair.",
+        ]
+        message = [
+            f"During setup validation of {agent_in}, the available "
+            "evidence identified a mismatch between the sign-in claim "
+            "value and the confirmed ServiceNow user field.",
+            "Please review the intended claim-to-field mapping with the "
+            f"Entra administrator for **https://{instance}.service-now.com**"
+            ". This identity setup is shared across Dev, Test, and Prod.",
+            "Do not change an existing OIDC configuration serving SSO or "
+            "the Microsoft Graph connector. Any coexistence conflict needs "
+            "manual coordination using the [coexistence guidance]"
+            f"({_COEXISTENCE_LINK}).",
+            "**Please send back:** confirmation that the corrected "
+            "configuration is saved and supports this ESS setup, the exact "
+            "User Claim and User Field, and any changed Client ID or custom "
+            "claim name that applies. If the custom claim setup changed, "
+            "include its exact configured name and confirmation that it is "
+            "complete, including the appropriate format and populated "
+            "source attribute for every intended employee.",
+            "**If the mapping or compatibility is unresolved:** report the "
+            "remaining blocker instead of confirming completion.",
+            "**Do not send employee identifiers, record contents, or "
+            "secrets.**",
+        ]
+        text = (
+            "\n\n".join(intro)
+            + "\n\n**Ready-to-send message**\n\n"
+            + _quote_block(message)
+        )
+        after_reply = _REALM_REPLY_AFTER_IDENTITY
+    return {
+        "status": "realm-reply-notice",
+        "decision": f"realm-{situation}",
+        "realm": realm,
+        "recordsNothing": True,
+        "renderBlock": {"kind": "waiting", "text": text},
+        "afterReply": after_reply,
+    }
+
+
+_REALM_SETUP_AFTER_REPLY = {
+    "incomplete": (
+        "Send the message above, then run the /setup handoff in setupHandoff. "
+        "When setup is finished, run realm-setup-handoff --situation "
+        "complete and continue. Nothing is recorded by this command."
+    ),
+    "complete": (
+        "Send the message above. If the maker picks a different supported "
+        "ESS agent, switch to it first; then run discover-realm-target. "
+        "Nothing is recorded by this command."
+    ),
+}
+
+
+def realm_setup_handoff(situation: str) -> dict[str, Any]:
+    """Destination-validation wording for the basic-setup gate."""
+    if situation == "incomplete":
+        text = (
+            "Before we can continue, we need to finish basic ADK setup. "
+            "We'll hand over to the setup skill and return here afterward."
+        )
+        return {
+            "status": "setup-required",
+            "branch": "workspace-not-prepared",
+            "decision": "finish-basic-setup",
+            "recordsNothing": True,
+            "setupHandoff": {"command": "/setup"},
+            "renderBlock": {"kind": "waiting", "text": text},
+            "afterReply": _REALM_SETUP_AFTER_REPLY[situation],
+        }
+    text = (
+        "We'll continue with the ESS agent you just set up. You can select a "
+        "different supported ESS agent before we continue."
+    )
+    return {
+        "status": "setup-complete",
+        "decision": "continue-with-agent",
+        "recordsNothing": True,
+        "renderBlock": {"kind": "info", "text": text},
+        "afterReply": _REALM_SETUP_AFTER_REPLY[situation],
+    }
+
+
+_TARGET_CHANGES = ("environment", "agent", "instance", "tenant", "user")
+_TARGET_CHANGE_AFTER_REPLY = (
+    "Send the message above, then follow nextCommand so the permission and "
+    "applicability checks run again. For a promoted destination run "
+    "discover-realm-target first; it proves the maker's permission there "
+    "and reuses only setup information that still applies. Do not reuse "
+    "evidence from the earlier target until those checks pass. Nothing is "
+    "recorded by this command."
+)
+_FRIENDLY_NAME_BLOCKED_RE = re.compile(
+    r"https?://|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    re.IGNORECASE,
+)
+
+
+def _destination_realm_active(context: dict[str, Any]) -> bool:
+    try:
+        registry = realms.load_registry(
+            Path(context["root"]), ACTIVE_PROFILE.provider_key, _agent_slug(context)
+        )
+    except (OSError, ValueError, KeyError, realms.ServiceNowRealmError):
+        return False
+    return registry.get("activeTargetRealm") in {"test", "prod"}
+
+
+def target_change_handoff(
+    context: dict[str, Any],
+    change: str,
+    target: str | None = None,
+) -> dict[str, Any]:
+    """Fixed notice when the target, user, instance, or tenant changes.
+
+    The message names the agent and environments the maker knows. It records
+    nothing; earlier evidence is reused only after the permission and
+    applicability checks pass.
+    """
+    name = (target or "").strip()
+    if change in {"environment", "agent"} and not name:
+        raise ServiceNowConnectError(
+            "Pass --target with the new environment or agent name."
+        )
+    if name and _FRIENDLY_NAME_BLOCKED_RE.search(name):
+        raise ServiceNowConnectError(
+            "Pass the friendly name the maker used, not an ID or a URL."
+        )
+    agent = _display_agent_name(context)
+    environment = _recorded_environment_name(context)
+    if change == "environment":
+        subject = f"{agent} in {name}"
+        earlier = environment or "the earlier environment"
+        headline = "That changes the target environment."
+    elif change == "agent":
+        subject = f"{name} in {environment}" if environment else name
+        earlier = agent
+        headline = "That changes the target agent."
+    else:
+        subject = f"{agent} in {environment}" if environment else agent
+        headline, earlier = {
+            "instance": (
+                "That changes the ServiceNow instance.",
+                "the earlier instance",
+            ),
+            "tenant": ("That changes the tenant.", "the earlier tenant"),
+            "user": (
+                "That changes the signed-in user.",
+                "the earlier account",
+            ),
+        }[change]
+    dev_state = _realm_dev_state(context)
+    if _existing_identity_kind(dev_state):
+        closing = (
+            f"We won't assume that the connection or test evidence from "
+            f"{earlier} applies there."
+        )
+    else:
+        closing = (
+            f"We won't reuse evidence from {earlier} without those checks."
+        )
+    if _custom_identifier_active(dev_state) and not _existing_identity_kind(
+        dev_state
+    ):
+        text = (
+            f"{headline} We'll verify your permission for **{subject}** and "
+            "revalidate which earlier setup information applies.\n\n"
+            f"We won't assume the connection or test evidence from "
+            f"{earlier} applies there."
+        )
+    elif (
+        change == "environment"
+        and not _existing_identity_kind(dev_state)
+        and (context.get("environment") or {}).get("tenant_id")
+        and _second_agent_audience(context, dev_state)
+    ):
+        text = (
+            f"We'll use **{subject}**. We'll check your permission there and "
+            "which earlier setup information still applies before "
+            "continuing."
+        )
+    else:
+        text = (
+            f"{headline} We'll check your permission for **{subject}** and "
+            "which earlier setup information still applies.\n\n"
+            f"{closing}"
+        )
+    if change == "instance" and _destination_realm_active(context):
+        text = realms.instance_pause_text()
+    return {
+        "status": "target-change-notice",
+        "decision": "revalidate-target",
+        "recordsNothing": True,
+        "change": change,
+        "renderBlock": {"kind": "info", "text": text},
+        "afterReply": _TARGET_CHANGE_AFTER_REPLY,
+    }
+
+
+_EXISTING_IDENTITY_KINDS: dict[str, dict[str, str]] = {
+    "knowledge": {
+        "along": "Knowledge",
+        "uses": "ServiceNow Knowledge",
+        "itself": "The Knowledge connection itself isn't the connection ESS needs.",
+        "connector": (
+            "The ServiceNow Knowledge connection is a different connector "
+            "and can't replace it."
+        ),
+        "that_is": "That is the Knowledge connector",
+        "leave": "Leave the Knowledge connector unchanged.",
+        "retest": "ServiceNow Knowledge wasn't retested.",
+    },
+    "sso": {
+        "along": "single sign-on",
+        "uses": "ServiceNow single sign-on",
+        "itself": (
+            "The existing single sign-on setup itself isn't the connection "
+            "ESS needs."
+        ),
+        "connector": (
+            "A connection created for single sign-on is a different "
+            "connector and can't replace it."
+        ),
+        "that_is": "That is a different connector",
+        "leave": "Leave that connector unchanged.",
+        "retest": "Existing single sign-on wasn't retested.",
+    },
+    "graph": {
+        "along": "the Microsoft Graph connector",
+        "uses": "the Microsoft Graph connector for ServiceNow",
+        "itself": (
+            "The Microsoft Graph connector itself isn't the connection ESS "
+            "needs."
+        ),
+        "connector": (
+            "The Microsoft Graph connector is a different connector and "
+            "can't replace it."
+        ),
+        "that_is": "That is the Microsoft Graph connector",
+        "leave": "Leave the Microsoft Graph connector unchanged.",
+        "retest": "The Microsoft Graph connector wasn't retested.",
+    },
+}
+
+_EXISTING_IDENTITY_SITUATIONS = (
+    "disclosure",
+    "setup-incomplete",
+    "setup-complete",
+    "entra-incomplete",
+    "two-client-ids",
+    "servicenow-incomplete",
+    "servicenow-fields-unnamed",
+    "coexistence-conflict",
+    "replace-configuration",
+    "waiting",
+    "resumed",
+    "resolution-missing-mapping",
+    "different-registration",
+    "custom-claim",
+    "knowledge-connector",
+    "existing-connection",
+    "connection-disconnected",
+    "missing-consent",
+    "metadata-url",
+    "blocked-finish",
+    "hr-prerequisite-self-confirmed",
+    "topic-off",
+    "binding-missing",
+    "retry-after-fix",
+)
+
+_EXISTING_AFTER_REPLY_CONTINUE = (
+    "When the maker returns, any message means they want to continue. Do "
+    "not ask a Yes/No question. Record only the administrators' "
+    "non-sensitive reply with the existing record-identity-direct "
+    "commands (never secrets or employee identifiers). If a custom claim "
+    "changed, run claim-confirmation-handoff --custom-claim (add "
+    "--claim-name-given when the name was supplied) and ask only for the "
+    "missing confirmations. Do not change an existing OIDC configuration "
+    "serving SSO or the Microsoft Graph connector. Recheck the affected "
+    "setup with resume-handoff before continuing."
+)
+_EXISTING_AFTER_REPLY_CONNECTION = (
+    "When the maker returns and names the connection they used, record it "
+    "with the existing connection commands and continue with "
+    "resume-handoff so this agent's connection and link are rechecked. Do "
+    "not change a shared connection or the shared sign-in configuration."
+)
+_EXISTING_AFTER_REPLY_VALUES = (
+    "When the maker replies, record the confirmed values with the existing "
+    "record-identity-direct commands, never secrets or employee "
+    "identifiers, and continue with resume-handoff. Ask only for what is "
+    "still missing."
+)
+_EXISTING_AFTER_REPLY_SETUP = (
+    "Run basic ADK setup first. When it completes, continue with the "
+    "setup-complete situation of this command, then resume-handoff."
+)
+_EXISTING_AFTER_REPLY_PREREQUISITE = (
+    "When the maker replies, record the administrator's reply with the "
+    "existing plugin-prerequisite commands and continue with "
+    "resume-handoff."
+)
+_EXISTING_AFTER_REPLY_TEST = (
+    "When the maker reports the Test pane result, record it with "
+    "record-test (--result pass, fail, untested, empty, or unclear). Do "
+    "not restart administrator setup or change the Knowledge connector."
+)
+
+
+def _existing_identity_kind(state: dict[str, Any] | None) -> str | None:
+    marker = state.get("existingIdentity") if isinstance(state, dict) else None
+    kind = marker.get("kind") if isinstance(marker, dict) else None
+    return kind if kind in _EXISTING_IDENTITY_KINDS else None
+
+
+def _state_instance_name(state: dict[str, Any] | None) -> str | None:
+    setup = state.get("adminSetup") if isinstance(state, dict) else None
+    preflight = setup.get("preflight") if isinstance(setup, dict) else None
+    instance = (
+        preflight.get("instanceName") if isinstance(preflight, dict) else None
+    )
+    if not isinstance(instance, str) or not instance.strip():
+        return None
+    try:
+        return normalize_instance_name(instance)
+    except ServiceNowConnectError:
+        return None
+
+
+def _existing_identity_purpose() -> str:
+    copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
+    return f"create and track {copy_['audience']} {copy_['records']}"
+
+
+def _existing_identity_opening(
+    context: dict[str, Any],
+    state: dict[str, Any] | None,
+    kind: str,
+) -> str:
+    """Spec S3 step 1: the opening for a maker who reuses existing sign-in."""
+    environment = _recorded_environment_name(context)
+    in_bold = f" in **{environment}**" if environment else ""
+    in_plain = f" in {environment}" if environment else ""
+    lines = [
+        f"We'll connect **{_spec_agent_name()}**{in_bold} so employees can "
+        f"{_DEV_OPENING_PURPOSE[ACTIVE_PROFILE.key]}.",
+        "",
+        _existing_identity_notice(kind),
+    ]
+    instance = _state_instance_name(state)
+    if instance:
+        lines.extend(
+            ["", f"**ServiceNow instance:** https://{instance}.service-now.com"]
+        )
+    lines.extend(
+        [
+            "",
+            "We're checking whether your account can configure this agent"
+            f"{in_plain} before setup begins.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _existing_identity_notice(kind: str) -> str:
+    copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
+    words = _EXISTING_IDENTITY_KINDS[kind]
+    return (
+        "Your administrators will confirm whether ESS can use the existing "
+        f"sign-in setup alongside {words['along']}. {words['itself']}\n\n"
+        "We won't change the shared sign-in configuration. After "
+        "administrator confirmation, we'll configure the ESS connection and "
+        f"test {copy_['article']} {copy_['audience']} request with your "
+        "account."
+    )
+
+
+def _existing_identity_lead_in(
+    stage: str,
+    kind: str,
+    *,
+    claim_name: str | None = None,
+) -> str:
+    """Spec S3 steps 2, 4 and 5: lead-ins before the compatibility reviews."""
+    if stage == "entra":
+        text = (
+            "Send this message to your Microsoft Entra administrator. It "
+            "asks them to confirm compatibility with your ServiceNow "
+            "administrator before setup proceeds.\n\n"
+            "When they reply, paste their confirmation here without "
+            "secrets. They'll identify the registration and settings ESS "
+            "should use; you don't need to interpret them."
+        )
+        if ACTIVE_PROFILE.requires_hr_core:
+            return (
+                "The HR prerequisite is confirmed. Next, send the Entra "
+                "handoff so your administrators can confirm a compatible "
+                f"sign-in setup for ESS.\n\n{text}"
+            )
+        return text
+    if claim_name and claim_name.casefold() not in {"email", "upn"}:
+        confirmed = (
+            "The Entra administrator has confirmed the registration for "
+            "ESS, including its Client ID and custom claim "
+            f"`{claim_name}`."
+        )
+    else:
+        confirmed = (
+            "The Entra administrator has confirmed the registration for "
+            "ESS, including its Client ID and standard "
+            f"{(claim_name or 'email').casefold()} claim."
+        )
+    return (
+        f"{confirmed}\n\n"
+        "Next, send this message to your ServiceNow administrator to "
+        "confirm the saved sign-in setup and employee matching for ESS.\n\n"
+        "It includes the Entra values just confirmed. Paste their reply "
+        "here without secrets."
+    )
+
+
+_COEXISTENCE_LINK = (
+    "https://learn.microsoft.com/en-us/microsoft-365/copilot/"
+    "employee-self-service/declarative-agent-servicenow-hr-it"
+    "#coexistence-with-the-microsoft-graph-connector-for-servicenow"
+)
+_KNOWLEDGE_GUIDANCE_LINK = (
+    "https://learn.microsoft.com/en-us/microsoftsearch/"
+    "servicenow-knowledge-connector"
+)
+_ESS_INTEGRATION_LINK = (
+    "https://learn.microsoft.com/en-us/microsoft-365/copilot/"
+    "employee-self-service/declarative-agent-servicenow-hr-it"
+)
+_CONNECTOR_SETUP_LINK = (
+    "https://learn.microsoft.com/en-us/connectors/service-now/"
+    "#how-to-set-up-a-servicenow-power-platform-connection-that-uses-"
+    "microsoft-entra-id"
+)
+_JWT_CLAIMS_LINK = (
+    "https://learn.microsoft.com/en-us/entra/identity-platform/"
+    "jwt-claims-customization"
+)
+_EMIT_IDENTITY_KEY_LINK = _ESS_INTEGRATION_LINK + (
+    "#configure-microsoft-entra-to-emit-the-identity-key"
+)
+
+
+def _existing_entra_packet(
+    context: dict[str, Any],
+    kind: str,
+    instance_name: str,
+) -> str:
+    """Spec S3 step 3: compatibility review first, setup steps as reference."""
+    words = _EXISTING_IDENTITY_KINDS[kind]
+    url = f"https://{instance_name}.service-now.com"
+    paragraphs = [
+        f"We're connecting **{_spec_agent_name()}** to **{url}**, so "
+        f"employees can {_existing_identity_purpose()} while signed in as "
+        "themselves.",
+        f"The maker reports that the organization already uses "
+        f"{words['uses']}. Please confirm whether the identity setup can "
+        "support ESS alongside the existing integration.",
+        "This requires an app registration in Microsoft Entra ID that "
+        "ServiceNow trusts to identify users. You need the **Global "
+        "Administrator** or **Cloud Application Administrator** role.",
+        "**Review compatibility before setup**\n\n"
+        "1. Coordinate with the ServiceNow administrator to identify the "
+        "registration and shared sign-in configuration relevant to this "
+        "instance.\n"
+        "2. Review the user claims, API scope, and authorized Microsoft "
+        "ServiceNow connector described below. Decide whether the existing "
+        "setup satisfies the ESS requirements alongside its current uses.\n"
+        "3. If the requirements are already satisfied, confirm reuse "
+        "without repeating completed steps. If work is missing or a "
+        "conflict remains, agree on a supported resolution with the "
+        "ServiceNow administrator before proceeding.",
+        "ServiceNow allows only one OIDC configuration per Microsoft Entra "
+        "tenant. Decide whether the existing identity setup can be reused "
+        "through the supported ESS path. Do not treat the setup reference "
+        "below as a request to overwrite an existing configuration serving "
+        "SSO or the Microsoft Graph connector.",
+        "If the existing configuration creates a conflict, resolve it "
+        "manually with the ServiceNow administrator. The ESS connection "
+        "skill cannot diagnose or resolve that conflict.",
+        "Review [coexistence with the Microsoft Graph connector for "
+        f"ServiceNow]({_COEXISTENCE_LINK}).",
+        "**Please send back:** confirmation that the registration supports "
+        "this ESS setup alongside the existing integration, the "
+        "Application (client) ID and custom claim "
+        "name if applicable. State whether the configuration was reused or "
+        "newly created.",
+        "**If compatibility is unresolved:** report what remains "
+        "unresolved instead of confirming completion.",
+        "**Do not send passwords, client secrets, tokens, or certificate "
+        "material.**",
+        "**Setup reference\u2014only for administrator-agreed work**",
+        "These instructions describe the required setup; they are not a "
+        "request to create or overwrite shared configuration. Use them only "
+        "for work you and the ServiceNow administrator determine is needed "
+        "and supported after compatibility is resolved.",
+        "**Part 1: Register the app**\n\n"
+        "1. Sign in to the [Microsoft Entra admin center]"
+        "(https://entra.microsoft.com).\n"
+        "2. Go to **App registrations > New registration**.\n"
+        "3. Enter a purpose-specific name, such as **ESS ServiceNow "
+        "sign-in**. Keep the default account type and leave **Redirect "
+        "URI** empty.\n"
+        "4. Select **Register**.\n"
+        "5. On **Overview**, copy the **Application (client) ID**.",
+        "**Part 2: Add user claims**\n\n"
+        "1. Select **Token configuration > Add optional claim**.\n"
+        "2. Select token type **Access**, then select **aud**, **email**, "
+        "and **upn**.\n"
+        "3. Select **Add**. If prompted to enable Microsoft Graph email "
+        "and profile permissions, select the check box and select **Add**.",
+        "**Part 3: Allow the Microsoft ServiceNow connector to sign users "
+        "in**\n\n"
+        "1. Select **Expose an API**.\n"
+        "2. Next to **Application ID URI**, select **Add**. Keep the "
+        "generated default URI\u2014`api://` followed by this app's Client "
+        "ID\u2014and select **Save**.\n"
+        "3. Select **Add a scope**. Set:\n"
+        "   - **Scope name:** `user_impersonation`\n"
+        "   - **Who can consent:** Admins and users\n"
+        "   - **Display names and descriptions:** wording identifying "
+        "ServiceNow access, such as **Access ServiceNow**\n"
+        "4. Select **Add scope**.\n"
+        "5. Select **Add a client application**. Enter Microsoft's "
+        "ServiceNow connector Client ID: "
+        f"`{SERVICENOW_CONNECTOR_CLIENT_ID}`.\n"
+        "6. Select the `user_impersonation` scope and select **Add "
+        "application**.",
+        "**Part 4: Only if ServiceNow identifies employees by something "
+        "other than email or UPN**\n\n"
+        "Coordinate the identifier with the ServiceNow administrator.\n\n"
+        "1. Ensure the identifier\u2014for example, an employee or payroll "
+        "ID\u2014is populated in a Microsoft Entra user attribute for every "
+        "employee who will use ESS with ServiceNow.\n"
+        "2. Configure the app to emit that attribute as a claim, "
+        f"following [Configure Microsoft Entra to emit the identity key]"
+        f"({_EMIT_IDENTITY_KEY_LINK}) and [Customize JWT claims]"
+        f"({_JWT_CLAIMS_LINK}).\n"
+        "3. Use a claim format appropriate to the identifier rather than "
+        "the default email format.\n"
+        "4. If Entra returns an error after adding the claim, follow the "
+        "guidance for `acceptMappedClaims` on single-tenant apps or a "
+        "custom signing key.",
+        f"References: [ESS ServiceNow integration]({_ESS_INTEGRATION_LINK}) "
+        f"and [ServiceNow connector setup]({_CONNECTOR_SETUP_LINK}).",
+    ]
+    return "\n\n".join(paragraphs)
+
+
+def _existing_servicenow_packet(
+    context: dict[str, Any],
+    kind: str,
+    *,
+    instance_name: str,
+    client_id: str,
+    tenant_id: str,
+    claim_name: str,
+) -> str:
+    """Spec S3 step 5: confirm the saved setup; setup steps are reference."""
+    words = _EXISTING_IDENTITY_KINDS[kind]
+    url = f"https://{instance_name}.service-now.com"
+    custom = (
+        f"`{claim_name}`"
+        if claim_name.casefold() not in {"email", "upn"}
+        else f"none; standard {claim_name.casefold()} claim confirmed"
+    )
+    hr_step = (
+        "\n8. Employees who use HR scenarios need one of the roles "
+        "`sn_hr_core.basic`, `sn_hr_core.manager`, or `sn_hr_core.admin`."
+        if ACTIVE_PROFILE.requires_hr_core
+        else ""
+    )
+    paragraphs = [
+        f"We're connecting **{_spec_agent_name()}** to **{url}**, so "
+        f"employees can {_existing_identity_purpose()} while signed in as "
+        "themselves.",
+        f"The maker reports that the organization already uses "
+        f"{words['uses']}. Please confirm that the saved sign-in setup and "
+        "employee mapping can support ESS alongside the existing "
+        "integration.",
+        "ServiceNow needs to trust Microsoft Entra sign-in and match each "
+        "employee to their ServiceNow user record. You need the `admin` or "
+        "`security_admin` role.",
+        "**Entra values confirmed for this ESS setup**\n\n"
+        f"- **Client ID:** `{client_id}`\n"
+        f"- **Tenant ID:** `{tenant_id}`\n"
+        f"- **Custom claim:** {custom}",
+        "**Review compatibility before setup**\n\n"
+        "1. Review the existing OIDC configuration against the Entra "
+        "values confirmed for ESS.\n"
+        "2. Confirm the User Claim and User Field that match the signed-in "
+        "employee to their ServiceNow user record. Do not infer this "
+        f"mapping from {words['along']} working.\n"
+        "3. If the saved configuration satisfies the ESS requirements "
+        "alongside its existing uses, confirm reuse without repeating "
+        "completed steps.",
+        "**Preserve the existing configuration**\n\n"
+        "ServiceNow allows only one OIDC configuration per Microsoft Entra "
+        "tenant. If an existing configuration serves SSO or the Microsoft "
+        "Graph connector, **do not change it**.\n\n"
+        "Coordinate with the Entra administrator to decide whether the "
+        "existing setup can be reused. If it cannot support the ESS path "
+        "without a conflict, resolve that manually before returning setup "
+        "confirmation to the maker. The ESS connection skill will not "
+        "change or resolve the existing configuration.\n\n"
+        f"Review [coexistence guidance]({_COEXISTENCE_LINK}) and "
+        f"[ServiceNow Knowledge connector guidance]({_KNOWLEDGE_GUIDANCE_LINK}).",
+        "**Please send back:** confirmation that the configuration is saved "
+        "and supports this ESS setup alongside the existing integration, "
+        "the **User Claim**, and the **User Field**. State whether the "
+        "configuration was reused or newly created.",
+        "**If compatibility is unresolved:** report what remains "
+        "unresolved instead of confirming completion.",
+        "**Do not send secrets.**",
+        "**Setup reference\u2014only for administrator-agreed work**",
+        "These describe the supported configuration. Do not apply them as "
+        "changes to an existing OIDC configuration serving SSO or the "
+        "Graph connector.",
+        f"1. Sign in to **{url}**.\n"
+        "2. From the profile menu, select **Elevate role**, select "
+        "`security_admin`, and select **Update**. If the **New** button is "
+        "missing later, check that the role is elevated.\n"
+        "3. Go to **All**, search for **OAuth**, and select **System OAuth "
+        "> Application Registry**.\n"
+        "4. Select **New > Configure an OIDC provider to verify ID "
+        "tokens**.\n"
+        "5. Complete the application registry form:\n"
+        "   - **Name:** a purpose-specific name, such as **ESS Microsoft "
+        "Entra ID**\n"
+        f"   - **Client ID:** `{client_id}`\n"
+        "   - **Client Secret:** any value; this field isn't used for this "
+        "configuration. Do not return it to the maker.\n"
+        "   - **Scope Restriction:** Broadly scoped\n"
+        "6. Beside **OAuth OIDC Provider Configuration**, select the "
+        "search icon, then **New**. Set:\n"
+        "   - **OIDC Provider:** a name for this tenant, such as "
+        "**Microsoft Entra ID \u2014 <your organization>**\n"
+        "   - **OIDC Metadata URL:** "
+        f"`https://login.microsoftonline.com/{tenant_id}/.well-known/"
+        "openid-configuration`\n"
+        "   - **OIDC Configuration Cache Life Span:** `120`\n"
+        "   - **Application:** Global, if shown\n"
+        "   - **User Claim:** `email` or `upn`, whichever matches how "
+        "ServiceNow user records identify employees. If a custom "
+        "identifier is required, coordinate its confirmed claim with the "
+        "Entra administrator first.\n"
+        "   - **User Field:** the user-record field holding that exact "
+        "identifier\u2014for example, **Email** for the `email` claim\n"
+        "   - **Enable JTI claim verification:** off\n"
+        "7. Select **Submit**. Back on the application registry form, "
+        "confirm that the configuration is selected and select "
+        f"**Submit**.{hr_step}",
+        "**Important:** Do not use the metadata URL containing `/v2.0` "
+        "from Entra's Endpoints page.",
+        f"References: [ESS ServiceNow integration]({_ESS_INTEGRATION_LINK}) "
+        f"and [ServiceNow connector setup]({_CONNECTOR_SETUP_LINK}).",
+    ]
+    return "\n\n".join(paragraphs)
+
+
+def _existing_credential_lead_in(state: dict[str, Any]) -> str:
+    mapping = state.get("evidence", {}).get("identityMapping")
+    claim = field = None
+    if (
+        isinstance(mapping, dict)
+        and mapping.get("serviceNowAdministratorConfirmed") is True
+    ):
+        claim = mapping.get("tokenClaimName")
+        field = mapping.get("serviceNowUserField")
+    if isinstance(claim, str) and claim and isinstance(field, str) and field:
+        return (
+            "Your ServiceNow administrator has confirmed that the saved "
+            f"setup supports ESS, with User Claim `{claim}` and User Field "
+            f"**{field}**.\n\n"
+        )
+    return ""
+
+
+def _existing_connection_guidance(
+    context: dict[str, Any],
+    state: dict[str, Any],
+    kind: str,
+    *,
+    client_id: str | None,
+    instance_name: str,
+) -> str:
+    """Spec S3 steps 6-7: select or create the ESS connection."""
+    audience = _product_audience()
+    words = _EXISTING_IDENTITY_KINDS[kind]
+    return (
+        _existing_credential_lead_in(state)
+        + "Next, select or create a ServiceNow connection for "
+        f"{_spec_agent_name()}. We'll then configure and test this agent "
+        f"with your real {audience} data.\n\n"
+        "Use a supported ESS ServiceNow connection if one is available; "
+        f"otherwise, create one. {words['connector']}\n\n"
+        "In Copilot Studio:\n\n"
+        f"1. Open **{_display_agent_name(context)}** in "
+        f"**{_display_environment_name(context)}**.\n"
+        "2. Go to **Settings > Connection Settings > ServiceNow > "
+        "Connect**.\n"
+        "3. Select a supported ESS ServiceNow connection available for "
+        "this agent, or select **Create new connection**.\n"
+        "4. For a new connection, use:\n"
+        "   - **Authentication type:** Microsoft Entra ID User Login\n"
+        f"   - **Resource URI:** `{client_id or 'not yet confirmed'}`\n"
+        f"   - **Instance name:** `{instance_name}`\n\n"
+        "Return here and tell us which connection you used. You don't need "
+        "to resend the administrator replies."
+    )
+
+
+def _second_agent_reuse(
+    context: dict[str, Any],
+    state: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Spec S2: the other ServiceNow agent whose shared setup this run reuses.
+
+    Returns None for the first agent, for a same-product agent, and when the
+    existing-identity marker is set (the S3 wording owns that case).
+    """
+    if _existing_identity_kind(state):
+        return None
+    for source in _other_agent_reuse_sources(context, state):
+        profile = source["profile"]
+        if profile.key == ACTIVE_PROFILE.key:
+            continue
+        other_state = source["state"]
+        setup = other_state.get("adminSetup")
+        handoff = _completed_handoff(
+            setup if isinstance(setup, dict) else {}, "entra-registration"
+        )
+        client_id = None
+        raw_client_id = (
+            handoff["evidence"].get("clientId") if handoff else None
+        )
+        if raw_client_id:
+            try:
+                client_id = normalize_client_id(str(raw_client_id))
+            except ServiceNowConnectError:
+                client_id = None
+        evidence = other_state.get("evidence")
+        mapping = (
+            evidence.get("identityMapping")
+            if isinstance(evidence, dict)
+            else None
+        )
+        claim = field = None
+        if isinstance(mapping, dict):
+            raw_claim = mapping.get("tokenClaimName")
+            raw_field = mapping.get("serviceNowUserField")
+            if isinstance(raw_claim, str) and _SAFE_IDENTITY_NAME.fullmatch(
+                raw_claim
+            ):
+                claim = raw_claim
+            if isinstance(raw_field, str) and _SAFE_USER_FIELD.fullmatch(
+                raw_field
+            ):
+                field = raw_field
+        return {
+            "audience": "HR" if profile.key == "hrsd" else "IT",
+            "clientId": client_id,
+            "claimName": claim,
+            "userField": field,
+        }
+    return None
+
+
+def _second_agent_audience(
+    context: dict[str, Any],
+    state: dict[str, Any] | None,
+) -> str | None:
+    reuse = _second_agent_reuse(context, state)
+    return reuse["audience"] if reuse else None
+
+
+def _second_agent_names(reuse: dict[str, Any]) -> tuple[str, str]:
+    """Other agent's audience and this run's, from the single resolver."""
+    return reuse["audience"], _product_audience()
+
+
+def _second_agent_packet_tail(packet: str, marker: str) -> str:
+    """The setup steps of an existing packet, from the marker onward."""
+    tail = packet[packet.index(marker):]
+    for old, new in (
+        (
+            "Coordinate the identifier with the ServiceNow administrator.",
+            "Coordinate the identifier with your ServiceNow administrator.",
+        ),
+        ("Configure the app to emit", "Configure this app to emit"),
+        (
+            "whichever matches how ServiceNow user records",
+            "whichever matches how your ServiceNow user records",
+        ),
+    ):
+        tail = tail.replace(old, new)
+    return tail
+
+
+def _second_agent_claim_label(claim: str | None) -> str:
+    if claim and claim.casefold() not in {"email", "upn"}:
+        return f"custom claim `{claim}`"
+    return f"standard {(claim or 'email').casefold()} claim"
+
+
+def _second_agent_entra_lead_in(reuse: dict[str, Any]) -> str:
+    """Spec S2 step 2: the Entra handoff lead-in for the second agent."""
+    other, audience = _second_agent_names(reuse)
+    prefix = (
+        "The HR prerequisite is confirmed. "
+        if ACTIVE_PROFILE.requires_hr_core
+        else ""
+    )
+    return (
+        f"{prefix}{other} is already using ServiceNow. Your administrators "
+        "still need to confirm that the shared sign-in setup can also serve "
+        f"{audience}. This doesn't necessarily mean creating or "
+        "changing anything.\n\n"
+        "Send this message to your Microsoft Entra administrator. It "
+        f"includes the earlier {other} values for review.\n\n"
+        "When they reply, paste their confirmation here without secrets. "
+        "They'll coordinate reuse with your ServiceNow administrator; you "
+        "don't need to interpret the settings."
+    )
+
+
+def _second_agent_servicenow_lead_in(
+    reuse: dict[str, Any],
+    claim_name: str | None,
+) -> str:
+    """Spec S2 step 4: acknowledge Entra, then ask for the ServiceNow review."""
+    other, audience = _second_agent_names(reuse)
+    return (
+        f"The Entra administrator has confirmed that {audience} can use the "
+        "existing registration, including its Client ID and "
+        f"{_second_agent_claim_label(claim_name)}.\n\n"
+        "Next, send this message to your ServiceNow administrator to "
+        f"confirm the saved sign-in setup and employee matching for "
+        f"{audience}.\n\n"
+        "It includes the Entra values just confirmed and the earlier "
+        f"{other} mapping for review. Paste their reply here without "
+        "secrets."
+    )
+
+
+def _second_agent_packet_intro(
+    reuse: dict[str, Any],
+    url: str,
+) -> str:
+    return (
+        f"Employee Self-Service {reuse['audience']} already uses "
+        f"**{url}**. We're adding **{_spec_agent_name()}** so employees can "
+        f"{_existing_identity_purpose()} while signed in as themselves."
+    )
+
+
+def _second_agent_entra_packet(
+    context: dict[str, Any],
+    reuse: dict[str, Any],
+    instance_name: str,
+) -> str:
+    """Spec S2 step 3: review the shared registration before any setup."""
+    other, audience = _second_agent_names(reuse)
+    url = f"https://{instance_name}.service-now.com"
+    tenant_id = _normalize_directory_tenant_id(
+        context["environment"]["tenant_id"]
+    )
+    values = []
+    if reuse["clientId"]:
+        values.append(f"- **Client ID:** `{reuse['clientId']}`")
+    values.append(f"- **Tenant ID:** `{tenant_id}`")
+    if reuse["claimName"]:
+        claim = reuse["claimName"]
+        values.append(
+            "- **Claim setup:** standard email claim; no custom claim"
+            if claim.casefold() in {"email", "upn"}
+            else f"- **Claim setup:** custom claim `{claim}`"
+        )
+    base = _existing_entra_packet(
+        context, next(iter(_EXISTING_IDENTITY_KINDS)), instance_name
+    )
+    paragraphs = [
+        _second_agent_packet_intro(reuse, url),
+        f"Please confirm whether the existing ESS app registration can also "
+        f"serve {audience}. ServiceNow needs an app registration in "
+        "Microsoft Entra ID that it can trust to identify users. You need "
+        "the **Global Administrator** or **Cloud Application "
+        "Administrator** role.",
+        f"**Earlier {other} values\u2014review before using for "
+        f"{audience}**\n\n" + "\n".join(values),
+        f"These are the values confirmed for {other}, not yet confirmed for "
+        f"{audience}.",
+        "**Review the existing setup first**\n\n"
+        "1. Coordinate with your ServiceNow administrator to confirm "
+        f"whether this registration can serve {audience} on the same "
+        "instance.\n"
+        "2. Review the user claims, API scope, and authorized Microsoft "
+        "ServiceNow connector described in the setup instructions below. "
+        "Confirm which requirements the existing registration already "
+        "satisfies.\n"
+        "3. Confirm the Client ID and custom claim name if "
+        f"applicable for {audience}. If the existing setup meets the "
+        "requirements, reuse it without repeating completed steps or "
+        "creating another registration.",
+        "ServiceNow allows only one OIDC configuration per Microsoft Entra "
+        "tenant. If an app registration already supports ServiceNow "
+        "Knowledge or single sign-on, coordinate with the ServiceNow "
+        "administrator before creating another one.",
+        "Review [coexistence with the Microsoft Graph connector for "
+        f"ServiceNow]({_COEXISTENCE_LINK}).",
+        "**Please send back:** confirmation whether the registration can "
+        f"serve {audience}, the Application (client) ID, and custom "
+        "claim name if applicable. State whether "
+        "the configuration was reused or newly created. If reuse is "
+        "unresolved, tell us what remains to be agreed.",
+        "**Do not send passwords, client secrets, tokens, or certificate "
+        "material.**",
+        "**Setup instructions\u2014only for work you determine is "
+        "needed**",
+        "You and the ServiceNow administrator decide which work is missing "
+        "and agree on any changes before proceeding, accounting for "
+        f"{other} and other existing uses. Do not repeat completed steps "
+        f"solely to add {audience}.",
+        _second_agent_packet_tail(base, "**Part 1: Register the app**"),
+    ]
+    return "\n\n".join(paragraphs)
+
+
+def _second_agent_servicenow_packet(
+    context: dict[str, Any],
+    reuse: dict[str, Any],
+    *,
+    instance_name: str,
+    client_id: str,
+    tenant_id: str,
+    claim_name: str,
+) -> str:
+    """Spec S2 steps 5-6: confirm the saved setup can also serve this agent."""
+    other, audience = _second_agent_names(reuse)
+    url = f"https://{instance_name}.service-now.com"
+    custom = (
+        f"`{claim_name}`"
+        if claim_name.casefold() not in {"email", "upn"}
+        else f"none; standard {claim_name.casefold()} claim confirmed"
+    )
+    paragraphs = [
+        _second_agent_packet_intro(reuse, url),
+        "Please confirm whether the saved ESS sign-in configuration and "
+        f"employee mapping can also serve {audience}. ServiceNow needs to "
+        "trust Microsoft Entra sign-in and match each employee to their "
+        "ServiceNow user record. You need the `admin` or `security_admin` "
+        "role.",
+        f"**Entra values confirmed for {audience}**\n\n"
+        f"- **Client ID:** `{client_id}`\n"
+        f"- **Tenant ID:** `{tenant_id}`\n"
+        f"- **Custom claim:** {custom}",
+    ]
+    if reuse["claimName"] and reuse["userField"]:
+        paragraphs.extend(
+            [
+                f"**Earlier {other} mapping\u2014review before using for "
+                f"{audience}**\n\n"
+                f"- **User Claim:** `{reuse['claimName']}`\n"
+                f"- **User Field:** **{reuse['userField']}**",
+                f"This mapping was confirmed for {other}, not yet "
+                f"confirmed for {audience}.",
+            ]
+        )
+    base = _existing_servicenow_packet(
+        context,
+        next(iter(_EXISTING_IDENTITY_KINDS)),
+        instance_name=instance_name,
+        client_id=client_id,
+        tenant_id=tenant_id,
+        claim_name=claim_name,
+    )
+    paragraphs.extend(
+        [
+            "**Review the existing setup first**\n\n"
+            "1. Review the saved ESS OIDC configuration against the Entra "
+            f"values confirmed for {audience}.\n"
+            "2. Confirm the User Claim and User Field that match the "
+            "signed-in employee to their ServiceNow user record.\n"
+            "3. If the saved setup can serve "
+            f"{audience}, confirm its reuse without creating another "
+            "configuration or repeating completed steps.",
+            "ServiceNow allows only one OIDC configuration per Microsoft "
+            "Entra tenant. If a configuration already serves single "
+            "sign-on or the Microsoft Graph connector, **don't change "
+            "it**. Coordinate the appropriate reuse or resolution with "
+            "your Entra administrator.",
+            f"See [coexistence guidance]({_COEXISTENCE_LINK}) and "
+            f"[ServiceNow Knowledge connector guidance]"
+            f"({_KNOWLEDGE_GUIDANCE_LINK}).",
+            "**Please send back:** confirmation that the configuration is "
+            f"saved and can serve {audience}, the **User Claim**, and the "
+            "**User Field** used. State whether the configuration was "
+            "reused or newly created. If reuse is unresolved, tell us what "
+            "remains to be agreed.",
+            "**Do not send secrets.**",
+            "**Setup instructions\u2014only for work you determine is "
+            "needed**",
+            "If work is missing, coordinate the appropriate reuse or "
+            "resolution with the Entra administrator before proceeding, "
+            f"accounting for {other} and other existing uses. Do not "
+            f"repeat completed steps solely to add {audience}.",
+            "**Configure ServiceNow**",
+            _second_agent_packet_tail(base, f"1. Sign in to **{url}**."),
+        ]
+    )
+    return "\n\n".join(paragraphs)
+
+
+def _second_agent_credential_lead_in(state: dict[str, Any]) -> str:
+    """Spec S2 step 8: both administrators confirmed the shared setup."""
+    audience = _product_audience()
+    mapping = state.get("evidence", {}).get("identityMapping")
+    claim = field = None
+    if (
+        isinstance(mapping, dict)
+        and mapping.get("serviceNowAdministratorConfirmed") is True
+    ):
+        claim = mapping.get("tokenClaimName")
+        field = mapping.get("serviceNowUserField")
+    using = (
+        f", using `{claim}` as the User Claim and **{field}** as the User "
+        "Field"
+        if isinstance(claim, str)
+        and claim
+        and isinstance(field, str)
+        and field
+        else ""
+    )
+    return (
+        "Both administrators have confirmed the shared sign-in setup for "
+        f"{audience}{using}.\n\n"
+        f"Next, select a ServiceNow connection for {_spec_agent_name()}. "
+        f"We'll then configure and test the {audience} agent.\n\n"
+    )
+
+
+def _second_agent_connection_guidance(
+    context: dict[str, Any],
+    state: dict[str, Any],
+    reuse: dict[str, Any],
+) -> str:
+    """Spec S2 steps 8-9: select an existing connection; no duplicate."""
+    other, audience = _second_agent_names(reuse)
+    return (
+        _second_agent_credential_lead_in(state)
+        + "In Copilot Studio:\n\n"
+        f"1. Open **{_display_agent_name(context)}** in "
+        f"**{_display_environment_name(context)}**.\n"
+        "2. Go to **Settings > Connection Settings > ServiceNow > "
+        "Connect**.\n"
+        "3. Select an existing ServiceNow connection available for this "
+        "agent.\n\n"
+        f"The connection may still have \"{other}\" in its name; you don't "
+        "need to rename it or create a duplicate solely to add "
+        f"{audience}.\n\n"
+        "Return here and tell us which connection you selected. You won't "
+        "need to resend the administrator replies."
+    )
+
+
+def _existing_plugin_prerequisite_guidance(
+    instance_url: str,
+) -> str:
+    """Spec S3 Q: the HR prerequisite lead-in and ready-to-send message."""
+    return (
+        "Before the shared sign-in confirmation, your ServiceNow "
+        "administrator needs to confirm that the HR Service Delivery Core "
+        "plugin is installed and active.\n\n"
+        "Send the message below and bring back their reply.\n\n"
+    ) + _ready_to_send_block(
+        f"We're connecting **{_spec_agent_name()}** to ServiceNow HR "
+        f"Service Delivery on **{instance_url}**.\n\n"
+        "Please confirm that **HR Service Delivery Core** "
+        "(`com.sn_hr_core`) is installed and active.\n\n"
+        "Go to **All > System Definition > Plugins** and search for "
+        "**Human Resources Scoped App: Core**.\n\n"
+        "**Please send back:** whether the plugin is installed and active."
+    )
+
+
+def _existing_identity_message(
+    context: dict[str, Any],
+    state: dict[str, Any],
+    kind: str,
+    situation: str,
+    *,
+    connection_name: str | None = None,
+) -> tuple[str, str, str]:
+    """Fixed S3 reply for one situation: (text, render kind, afterReply)."""
+    copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
+    words = _EXISTING_IDENTITY_KINDS[kind]
+    audience = copy_["audience"]
+    agent = _spec_agent_name()
+    environment = _recorded_environment_name(context)
+    in_bold = f" in **{environment}**" if environment else ""
+    agent_in_env = (
+        f"**{agent} in {environment}**" if environment else f"**{agent}**"
+    )
+    instance = _state_instance_name(state) or "not confirmed"
+    mapping_items = (
+        "non-sensitive compatibility confirmation, saved-configuration "
+        "confirmation, User Claim, User Field, and any changed registration "
+        "or claim values"
+    )
+    waiting, info = "waiting", "info"
+    if situation == "setup-incomplete":
+        return (
+            "Before we can add ESS alongside the existing integration, we "
+            "need to finish basic ADK setup. We'll complete that first, "
+            "then return here.",
+            waiting,
+            _EXISTING_AFTER_REPLY_SETUP,
+        )
+    if situation == "setup-complete":
+        return (
+            f"We'll continue with **{agent}**, the agent you just set up"
+            f"{in_bold}. You can select another supported ESS agent before "
+            "we continue.",
+            info,
+            "",
+        )
+    if situation == "entra-incomplete":
+        return (
+            "Ask your Entra administrator to confirm which registration "
+            "supports ESS, including its **Client ID** and "
+            "any **custom claim name**.\n\n"
+            "Paste their reply here without secrets, or send the confirmed "
+            "values individually.",
+            waiting,
+            _EXISTING_AFTER_REPLY_VALUES,
+        )
+    if situation == "two-client-ids":
+        return (
+            "Ask your Entra administrator which **Client ID** ESS should "
+            "use.\n\n"
+            "Send that value here. We'll keep the other confirmed "
+            "information already supplied.",
+            waiting,
+            _EXISTING_AFTER_REPLY_VALUES,
+        )
+    if situation == "servicenow-incomplete":
+        return (
+            "Ask your ServiceNow administrator to confirm that the "
+            "configuration is saved and supports ESS, and name its **User "
+            "Claim** and **User Field**.\n\n"
+            "Paste their reply here without secrets, or send the missing "
+            "items individually. You don't need to repeat the Entra values.",
+            waiting,
+            _EXISTING_AFTER_REPLY_VALUES,
+        )
+    if situation == "servicenow-fields-unnamed":
+        return (
+            "Ask your ServiceNow administrator which **User Claim** and "
+            "**User Field** they confirmed for ESS. Send those values here.",
+            waiting,
+            _EXISTING_AFTER_REPLY_VALUES,
+        )
+    if situation == "coexistence-conflict":
+        return (
+            "Your Entra and ServiceNow administrators need to agree on a "
+            "supported setup that accounts for the existing integration.\n\n"
+            "Ask them to use the compatibility guidance in their messages. "
+            "We won't change the shared configuration or troubleshoot the "
+            "conflict.\n\n"
+            "Bring back their non-sensitive compatibility confirmation, "
+            "saved-configuration confirmation for ESS, User Claim, User "
+            "Field, and any changed registration or claim values. Don't "
+            "include employee identifiers or secrets.\n\n"
+            "We'll recheck the affected setup before continuing. Unchanged "
+            "applicable information stays in place.",
+            waiting,
+            _EXISTING_AFTER_REPLY_CONTINUE,
+        )
+    if situation == "replace-configuration":
+        return (
+            "We can't replace the shared sign-in configuration. Your Entra "
+            "and ServiceNow administrators need to agree on a supported "
+            "setup that accounts for its existing uses.\n\n"
+            "Ask them to coordinate using the guidance in their messages, "
+            f"then bring back their {mapping_items}. We'll recheck the "
+            "affected setup before continuing.",
+            waiting,
+            _EXISTING_AFTER_REPLY_CONTINUE,
+        )
+    if situation == "waiting":
+        return _existing_waiting_text(), waiting, _EXISTING_AFTER_REPLY_CONTINUE
+    if situation == "resumed":
+        return (
+            "We're continuing the ServiceNow setup for "
+            f"{agent_in_env}.\n\n"
+            "We're rechecking your permission before we continue. Next, "
+            "we'll need your administrators' compatibility confirmation.",
+            info,
+            "",
+        )
+    if situation == "resolution-missing-mapping":
+        return (
+            "We have their resolution update. Ask your ServiceNow "
+            "administrator to confirm that the configuration is saved and "
+            "supports ESS, and name the **User Claim** and **User Field**.\n\n"
+            "Send the missing confirmation and values here without employee "
+            "identifiers or secrets. We'll recheck the affected setup "
+            "before continuing to the ESS connection.",
+            waiting,
+            _EXISTING_AFTER_REPLY_VALUES,
+        )
+    if situation == "different-registration":
+        return (
+            "We'll check the setup information tied to the newly confirmed "
+            "Client ID before continuing.\n\n"
+            "Ask your ServiceNow administrator to confirm that the "
+            "configuration for that registration is saved and supports ESS, "
+            "and provide its **User Claim** and **User Field**. Bring back "
+            "their non-sensitive reply and any other changed setup values. "
+            "We won't carry forward confirmation tied to the earlier Client "
+            "ID.",
+            waiting,
+            _EXISTING_AFTER_REPLY_CONTINUE,
+        )
+    if situation == "custom-claim":
+        return (
+            "We need the Entra administrator to confirm the exact claim "
+            "before ServiceNow can use it for this setup.\n\n"
+            "Ask them to complete the custom-claim work in Part 4 of their "
+            "instructions. Bring back the exact configured claim name and "
+            "confirmation that the setup is complete, including the "
+            "appropriate format and populated source attribute for every "
+            "intended employee.\n\n"
+            "Then ask your ServiceNow administrator to confirm that the "
+            "supported configuration is saved and supports ESS, with the "
+            "matching User Claim and User Field. Don't send employee "
+            "identifiers or secrets.\n\n"
+            "The confirmed Client ID stays in place.",
+            waiting,
+            _EXISTING_AFTER_REPLY_CONTINUE,
+        )
+    if situation == "knowledge-connector":
+        return (
+            f"{words['that_is']}, not the ServiceNow connection used by the "
+            f"ESS {audience} agent.\n\n"
+            f"In **{agent} > Settings > Connection Settings > ServiceNow**, "
+            "create the connection using **Microsoft Entra ID User Login**, "
+            "the confirmed Client ID as **Resource URI**, and "
+            f"`{instance}` as **Instance name**.\n\n"
+            f"{words['leave']} Return here and tell us which ESS connection "
+            "you used. We'll check this agent's connection and link before "
+            "continuing.",
+            waiting,
+            _EXISTING_AFTER_REPLY_CONNECTION,
+        )
+    if situation == "existing-connection":
+        return (
+            "You can select that existing ESS ServiceNow connection "
+            "instead of creating a duplicate.\n\n"
+            "Return here and tell us which one you selected. We'll check "
+            f"that {agent} can use it.",
+            waiting,
+            _EXISTING_AFTER_REPLY_CONNECTION,
+        )
+    if situation == "connection-disconnected":
+        name = (connection_name or "").strip()
+        if not name:
+            raise ServiceNowConnectError(
+                "Pass --connection-name with the friendly connection name "
+                "the maker used."
+            )
+        if _FRIENDLY_NAME_BLOCKED_RE.search(name):
+            raise ServiceNowConnectError(
+                "Pass the friendly connection name the maker used, not an "
+                "ID or a URL."
+            )
+        return (
+            f"**{name} is disconnected**, so {agent} can't use it.\n\n"
+            f"In Copilot Studio, open **{agent} > Settings > Connection "
+            "Settings > ServiceNow**.\n\n"
+            "Reconnect it only if you intend to act on that connection, "
+            "including any shared uses. Otherwise, select another "
+            "supported ESS connection or create a separate one using the "
+            "connection instructions.\n\n"
+            "Return here and tell us which connection you used. We'll "
+            "check this agent's connection and link before you repeat the "
+            f"{audience} request. The administrator replies and portal "
+            "information already supplied stay in place.",
+            waiting,
+            _EXISTING_AFTER_REPLY_CONNECTION,
+        )
+    if situation == "missing-consent":
+        return (
+            "The setup check found that the required Microsoft ServiceNow "
+            "connector consent is missing.\n\n"
+            "Ask your Entra administrator to review Part 3 of their "
+            "handoff with the ServiceNow administrator before any changes "
+            "to the shared setup.\n\n"
+            "Bring back their non-sensitive confirmation that the "
+            "supported setup is complete and any changed values. We'll "
+            "recheck the affected setup before continuing; if a test is "
+            "needed, repeat the request in this agent's Test pane.",
+            waiting,
+            _EXISTING_AFTER_REPLY_CONTINUE,
+        )
+    if situation == "blocked-finish":
+        return (
+            "**Setup is paused:** your administrators haven't yet "
+            f"confirmed a compatible setup for {agent_in_env}. ESS remains "
+            "untested; setup isn't complete.\n\n"
+            "Your progress is saved at their compatibility handoff. Bring "
+            f"back their {mapping_items}. Don't include employee "
+            "identifiers or secrets.",
+            waiting,
+            _EXISTING_AFTER_REPLY_CONTINUE,
+        )
+    if situation == "topic-off":
+        return (
+            f"A ServiceNow {audience} topic needed for this request is off. "
+            "We'll turn on that built-in topic and leave unrelated topics "
+            "unchanged.",
+            info,
+            "",
+        )
+    if situation == "binding-missing":
+        return (
+            f"**{agent}** isn't linked to the selected ServiceNow "
+            "connection. We'll link this agent to it and keep the "
+            "completed administrator setup.",
+            info,
+            "",
+        )
+    if situation == "retry-after-fix":
+        return (
+            f"Try the {audience} request again in the Test pane and tell "
+            "us whether it returns the expected data.",
+            waiting,
+            _EXISTING_AFTER_REPLY_TEST,
+        )
+    if situation == "hr-prerequisite-self-confirmed":
+        if not ACTIVE_PROFILE.requires_hr_core:
+            raise ServiceNowConnectError(
+                "The HR prerequisite applies only to Employee Self-Service HR."
+            )
+        return (
+            "Ask your ServiceNow administrator to confirm that the plugin "
+            "is installed and active. Paste their reply here or relay "
+            "their explicit confirmation.",
+            waiting,
+            _EXISTING_AFTER_REPLY_PREREQUISITE,
+        )
+    raise ServiceNowConnectError("Unsupported existing-identity situation.")
+
+
+def _existing_waiting_text() -> str:
+    return (
+        "We're waiting for your administrators to confirm a compatible "
+        f"setup for **{_spec_agent_name()}**.\n\n"
+        "When they reply, paste their non-sensitive compatibility "
+        "confirmation and saved-configuration confirmation, including User "
+        "Claim, User Field, and any changed registration or claim values. "
+        "Don't include employee identifiers or secrets. You don't need to "
+        "repeat unchanged confirmed information."
+    )
+
+
+def _custom_identifier_active(
+    state: dict[str, Any] | None,
+    *,
+    requested: bool = False,
+) -> bool:
+    """Spec S4: a custom employee identifier (for example a payroll ID).
+
+    True only when the caller just requested it or the maker's
+    custom-identifier marker is stored. A custom claim name alone does not
+    switch wording, so S1 flows with a custom claim stay unchanged. S3
+    existing-identity wording is handled before this.
+    """
+    if requested:
+        return True
+    return isinstance(state, dict) and isinstance(
+        state.get("customIdentifier"), dict
+    )
+
+
+def _record_custom_identifier(
+    context: dict[str, Any], state: dict[str, Any]
+) -> None:
+    """Persist only the non-identity marker; never an identifier value."""
+    if isinstance(state.get("customIdentifier"), dict):
+        return
+    state["customIdentifier"] = {"recordedAt": _utc_now()}
+    _write_lifecycle_state(context, state)
+
+
+def _custom_identifier_lead_in(
+    stage: str,
+    *,
+    claim_name: str | None = None,
+) -> str:
+    """Spec S4 steps 3-5: lead-ins before the custom-claim handoffs."""
+    audience = _product_audience()
+    if stage == "entra":
+        return (
+            "Send this message to your Entra administrator. It asks them to "
+            "confirm the sign-in setup and coordinate employee matching with "
+            "your ServiceNow administrator.\n\n"
+            "Bring back their setup confirmation, the **Client ID**, "
+            "and exact configured **custom claim name**, if "
+            "needed. Paste their non-sensitive reply or send those items "
+            "individually.\n\n"
+            "You don't need to choose the identifier or send anyone's "
+            "payroll ID. Don't include secrets."
+        )
+    claim = f"`{claim_name}`" if claim_name else "custom"
+    return (
+        f"We have the Client ID and administrator-confirmed "
+        f"claim name {claim}.\n\n"
+        "Your administrators have confirmed that ServiceNow identifies "
+        "employees by payroll ID. Next, your ServiceNow administrator will "
+        f"confirm which user-record field matches the {claim} claim.\n\n"
+        "Send this to your ServiceNow administrator. Bring back confirmation "
+        f"that the saved configuration supports this {audience} setup, plus "
+        "the exact **User Claim** and **User Field**.\n\n"
+        "They choose the matching ServiceNow field; you don't need to work "
+        "it out. Don't send anyone's payroll ID."
+    )
+
+
+def _custom_identifier_claim_planned_reply() -> dict[str, Any]:
+    """Spec S4 alternate F: the custom claim is planned, not configured."""
+    return {
+        "status": "claim-confirmation-required",
+        "decision": "claim-confirmation-required",
+        "recordsNothing": True,
+        "renderBlock": {
+            "kind": "waiting",
+            "text": (
+                "We have the proposed name, but the custom claim isn't "
+                "confirmed as configured.\n\n"
+                "Ask your Entra administrator to complete the custom-claim "
+                "work in their message and return non-sensitive "
+                "confirmation that the setup is complete, plus the exact "
+                "configured claim name. We'll keep the Client ID "
+                "while we wait. Don't include employee identifiers or "
+                "secrets."
+            ),
+        },
+        "afterReply": _CLAIM_CONFIRMATION_AFTER_REPLY,
+    }
+
+
+_CUSTOM_ENTRA_SETUP_PARTS = (
+    "**Part 1: Register the app**\n\n"
+    "1. Sign in to the [Microsoft Entra admin center]"
+    "(https://entra.microsoft.com).\n"
+    "2. Go to **App registrations > New registration**.\n"
+    "3. Enter a purpose-specific name, such as **ESS ServiceNow sign-in**. "
+    "Keep the default account type and leave **Redirect URI** empty.\n"
+    "4. Select **Register**.\n"
+    "5. On **Overview**, copy the **Application (client) ID**.",
+    "**Part 2: Add user claims**\n\n"
+    "1. Select **Token configuration > Add optional claim**.\n"
+    "2. Select token type **Access**, then select **aud**, **email**, and "
+    "**upn**.\n"
+    "3. Select **Add**. If prompted to enable Microsoft Graph email and "
+    "profile permissions, select the check box and select **Add**.",
+    "**Part 3: Allow the Microsoft ServiceNow connector to sign users "
+    "in**\n\n"
+    "1. Select **Expose an API**.\n"
+    "2. Next to **Application ID URI**, select **Add**. Keep the generated "
+    "default URI\u2014`api://` followed by this app's Client "
+    "ID\u2014and select **Save**.\n"
+    "3. Select **Add a scope**. Set:\n"
+    "   - **Scope name:** `user_impersonation`\n"
+    "   - **Who can consent:** Admins and users\n"
+    "   - **Display names and descriptions:** wording identifying "
+    "ServiceNow access, such as **Access ServiceNow**\n"
+    "4. Select **Add scope**.\n"
+    "5. Select **Add a client application**. Enter Microsoft's ServiceNow "
+    "connector Client ID: "
+    f"`{SERVICENOW_CONNECTOR_CLIENT_ID}`.\n"
+    "6. Select the `user_impersonation` scope and select **Add "
+    "application**.",
+)
+
+
+def _custom_identifier_entra_packet(instance_name: str) -> str:
+    """Spec S4 step 3: review sign-in and employee matching first."""
+    audience = _product_audience()
+    url = f"https://{instance_name}.service-now.com"
+    paragraphs = [
+        f"We're connecting **{_spec_agent_name()}** to **{url}**, so "
+        f"employees can {_existing_identity_purpose()} while signed in as "
+        "themselves.",
+        "This requires an app registration in Microsoft Entra ID that "
+        "ServiceNow trusts to identify users. You need the **Global "
+        "Administrator** or **Cloud Application Administrator** role.",
+        "**Review sign-in and employee matching**\n\n"
+        "1. Coordinate with the ServiceNow administrator to identify the "
+        "registration and employee identifier relevant to this instance. "
+        "Confirm whether a custom claim is needed and which ServiceNow "
+        "field will match it.\n"
+        "2. Review any applicable setup already used by another ESS agent, "
+        "ServiceNow Knowledge, or single sign-on. Confirm whether it "
+        "satisfies the ESS requirements below for this "
+        f"{audience} setup; do not repeat completed work or create another "
+        "registration solely because a custom identifier is used.\n"
+        "3. If a custom claim is required, confirm that the app emits it "
+        "under the exact agreed name, in a format appropriate to the "
+        "identifier, and that its source attribute is populated for every "
+        "intended employee.",
+        "ServiceNow allows only one OIDC configuration per Microsoft Entra "
+        "tenant. Decide whether an existing setup can be reused. Do not "
+        "treat the setup reference below as a request to change an "
+        "existing OIDC configuration serving SSO or the Microsoft Graph "
+        "connector.",
+        "Review [coexistence with the Microsoft Graph connector for "
+        f"ServiceNow]({_COEXISTENCE_LINK}). Any coexistence conflict needs "
+        "administrator-led manual resolution.",
+        "**Please send back:** confirmation that the registration is "
+        f"configured and supports this ESS {audience} setup, the "
+        "and Application (client) ID. If a custom "
+        "claim is required, include its exact configured name and "
+        "confirmation that its setup is complete, including the "
+        "appropriate format and populated source attribute for every "
+        "intended employee. State whether the configuration was reused or "
+        "newly created.",
+        "**If the setup or compatibility is unresolved:** report what "
+        "remains unresolved instead of confirming completion. Agree on a "
+        "supported resolution with the ServiceNow administrator before "
+        "proceeding; the ESS connection skill cannot diagnose or resolve a "
+        "shared-configuration conflict.",
+        "**Do not send employee payroll values, passwords, client secrets, "
+        "tokens, or certificate material.**",
+        "**Setup reference\u2014only for administrator-agreed work**",
+        "Use these instructions only for work you and the ServiceNow "
+        "administrator determine is needed and supported. If the "
+        "requirements are already satisfied, confirm the applicable setup "
+        "without repeating the steps.",
+        *_CUSTOM_ENTRA_SETUP_PARTS,
+        "**Part 4: Only if ServiceNow identifies employees by something "
+        "other than email or UPN**\n\n"
+        "Coordinate with the ServiceNow administrator to identify the "
+        "value their user records use\u2014for example, a payroll ID.\n\n"
+        "1. Ensure that identifier is populated in a Microsoft Entra user "
+        "attribute for **every employee who will use ESS with "
+        "ServiceNow**. Populate it through HR provisioning, directory "
+        "sync, or directly on the user. Employees with an empty value "
+        "cannot be identified through that claim.\n"
+        "2. Configure this app to emit the attribute as a claim. Follow "
+        f"[Configure Microsoft Entra to emit the identity key]"
+        f"({_EMIT_IDENTITY_KEY_LINK}) and [Customize JWT claims]"
+        f"({_JWT_CLAIMS_LINK}).\n"
+        "3. Record the exact claim name. Use a format appropriate to the "
+        "identifier rather than the default email format.\n"
+        "4. If Entra returns an error after adding the claim, follow the "
+        "guidance for `acceptMappedClaims` on single-tenant apps or a "
+        "custom signing key.",
+        f"References: [ESS ServiceNow integration]({_ESS_INTEGRATION_LINK}) "
+        f"and [ServiceNow connector setup]({_CONNECTOR_SETUP_LINK}).",
+    ]
+    return "\n\n".join(paragraphs)
+
+
+def _custom_identifier_servicenow_packet(
+    *,
+    instance_name: str,
+    client_id: str,
+    tenant_id: str,
+    claim_name: str,
+) -> str:
+    """Spec S4 step 5: confirm the saved mapping for the custom claim."""
+    audience = _product_audience()
+    url = f"https://{instance_name}.service-now.com"
+    hr_access = (
+        [
+            "**HR access:** employees who use HR scenarios need one of the "
+            "ServiceNow roles `sn_hr_core.basic`, `sn_hr_core.manager`, or "
+            "`sn_hr_core.admin`."
+        ]
+        if ACTIVE_PROFILE.requires_hr_core
+        else []
+    )
+    paragraphs = [
+        f"We're connecting **{_spec_agent_name()}** to **{url}**, so "
+        f"employees can {_existing_identity_purpose()} while signed in as "
+        "themselves.",
+        "ServiceNow needs to trust Microsoft Entra sign-in and match each "
+        "employee to their ServiceNow user record. You need the `admin` or "
+        "`security_admin` role.",
+        "**Entra values confirmed for this ESS setup**\n\n"
+        f"- **Client ID:** `{client_id}`\n"
+        f"- **Tenant ID:** `{tenant_id}`\n"
+        f"- **Confirmed custom claim:** `{claim_name}`",
+        f"The Entra administrator has confirmed that `{claim_name}` carries "
+        "the payroll identifier used by ServiceNow.",
+        "**Review sign-in and employee matching**\n\n"
+        "1. Review any applicable saved configuration against the "
+        "confirmed Entra values. Do not infer its applicability from "
+        "another ESS agent, Knowledge, or SSO working.\n"
+        f"2. Confirm that User Claim `{claim_name}` maps to the actual "
+        "`sys_user` field holding the same payroll identifier. The claim "
+        "name alone does not establish which field to use.\n"
+        "3. If the saved configuration already satisfies this ESS "
+        f"{audience} setup alongside its existing uses, confirm reuse "
+        "without repeating completed steps.",
+        "**Preserve the existing configuration**\n\n"
+        "ServiceNow allows only one OIDC configuration per Microsoft Entra "
+        "tenant. If an existing configuration serves SSO or the Microsoft "
+        "Graph connector, **do not change it**.\n\n"
+        "Coordinate appropriate reuse or manual conflict resolution with "
+        "the Entra administrator. Review [coexistence guidance]"
+        f"({_COEXISTENCE_LINK}) and [ServiceNow Knowledge connector "
+        f"guidance]({_KNOWLEDGE_GUIDANCE_LINK}).",
+        "**Please send back:** confirmation that the configuration is saved "
+        f"and supports this ESS {audience} setup, the exact **User "
+        "Claim**, and the exact **User Field** selected. Confirm that the "
+        "field holds the same identifier supplied through the claim. State "
+        "whether the configuration was reused or newly created.",
+        "**If the mapping or compatibility is unresolved:** report what "
+        "remains unresolved instead of confirming completion. Resolve it "
+        "with the Entra administrator before proceeding; the ESS "
+        "connection skill will not change or resolve shared identity "
+        "configuration.",
+        "**Do not send employee payroll values or secrets.**",
+        "**Setup reference\u2014only for administrator-agreed work**",
+        "Use these instructions only for work you and the Entra "
+        "administrator determine is needed and supported. Do not apply "
+        "them as changes to an existing OIDC configuration serving SSO or "
+        "the Graph connector.",
+        f"1. Sign in to **{url}**.\n"
+        "2. From the profile menu, select **Elevate role**, select "
+        "`security_admin`, and select **Update**. If the **New** button is "
+        "missing later, check that the role is elevated.\n"
+        "3. Go to **All**, search for **OAuth**, and select **System OAuth "
+        "> Application Registry**.\n"
+        "4. Select **New > Configure an OIDC provider to verify ID "
+        "tokens**.\n"
+        "5. Complete the application registry form:\n"
+        "   - **Name:** a purpose-specific name, such as **ESS Microsoft "
+        "Entra ID**\n"
+        f"   - **Client ID:** `{client_id}`\n"
+        "   - **Client Secret:** any value; this field isn't used for this "
+        "configuration. Do not return it to the maker.\n"
+        "   - **Scope Restriction:** Broadly scoped\n"
+        "6. Beside **OAuth OIDC Provider Configuration**, select the "
+        "search icon, then **New**. Set:\n"
+        "   - **OIDC Provider:** a name for this tenant, such as "
+        "**Microsoft Entra ID \u2014 <your organization>**\n"
+        "   - **OIDC Metadata URL:** "
+        f"`https://login.microsoftonline.com/{tenant_id}/.well-known/"
+        "openid-configuration`\n"
+        "   - **OIDC Configuration Cache Life Span:** `120`\n"
+        "   - **Application:** Global, if shown\n"
+        f"   - **User Claim:** `{claim_name}`, the exact claim confirmed by "
+        "the Entra administrator\n"
+        "   - **User Field:** the actual `sys_user` field holding that "
+        "same payroll identifier for the employees using ESS\n"
+        "   - **Enable JTI claim verification:** off\n"
+        "7. Select **Submit**. Back on the application registry form, "
+        "confirm that the configuration is selected and select "
+        "**Submit**.",
+        "**Important:** Do not use the metadata URL containing `/v2.0` "
+        "from Entra's Endpoints page. Do not substitute `email` or `upn` "
+        "for the confirmed custom claim.",
+        *hr_access,
+        f"References: [ESS ServiceNow integration]({_ESS_INTEGRATION_LINK}) "
+        f"and [ServiceNow connector setup]({_CONNECTOR_SETUP_LINK}).",
+    ]
+    return "\n\n".join(paragraphs)
+
+
+def _first_agent_entra_packet(instance_name: str) -> str:
+    """Spec S1 step 3: the first-agent message for the Entra administrator."""
+    url = f"https://{instance_name}.service-now.com"
+    paragraphs = [
+        f"We're connecting **{_spec_agent_name()}** to **{url}**, so "
+        f"employees can {_existing_identity_purpose()} while signed in as "
+        "themselves.",
+        "ServiceNow needs an app registration in Microsoft Entra ID that it "
+        "can trust to identify users. You need the **Global "
+        "Administrator** or **Cloud Application Administrator** role.",
+        "**Before creating another app registration**\n\n"
+        "If your organization already has an app registration that "
+        "ServiceNow uses for Microsoft Entra sign-in\u2014for example, for "
+        "ServiceNow Knowledge or single sign-on\u2014coordinate with your "
+        "ServiceNow administrator before creating another one. ServiceNow "
+        "allows only one OIDC configuration per Microsoft Entra tenant.",
+        "Review [coexistence with the Microsoft Graph connector for "
+        f"ServiceNow]({_COEXISTENCE_LINK}).",
+        *(
+            part.replace(
+                "wording identifying ServiceNow access",
+                "wording that identifies ServiceNow access",
+            )
+            for part in _CUSTOM_ENTRA_SETUP_PARTS
+        ),
+        "**Part 4: Only if ServiceNow identifies employees by something "
+        "other than email or UPN**\n\n"
+        "Coordinate the identifier with your ServiceNow administrator.\n\n"
+        "1. Ensure the identifier\u2014for example, an employee or payroll "
+        "ID\u2014is populated in a Microsoft Entra user attribute for every "
+        "employee who will use ESS with ServiceNow.\n"
+        "2. Configure this app to emit that attribute as a claim, "
+        f"following [Configure Microsoft Entra to emit the identity key]"
+        f"({_EMIT_IDENTITY_KEY_LINK}) and [Customize JWT claims]"
+        f"({_JWT_CLAIMS_LINK}).\n"
+        "3. Use a claim format appropriate to the identifier, rather than "
+        "the default email format.\n"
+        "4. If Entra returns an error after adding the claim, follow the "
+        "guidance for `acceptMappedClaims` on single-tenant apps or a "
+        "custom signing key.",
+        "**Please send back:** the Application (client) ID and the custom "
+        "claim name if Part 4 applies. **Do "
+        "not send passwords, client secrets, tokens, or certificate "
+        "material.**",
+        f"References: [ESS ServiceNow integration]({_ESS_INTEGRATION_LINK}) "
+        f"and [ServiceNow connector setup]({_CONNECTOR_SETUP_LINK}).",
+    ]
+    return "\n\n".join(paragraphs)
+
+
+def _first_agent_servicenow_packet(
+    *,
+    instance_name: str,
+    client_id: str,
+    tenant_id: str,
+    claim_name: str,
+) -> str:
+    """Spec S1 step 5: the first-agent message for the ServiceNow admin."""
+    url = f"https://{instance_name}.service-now.com"
+    standard_claim = claim_name.casefold() in {"email", "upn"}
+    custom_claim = (
+        "none supplied for this setup"
+        if standard_claim
+        else f"`{claim_name}`"
+    )
+    user_claim = (
+        "`email` or `upn`, whichever matches how your ServiceNow user "
+        "records identify employees. If a custom identifier is required, "
+        "coordinate its confirmed claim with the Entra administrator first."
+        if standard_claim
+        else f"`{claim_name}`, the claim confirmed by the Entra "
+        "administrator. Don't change it."
+    )
+    hr_access = (
+        [
+            "**HR access:** Employees using HR scenarios need one of "
+            "`sn_hr_core.basic`, `sn_hr_core.manager`, or "
+            "`sn_hr_core.admin`."
+        ]
+        if ACTIVE_PROFILE.requires_hr_core
+        else []
+    )
+    paragraphs = [
+        f"We're connecting **{_spec_agent_name()}** to **{url}**, so "
+        f"employees can {_existing_identity_purpose()} while signed in as "
+        "themselves.",
+        "ServiceNow needs to trust Microsoft Entra sign-in and match each "
+        "employee to their ServiceNow user record. You need the `admin` or "
+        "`security_admin` role.",
+        "**Before changing existing configuration**\n\n"
+        "ServiceNow allows only one OIDC configuration per Microsoft Entra "
+        "tenant. If one already serves single sign-on or the Microsoft "
+        "Graph connector, **don't change it**. Coordinate the appropriate "
+        "reuse or resolution with your Entra administrator.",
+        f"See [coexistence guidance]({_COEXISTENCE_LINK}) and [ServiceNow "
+        f"Knowledge connector guidance]({_KNOWLEDGE_GUIDANCE_LINK}).",
+        "**Entra values**\n\n"
+        f"- **Client ID:** `{client_id}`\n"
+        f"- **Tenant ID:** `{tenant_id}`\n"
+        f"- **Custom claim:** {custom_claim}",
+        "**Configure ServiceNow**\n\n"
+        f"1. Sign in to **{url}**.\n"
+        "2. From the profile menu, select **Elevate role**, select "
+        "`security_admin`, and select **Update**. If the **New** button is "
+        "missing later, check that the role is elevated.\n"
+        "3. Go to **All**, search for **OAuth**, and select **System OAuth "
+        "> Application Registry**.\n"
+        "4. Select **New > Configure an OIDC provider to verify ID "
+        "tokens**.\n"
+        "5. Complete the application registry form:\n"
+        "   - **Name:** a purpose-specific name, such as **ESS Microsoft "
+        "Entra ID**\n"
+        f"   - **Client ID:** `{client_id}`\n"
+        "   - **Client Secret:** any value; this field isn't used for this "
+        "configuration. Do not return it to the maker.\n"
+        "   - **Scope Restriction:** Broadly scoped\n"
+        "6. Beside **OAuth OIDC Provider Configuration**, select the "
+        "search icon, then **New**. Set:\n"
+        "   - **OIDC Provider:** a name for this tenant, such as "
+        "**Microsoft Entra ID \u2014 <your organization>**\n"
+        "   - **OIDC Metadata URL:** "
+        f"`https://login.microsoftonline.com/{tenant_id}/.well-known/"
+        "openid-configuration`\n"
+        "   - **OIDC Configuration Cache Life Span:** `120`\n"
+        "   - **Application:** Global, if shown\n"
+        f"   - **User Claim:** {user_claim}\n"
+        "   - **User Field:** the user-record field holding that exact "
+        "identifier\u2014for example, **Email** for the `email` claim\n"
+        "   - **Enable JTI claim verification:** off\n"
+        "7. Select **Submit**. Back on the application registry form, "
+        "confirm that the configuration is selected and select "
+        "**Submit**.",
+        "**Important:** Do not use the metadata URL containing `/v2.0` "
+        "from Entra's Endpoints page.",
+        *hr_access,
+        "**Please send back:** confirmation that the configuration is "
+        "saved, the **User Claim**, and the **User Field** you used. **Do "
+        "not send secrets.**",
+        f"References: [ESS ServiceNow integration]({_ESS_INTEGRATION_LINK}) "
+        f"and [ServiceNow connector setup]({_CONNECTOR_SETUP_LINK}).",
+    ]
+    return "\n\n".join(paragraphs)
+
+
+def _custom_identifier_connection_guidance(
+    context: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    client_id: str | None,
+    instance_name: str,
+) -> str:
+    """Spec S4 steps 13-14: select or create the ESS connection."""
+    audience = _product_audience()
+    mapping = state.get("evidence", {}).get("identityMapping")
+    lead = ""
+    if (
+        isinstance(mapping, dict)
+        and mapping.get("serviceNowAdministratorConfirmed") is True
+    ):
+        claim = mapping.get("tokenClaimName")
+        field = mapping.get("serviceNowUserField")
+        if isinstance(claim, str) and claim and isinstance(field, str) and field:
+            lead = (
+                "Your ServiceNow administrator has confirmed the saved "
+                f"mapping: User Claim `{claim}` to User Field `{field}`.\n\n"
+            )
+    return (
+        lead
+        + "Next, select or create a ServiceNow connection for "
+        f"{_spec_agent_name()}. Then we'll configure and test {audience} "
+        "with your real ServiceNow data.\n\n"
+        "Use a supported ESS ServiceNow connection if one is available for "
+        "this setup; otherwise, create one. A custom employee identifier "
+        "doesn't automatically require a new connection. A ServiceNow "
+        "Knowledge connection uses a different connector and can't replace "
+        "the ESS connection.\n\n"
+        "In Copilot Studio:\n\n"
+        f"1. Open **{_display_agent_name(context)}** in "
+        f"**{_display_environment_name(context)}**.\n"
+        "2. Go to **Settings > Connection Settings > ServiceNow > "
+        "Connect**.\n"
+        "3. Select a supported ESS ServiceNow connection available for "
+        "this agent, or select **Create new connection**.\n"
+        "4. For a new connection, use:\n"
+        "   - **Authentication type:** Microsoft Entra ID User Login\n"
+        f"   - **Resource URI:** `{client_id or 'not yet confirmed'}`\n"
+        f"   - **Instance name:** `{instance_name}`\n\n"
+        "Return here and tell us which connection you used. You don't need "
+        "to resend the administrator replies."
+    )
+
+
+def _ensure_lifecycle_state(context: dict[str, Any]) -> dict[str, Any]:
+    root = Path(context["root"])
+    if not _lifecycle_state_path(context).exists():
+        contract = _load_json(root / CONTRACT_PATH)
+        decision = decide_next_step(
+            root,
+            provider=ACTIVE_PROFILE.provider_key,
+            agent_slug=_agent_slug(context),
+            executed_actions=frozenset(),
+            verified_phases=frozenset(),
+        )
+        _accept_connect_contract(context, contract, decision)
+    return _load_lifecycle_state(context)
+
+
+def existing_identity_handoff(
+    context: dict[str, Any],
+    kind: str,
+    situation: str = "disclosure",
+    *,
+    connection_name: str | None = None,
+    metadata_url: str | None = None,
+) -> dict[str, Any]:
+    """Fixed S3 reply when the maker reuses Knowledge, SSO or Graph sign-in.
+
+    Records only the non-identity marker that keeps every later administrator
+    message in the S3 compatibility-review wording; it never records identity
+    values and never changes the shared sign-in configuration.
+    """
+    if kind not in _EXISTING_IDENTITY_KINDS:
+        raise ServiceNowConnectError("Unsupported existing integration kind.")
+    if situation not in _EXISTING_IDENTITY_SITUATIONS:
+        raise ServiceNowConnectError("Unsupported existing-identity situation.")
+    state = _ensure_lifecycle_state(context)
+    marker = state.get("existingIdentity")
+    if not (isinstance(marker, dict) and marker.get("kind") == kind):
+        state["existingIdentity"] = {"kind": kind, "recordedAt": _utc_now()}
+        _write_lifecycle_state(context, state)
+    after_reply = ""
+    if situation == "disclosure":
+        if state.get("openingShown"):
+            text, render_kind = _existing_identity_notice(kind), "info"
+        else:
+            text = _existing_identity_opening(context, state, kind)
+            render_kind = "info"
+            state["openingShown"] = {"shownAt": _utc_now()}
+            _write_lifecycle_state(context, state)
+    elif situation == "metadata-url":
+        if not metadata_url:
+            raise ServiceNowConnectError("Pass --metadata-url.")
+        diagnosis = metadata_url_handoff(metadata_url)
+        if "renderBlock" not in diagnosis:
+            return {
+                **diagnosis,
+                "existingIdentity": kind,
+                "recordsIdentityValues": False,
+                "changesSharedConfiguration": False,
+            }
+        text = (
+            "The supplied metadata URL contains `/v2.0`, which is not the "
+            "URL used by this supported ESS setup.\n\n"
+            "Ask your ServiceNow administrator to review that URL against "
+            "the instructions in their handoff, coordinating compatibility "
+            "with the Entra administrator.\n\n"
+            "Bring back their non-sensitive confirmation that the "
+            "supported configuration is saved and any changed values. "
+            "We'll recheck the affected setup before you repeat the request "
+            "in this agent's Test pane."
+        )
+        render_kind, after_reply = "waiting", _EXISTING_AFTER_REPLY_CONTINUE
+    else:
+        text, render_kind, after_reply = _existing_identity_message(
+            context,
+            state,
+            kind,
+            situation,
+            connection_name=connection_name,
+        )
+    result: dict[str, Any] = {
+        "status": "existing-identity-notice",
+        "decision": f"existing-identity-{situation}",
+        "existingIdentity": kind,
+        "recordsIdentityValues": False,
+        "changesSharedConfiguration": False,
+        "renderBlock": {"kind": render_kind, "text": text},
+    }
+    if after_reply:
+        result["afterReply"] = after_reply
+    return result
+
+
+def _record_existing_disclosure(
+    context: dict[str, Any],
+    kind: str | None,
+) -> dict[str, Any] | None:
+    """Record the maker's existing-sign-in disclosure before resuming.
+
+    Only the non-identity marker is written. Returns None when the maker did
+    not disclose existing sign-in setup.
+    """
+    if kind is None:
+        return None
+    if kind not in _EXISTING_IDENTITY_KINDS:
+        raise ServiceNowConnectError("Unsupported existing integration kind.")
+    state = _ensure_lifecycle_state(context)
+    marker = state.get("existingIdentity")
+    newly_recorded = not (
+        isinstance(marker, dict) and marker.get("kind") == kind
+    )
+    if newly_recorded:
+        state["existingIdentity"] = {"kind": kind, "recordedAt": _utc_now()}
+        _write_lifecycle_state(context, state)
+    return {
+        "kind": kind,
+        "newlyRecorded": newly_recorded,
+        "openingShownBefore": bool(state.get("openingShown")),
+    }
+
+
+def _prepend_existing_disclosure(
+    result: dict[str, Any],
+    disclosure: dict[str, Any] | None,
+) -> None:
+    """Make sure the maker sees the S3 compatibility notice exactly once.
+
+    A fresh run already opens with the S3 opening. When the run is a resume
+    (the opening was shown earlier or the setup has saved progress), lead the
+    checklist with the fixed notice so the disclosure is never skipped.
+    """
+    if disclosure is None or not disclosure["newlyRecorded"]:
+        return
+    block = result.get("renderBlock")
+    if not isinstance(block, dict):
+        return
+    kind = str(disclosure["kind"])
+    text = str(block.get("text") or "")
+    notice = _existing_identity_notice(kind)
+    if notice in text:
+        return
+    block["text"] = f"{notice}\n\n{text}" if text else notice
+    result["existingIdentity"] = kind
+    result["recordsIdentityValues"] = False
+    result["changesSharedConfiguration"] = False
+
+
+_TEST_FAILURE_AFTER_REPLY_UNKNOWN = (
+    "End your turn after sending the message; this is a plain chat "
+    "question, not a card. Map the maker's typed reply: an error, record "
+    "record-test --result fail without a failure category; an empty result, "
+    "record-test --result empty (for an empty HR service-area list, run "
+    "empty-service-areas-handoff instead); a reported saved metadata URL "
+    "containing /v2.0, run metadata-url-handoff with that exact URL; a claim "
+    "and User Field the administrators supplied, run this command again with "
+    "--reported-claim and --reported-user-field. Never infer a shared "
+    "identity failure, missing consent or a /v2.0 URL from a generic "
+    "failure, and never ask for more than what is still missing."
+)
+_TEST_FAILURE_AFTER_REPLY_MISMATCH = (
+    "When the maker returns, any message means they want to continue. Do "
+    "not ask a Yes/No question. Record only the administrators' "
+    "non-sensitive reply with the existing record-identity-direct "
+    "commands. If a custom claim changed, run claim-confirmation-handoff "
+    "--custom-claim (add --claim-name-given when the name was supplied) and "
+    "ask only for the missing confirmations. Do not change an existing "
+    "OIDC configuration serving SSO or the Microsoft Graph connector. Then "
+    "recheck the affected setup before the maker repeats the request in "
+    "the Test pane."
+)
+
+
+def _custom_claim_mode(state: dict[str, Any] | None) -> bool:
+    """True when the saved User Claim is a custom claim, such as payroll."""
+    evidence = state.get("evidence") if isinstance(state, dict) else None
+    mapping = (
+        evidence.get("identityMapping") if isinstance(evidence, dict) else None
+    )
+    claim = (
+        mapping.get("tokenClaimName") if isinstance(mapping, dict) else None
+    )
+    if _custom_identifier_active(state):
+        return True
+    return (
+        isinstance(claim, str)
+        and bool(claim.strip())
+        and claim.strip().casefold() not in _STANDARD_USER_CLAIMS
+    )
+
+
+def _test_failure_variant(
+    context: dict[str, Any] | None,
+    state: dict[str, Any] | None,
+) -> str:
+    """Spec flow of a failed test: existing, second, payroll, or first.
+
+    The other agent is named only when it is actually connected (the lookup
+    needs the context) and the existing-identity wording only when that
+    marker is set; a generic failure never implies either.
+    """
+    if _existing_identity_kind(state):
+        return "existing"
+    if context is not None and _other_agent_already_connected(context, state):
+        return "second"
+    if _custom_claim_mode(state):
+        return "payroll"
+    return "first"
+
+
+def _test_failure_texts(
+    variant: str,
+) -> tuple[str, str | None, list[str], list[str]]:
+    """(opening, more info, unknown paragraphs, mismatch paragraphs)."""
+    copy_ = _DEV_TEST_COPY[ACTIVE_PROFILE.key]
+    audience = copy_["audience"]
+    record = copy_["record"]
+    secrets_ask = (
+        "If there was an error, send only its text without "
+        f"{record} contents, employee identifiers, tokens, or other secrets."
+    )
+    unknown = [
+        "We haven't identified the cause yet.",
+        "Did the Test pane show an error, an empty result, or something "
+        f"else? {secrets_ask}",
+    ]
+    repeat = (
+        f"We'll recheck the affected setup before you repeat the {audience} "
+        "request in this agent's Test pane."
+    )
+    if variant == "payroll":
+        return (
+            "That doesn't match the result you expected. We'll check the "
+            "available setup information before asking you for anything "
+            "else.",
+            None,
+            [
+                "We can't identify the cause from the information available "
+                "yet.",
+                "Did the Test pane show an error or only an empty result? "
+                f"{secrets_ask}",
+            ],
+            [
+                "The supplied evidence shows that the payroll claim value "
+                "doesn't match the confirmed ServiceNow user field.",
+                "Ask your ServiceNow administrator to review the matching "
+                "field with your Entra administrator, who owns the emitted "
+                "identifier. Bring back confirmation of the corrected saved "
+                "mapping or completed claim setup, depending on what they "
+                "changed.",
+                "Include the exact saved User Claim and User Field, any "
+                "changed registration or claim values, and the completed "
+                "custom-claim setup confirmation if it changed. Don't send "
+                "employee identifiers or secrets.",
+                f"{repeat} Unrelated healthy work stays in place.",
+            ],
+        )
+    if variant == "existing":
+        return (
+            f"{audience} didn't return the expected {copy_['records']}. "
+            f"We'll check the {audience} setup information already "
+            "supplied to narrow down the problem.",
+            "If more information is needed, we'll ask for the specific "
+            "result or error\u2014not the whole setup history.",
+            unknown,
+            [
+                "The supplied evidence shows that the sign-in claim value "
+                "doesn't match the confirmed ServiceNow user field.",
+                "Ask your ServiceNow administrator to review the mismatch "
+                "with the Entra administrator and confirm a supported "
+                "mapping that accounts for the existing integration.",
+                "Bring back their non-sensitive confirmation that the "
+                "configuration is saved and supports ESS, its exact **User "
+                "Claim** and **User Field**, and any changed registration or "
+                "claim values. If a custom claim changed, also bring back "
+                "its completed-setup confirmation for the intended "
+                "employees.",
+                repeat,
+            ],
+        )
+    if variant == "second":
+        other = "IT" if audience == "HR" else "HR"
+        return (
+            f"{audience} didn't return the expected {copy_['records']}. "
+            f"We'll check the {audience} setup information already "
+            "supplied to narrow down the problem.",
+            "If more information is needed, we'll ask for the specific "
+            f"error or result\u2014not the whole {other} setup history.",
+            unknown,
+            [
+                "The supplied evidence shows a mismatch between the "
+                "sign-in claim and ServiceNow user field.",
+                "Ask your ServiceNow administrator to review the mismatch "
+                "with your Entra administrator and confirm a supported "
+                "mapping that accounts for the shared setup's existing "
+                "uses. Don't change an existing OIDC configuration serving "
+                "SSO or the Microsoft Graph connector.",
+                "Bring back their non-sensitive confirmation that the "
+                f"configuration is saved and supports {audience}, the exact "
+                "User Claim and User Field, and any changed registration or "
+                "claim values. If a custom claim changed, also bring back "
+                "its completed-setup confirmation for the intended "
+                "employees.",
+                repeat,
+            ],
+        )
+    return (
+        f"The request didn't return the expected {copy_['records']}. We'll "
+        "check the setup information already supplied to narrow down the "
+        "problem.",
+        "If more information is needed, we'll ask for the specific error "
+        "or result\u2014not the whole setup history.",
+        unknown,
+        [
+            "The supplied identity-mapping evidence shows that the token "
+            "claim and ServiceNow user field don't match, so ServiceNow "
+            "can't identify the signed-in employee.",
+            "Ask your ServiceNow administrator to review the mismatch with "
+            "your Entra administrator and confirm a supported mapping that "
+            "accounts for any existing uses. Don't change an existing OIDC "
+            "configuration serving SSO or the Microsoft Graph connector.",
+            "Bring back their non-sensitive confirmation that the supported "
+            "configuration is saved, its exact User Claim and User Field, "
+            "and any changed registration or claim values. If the custom "
+            "claim changed, bring back confirmation that its setup is "
+            "complete for the intended employees.",
+            "We'll recheck the affected setup before you repeat the request "
+            "in this agent's Test pane.",
+        ],
+    )
+
+
+def test_failure_handoff(
+    state: dict[str, Any] | None,
+    reported_claim: str | None = None,
+    reported_user_field: str | None = None,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Fixed reply when a Test pane request did not return the expected data.
+
+    The wording follows the spec flow: first agent, second agent (the other
+    agent is named only when it is connected, which needs the context),
+    existing identity, or custom claim. The reply never assumes a shared
+    identity failure. A claim and User Field mismatch is named only when the
+    supplied claim and User Field differ from the saved mapping; otherwise
+    the maker is asked for the specific error or result. Nothing is recorded.
+    """
+    variant = _test_failure_variant(context, state)
+    opening, more_info, unknown_paragraphs, mismatch_paragraphs = (
+        _test_failure_texts(variant)
+    )
+    mismatch = False
+    if reported_claim is not None or reported_user_field is not None:
+        if not reported_claim or not reported_user_field:
+            raise ServiceNowConnectError(
+                "Pass both --reported-claim and --reported-user-field."
+            )
+        claim = _safe_identity_name(reported_claim, "user_claim")
+        field = _safe_identity_name(reported_user_field, "user_field")
+        evidence = state.get("evidence") if isinstance(state, dict) else None
+        saved = (
+            evidence.get("identityMapping") if isinstance(evidence, dict) else None
+        )
+        if isinstance(saved, dict):
+            saved_claim = str(saved.get("tokenClaimName") or "").casefold()
+            saved_field = str(saved.get("serviceNowUserField") or "").casefold()
+            mismatch = bool(saved_claim and saved_field) and (
+                claim.casefold() != saved_claim
+                or field.casefold() != saved_field
+            )
+    if mismatch:
+        text = "\n\n".join([opening, *mismatch_paragraphs])
+        decision = "identity-mapping-review-required"
+        after_reply = _TEST_FAILURE_AFTER_REPLY_MISMATCH
+    else:
+        text = "\n\n".join(
+            [opening, *([more_info] if more_info else []), *unknown_paragraphs]
+        )
+        decision = "test-failure-information-required"
+        after_reply = _TEST_FAILURE_AFTER_REPLY_UNKNOWN
+    return {
+        "status": "test-failure-reply",
+        "decision": decision,
+        "recordsNothing": True,
+        "renderBlock": {"kind": "waiting", "text": text},
+        "afterReply": after_reply,
+    }
+
+
+def metadata_url_handoff(metadata_url: str) -> dict[str, Any]:
+    """Fixed reply when the administrator reports a `/v2.0` metadata URL.
+
+    Only an actual reported URL of the Microsoft sign-in authority with a
+    `/v2.0` path is diagnosed. Nothing is recorded and no shared identity
+    configuration is changed; the administrators repair it manually.
+    """
+    match = _V2_METADATA_URL_RE.match(str(metadata_url).strip().strip("`<>"))
+    if match is None:
+        return {
+            "status": "no-diagnosis",
+            "decision": "no-v2-metadata-url",
+            "recordsNothing": True,
+            "note": (
+                "The reported value is not a /v2.0 metadata URL for this "
+                "connection, so this diagnosis does not apply. Do not treat "
+                "it as a known setup problem; continue the normal flow."
+            ),
+        }
+    supported = (
+        f"https://login.microsoftonline.com/{match.group('tenant')}"
+        "/.well-known/openid-configuration"
+    )
+    return {
+        "status": "metadata-url-review-required",
+        "decision": "metadata-url-review-required",
+        "recordsNothing": True,
+        "renderBlock": {
+            "kind": "waiting",
+            "text": (
+                "That metadata URL contains `/v2.0`, which is a known setup "
+                "problem for this connection.\n\n"
+                "Ask your ServiceNow administrator to review the saved URL "
+                "against the supported ESS metadata URL below, coordinating "
+                "compatibility with your Entra administrator before any "
+                f"repair:\n\n`{supported}`\n\n"
+                "Don't change an existing configuration serving SSO or the "
+                "Microsoft Graph connector. If compatibility is unresolved, "
+                "the administrators need to resolve it manually.\n\n"
+                "Bring back their non-sensitive confirmation that the "
+                "supported configuration is saved and any changed setup "
+                "values. We'll recheck the affected setup before you repeat "
+                "the request in this agent's Test pane."
+            ),
+        },
+        "afterReply": _METADATA_URL_AFTER_REPLY,
+    }
+
+
+def claim_setup_confirmation_required(claim_name: str) -> dict[str, Any]:
+    """Reply for a custom claim name stated without its setup confirmation.
+
+    A name alone does not establish custom-claim readiness, so nothing is
+    recorded and the already-supplied values stay in place.
+    """
+    name = _safe_identity_name(claim_name, "user_claim")
+    return {
+        "status": "claim-confirmation-required",
+        "decision": "claim-confirmation-required",
+        "recordsNothing": True,
+        "renderBlock": {
+            "kind": "waiting",
+            "text": (
+                f"We have the claim name `{name}`. Ask your Entra "
+                "administrator to confirm that its setup is complete, "
+                "including the appropriate format and populated source "
+                "attribute for every intended employee, as requested in "
+                "their message.\n\n"
+                "Bring back their non-sensitive confirmation; you don't "
+                "need to resend the name or the Client ID. Don't include "
+                "employee identifiers or secrets."
+            ),
+        },
+        "afterReply": _CLAIM_CONFIRMATION_AFTER_REPLY,
+    }
+
+
+_VALIDATION_SCENARIOS = (
+    "first-agent",
+    "second-agent",
+    "payroll",
+    "existing-identity",
+)
+_VALIDATION_SITUATIONS = (
+    "agent-chooser",
+    "multi-agent",
+    "instance-question",
+    "knowledge-only-exit",
+    "sso-conflict",
+    "claim-contradiction",
+    "blocked-finish",
+    "connection-disconnected",
+    "no-usable-connection",
+    "resource-uri-claim-name",
+    "topic-off",
+    "agent-not-linked",
+    "retry-request",
+    "missing-consent",
+)
+_VALIDATION_CONTEXT_FREE = frozenset(
+    {"agent-chooser", "multi-agent", "knowledge-only-exit"}
+)
+_VALIDATION_WAITING_FOR = ("servicenow", "entra-claim")
+
+_VALIDATION_AFTER_PLAIN_QUESTION = (
+    "End your turn after sending the message; this is a plain chat "
+    "question, not a card."
+)
+_VALIDATION_AFTER_CHOOSER = (
+    f"{_VALIDATION_AFTER_PLAIN_QUESTION} Match the maker's reply to exactly "
+    "one prepared agent and run agent-chooser --selection-key "
+    '"prepared:{AGENT_ID}" (or --selection-key "another-agent" --agent-link '
+    '"{LINK}" when they paste a Copilot Studio link). When the reply names '
+    "no agent or several, ask this question again. Do not show the Choose "
+    "agent card."
+)
+_VALIDATION_AFTER_MULTI_AGENT = (
+    "End your turn after sending the message. This is a plain chat "
+    "question with no preselected choice; start no run, run no other "
+    "ServiceNow Connect command, record nothing, and add no checklist, "
+    "preamble, or trailer. When the maker names one agent, run "
+    '`agent-chooser --agent-name "{NAME_AS_TYPED}"` and continue that '
+    "agent's run for the destination they originally named (the other "
+    "agent is a separate run later). When the reply names both again or "
+    "neither, ask this question again."
+)
+_VALIDATION_AFTER_INSTANCE = (
+    f"{_VALIDATION_AFTER_PLAIN_QUESTION} When the maker replies with the "
+    "public HTTPS URL, continue the lifecycle's instance confirmation with "
+    "resume-handoff. Never ask for or accept credentials; if the reply "
+    "contains any, do not repeat or record them and ask for the URL only."
+)
+_VALIDATION_AFTER_EXIT = (
+    "End your turn after sending the message. Nothing is recorded and no "
+    "setup starts; run no other ServiceNow Connect command unless the "
+    "maker later asks to connect Employee Self-Service HR or IT to "
+    "ServiceNow."
+)
+_VALIDATION_AFTER_ADMINS = (
+    "When the maker returns, any message means they want to continue. Do "
+    "not ask a Yes/No question. Record only the administrators' "
+    "non-sensitive reply with the existing record-identity-direct commands "
+    "(never secrets or employee identifiers). Do not change an existing "
+    "OIDC configuration serving SSO or the Microsoft Graph connector; the "
+    "administrators resolve any conflict manually. Recheck the affected "
+    "setup with resume-handoff before continuing."
+)
+_VALIDATION_AFTER_BLOCKED_FINISH = (
+    "Do not claim the integration works or that setup is complete. When "
+    "the maker returns, record only the administrator's non-sensitive "
+    "reply with the existing record-identity-direct commands and continue "
+    "with resume-handoff, which rechecks permission and the affected "
+    "setup and resumes at the actual waiting point. If another blocker "
+    "remains, do not use this message: name that blocker, its owner, and "
+    "the exact outstanding action instead."
+)
+_VALIDATION_AFTER_TOPIC = (
+    "Do not wait for the maker. Turn on only the affected built-in topic "
+    "through the topics phase (set-topic-state); leave unrelated topics "
+    "unchanged. Then send this command's retry-request message instead of "
+    "running nextCommand."
+)
+_VALIDATION_AFTER_LINK = (
+    "Do not wait for the maker. Link this agent to the selected connection "
+    "with the existing connection commands and keep the completed "
+    "administrator setup. Then send this command's retry-request message "
+    "instead of running nextCommand."
+)
+_VALIDATION_AFTER_RETRY = (
+    f"{_VALIDATION_AFTER_PLAIN_QUESTION} When the maker reports the "
+    "result, record it with record-test."
+)
+_VALIDATION_AFTER_CONSENT = (
+    "Use this message only when a supported check identified the missing "
+    "consent; never infer it from a generic failure. "
+    f"{_VALIDATION_AFTER_ADMINS}"
+)
+
+
+def validation_notice(
+    context: dict[str, Any] | None,
+    situation: str,
+    scenario: str | None = None,
+    *,
+    connection_name: str | None = None,
+    waiting_for: str | None = None,
+    entra_claim: str | None = None,
+    servicenow_claim: str | None = None,
+    claim_name: str | None = None,
+) -> dict[str, Any]:
+    """Fixed maker-facing notice for one validation situation.
+
+    The wording follows the spec scenario (first agent, second agent that
+    reuses shared sign-in setup, or the payroll custom-claim flow). It
+    records nothing and never infers the situation: the caller names it
+    only after the maker's reply or a supported check shows it. The S3
+    existing-identity wording stays in existing-identity-handoff.
+    """
+    if situation not in _VALIDATION_SITUATIONS:
+        raise ServiceNowConnectError("Unsupported validation situation.")
+    if scenario is not None and scenario not in _VALIDATION_SCENARIOS:
+        raise ServiceNowConnectError("Unsupported validation scenario.")
+    state: dict[str, Any] | None = None
+    if context is not None:
+        state = _load_lifecycle_state(context)
+        if scenario is None:
+            if _existing_identity_kind(state):
+                scenario = "existing-identity"
+            elif _other_agent_already_connected(context, state):
+                scenario = "second-agent"
+    scenario = scenario or "first-agent"
+    if situation not in _VALIDATION_CONTEXT_FREE and context is None:
+        raise ServiceNowConnectError(
+            "This validation situation needs the selected agent."
+        )
+    if scenario == "payroll" and ACTIVE_PROFILE.key != "hrsd":
+        raise ServiceNowConnectError(
+            "The payroll scenario applies only to Employee Self-Service HR."
+        )
+    if scenario == "existing-identity" and situation not in (
+        _VALIDATION_CONTEXT_FREE
+    ):
+        raise ServiceNowConnectError(
+            "Use existing-identity-handoff for this existing sign-in "
+            "setup situation."
+        )
+
+    agent = (
+        _display_agent_name(context) if context is not None
+        else _spec_agent_name()
+    )
+    audience = _product_audience()
+    other = "IT" if audience == "HR" else "HR"
+    environment = (
+        _recorded_environment_name(context) if context is not None else None
+    )
+    agent_in_env = (
+        f"**{agent} in {environment}**" if environment else f"**{agent}**"
+    )
+    waiting, info = "waiting", "info"
+    kind = waiting
+    after_reply = _VALIDATION_AFTER_ADMINS
+
+    def unsupported() -> ServiceNowConnectError:
+        return ServiceNowConnectError(
+            f"The spec defines no {situation} wording for the {scenario} "
+            "scenario; do not write one."
+        )
+
+    if situation == "agent-chooser":
+        question = {
+            "second-agent": "Which Employee Self-Service HR or IT agent are "
+            "we adding to the ServiceNow setup?",
+            "payroll": "Which ESS agent should we connect to ServiceNow?",
+        }.get(
+            scenario,
+            "Which Employee Self-Service HR or IT agent should we connect "
+            "to ServiceNow?",
+        )
+        text, after_reply = question, _VALIDATION_AFTER_CHOOSER
+    elif situation == "multi-agent":
+        text = (
+            "This skill validates one ESS agent per run. Which should we "
+            "check first\u2014**Employee Self-Service HR** or **Employee "
+            "Self-Service IT**?"
+        )
+        after_reply = _VALIDATION_AFTER_MULTI_AGENT
+    elif situation == "instance-question":
+        if scenario != "first-agent":
+            raise unsupported()
+        text = (
+            f"Which ServiceNow instance should {agent} use? Send its public "
+            "HTTPS URL, not credentials."
+        )
+        after_reply = _VALIDATION_AFTER_INSTANCE
+    elif situation == "knowledge-only-exit":
+        text = (
+            "We can connect Employee Self-Service HR or IT to ServiceNow, "
+            "but we can't configure the ServiceNow Knowledge connector.\n\n"
+            "Use the [ServiceNow Knowledge connector guidance]"
+            f"({_KNOWLEDGE_GUIDANCE_LINK}) for that setup."
+        )
+        kind, after_reply = waiting, _VALIDATION_AFTER_EXIT
+    elif situation == "sso-conflict":
+        if scenario == "payroll":
+            text = "\n\n".join(
+                [
+                    "Send the reported conflict to your Entra and "
+                    "ServiceNow administrators. They need to resolve it "
+                    "manually using the coexistence guidance in their "
+                    "messages.",
+                    "We won't change the existing configuration or "
+                    "diagnose that conflict. Bring back their "
+                    "non-sensitive confirmation of a supported setup, "
+                    "completed claim setup, exact saved User Claim and "
+                    "User Field, and any changed registration or claim "
+                    "values.",
+                    "We'll recheck the affected setup before continuing. "
+                    "Don't include employee identifiers or secrets.",
+                ]
+            )
+        else:
+            saved = (
+                f"saved-configuration confirmation for {audience}"
+                if scenario == "second-agent"
+                else "saved-configuration confirmation"
+            )
+            text = "\n\n".join(
+                [
+                    "Send the reported conflict to your Entra and "
+                    "ServiceNow administrators. Ask them to agree on a "
+                    "supported setup using the compatibility guidance in "
+                    "their messages.",
+                    "We won't change that configuration or troubleshoot "
+                    "the conflict. Bring back their non-sensitive "
+                    f"compatibility confirmation, {saved}, User Claim, "
+                    "User Field, and any changed registration or claim "
+                    "values.",
+                    "We'll recheck the affected setup before continuing. "
+                    "Don't include employee identifiers or secrets.",
+                ]
+            )
+    elif situation == "claim-contradiction":
+        entra = _safe_identity_name(entra_claim, "entra_claim")
+        servicenow = _safe_identity_name(servicenow_claim, "servicenow_claim")
+        if entra.casefold() == servicenow.casefold():
+            raise ServiceNowConnectError(
+                "The reported claims match; there is no contradiction."
+            )
+        text = "\n\n".join(
+            [
+                "The administrator replies name different claims: Entra "
+                f"confirmed `{entra}`, while ServiceNow reported "
+                f"`{servicenow}`.",
+                "Send both replies to the administrators and ask them to "
+                "agree on a supported claim and matching ServiceNow field "
+                "that accounts for any existing uses. Bring back their "
+                "non-sensitive confirmation of the completed claim setup, "
+                "saved mapping, and any changed registration or claim "
+                "values.",
+                "We'll recheck the affected setup before continuing. "
+                "Don't include employee identifiers or secrets.",
+                "The confirmed Client ID stays in place.",
+            ]
+        )
+    elif situation == "blocked-finish":
+        stage = waiting_for or (
+            "entra-claim" if scenario == "payroll" else "servicenow"
+        )
+        if stage not in _VALIDATION_WAITING_FOR:
+            raise ServiceNowConnectError("Unsupported --waiting-for value.")
+        if stage == "entra-claim" and scenario == "payroll":
+            headline = (
+                "**Setup is paused:** we're still waiting for your Entra "
+                "administrator to confirm the completed custom-claim setup "
+                f"and exact configured claim name for {agent_in_env}. The "
+                "integration remains untested; setup isn't complete."
+            )
+            bring_back = (
+                "Bring back their non-sensitive confirmation when it's "
+                "ready, including the appropriate format and populated "
+                "source attribute for every intended employee."
+            )
+        elif stage == "servicenow" and scenario == "first-agent":
+            headline = (
+                "**Setup is paused:** we're still waiting for your "
+                "ServiceNow administrator's saved-configuration "
+                f"confirmation, User Claim, and User Field for {agent_in_env}."
+                " The integration remains untested; setup isn't complete."
+            )
+            bring_back = (
+                "Bring back their non-sensitive reply when it's ready."
+            )
+        elif stage == "servicenow" and scenario == "second-agent":
+            headline = (
+                "**Setup is paused:** we're still waiting for your "
+                "ServiceNow administrator to confirm the saved "
+                f"configuration, User Claim, and User Field for {agent_in_env}."
+                f" {audience} remains untested; setup isn't complete."
+            )
+            bring_back = (
+                "Bring back their non-sensitive reply when it's ready."
+            )
+        else:
+            raise unsupported()
+        text = (
+            f"{headline}\n\nYour progress is saved at that handoff. "
+            f"{bring_back} Don't include employee identifiers or secrets."
+        )
+        after_reply = _VALIDATION_AFTER_BLOCKED_FINISH
+    elif situation == "connection-disconnected":
+        name = (connection_name or "").strip()
+        if not name:
+            raise ServiceNowConnectError(
+                "Pass --connection-name with the friendly connection name "
+                "the maker used."
+            )
+        if _FRIENDLY_NAME_BLOCKED_RE.search(name):
+            raise ServiceNowConnectError(
+                "Pass the friendly connection name the maker used, not an "
+                "ID or a URL."
+            )
+        if scenario == "first-agent":
+            text = "\n\n".join(
+                [
+                    f"**{name} is disconnected**, so the agent can't use it "
+                    "for this request.",
+                    f"In Copilot Studio, open **{agent} > Settings > "
+                    "Connection Settings > ServiceNow**.",
+                    "Reconnect it only if you intend to act on that "
+                    "connection, including any shared uses. Otherwise, "
+                    "select another supported ESS connection or create a "
+                    "separate one using step 7's connection instructions.",
+                    "Return here and tell us which connection you used. "
+                    "We'll check this agent's connection and link before "
+                    "you repeat the request. The administrator information "
+                    "and portal URL will stay in place.",
+                ]
+            )
+        elif scenario == "second-agent":
+            text = "\n\n".join(
+                [
+                    f"**{name} is disconnected.** This connection is also "
+                    f"used by {other}, and {audience} can't use it while "
+                    "it's disconnected.",
+                    f"In Copilot Studio, open **{agent} > Settings > "
+                    "Connection Settings > ServiceNow**. Reconnect the "
+                    "shared connection, or create a separate supported "
+                    f"connection for {audience} if you don't want to "
+                    "change the shared connection.",
+                    "Return here and tell us which connection you "
+                    "selected.",
+                ]
+            )
+        else:
+            raise unsupported()
+        after_reply = _EXISTING_AFTER_REPLY_CONNECTION
+    elif situation == "no-usable-connection":
+        if scenario != "second-agent":
+            raise unsupported()
+        client_id = _known_entra_client_id(state or {})
+        instance = _state_instance_name(state)
+        if not client_id or not instance:
+            raise ServiceNowConnectError(
+                "The confirmed Client ID and instance name are not recorded "
+                "yet; do not show connection values that are not confirmed."
+            )
+        text = (
+            f"We can't use an existing ServiceNow connection for this "
+            f"{audience} setup. Create a supported connection in Copilot "
+            "Studio:\n\n"
+            f"1. Open **{agent} > Settings > Connection Settings > "
+            "ServiceNow > Connect > Create new connection**.\n"
+            "2. Use:\n"
+            "- **Authentication type:** Microsoft Entra ID User Login\n"
+            f"- **Resource URI:** `{client_id}`\n"
+            f"- **Instance name:** `{instance}`\n"
+            "3. Return here and tell us which connection you created.\n\n"
+            "You don't need to repeat the administrator setup solely to "
+            "create this connection."
+        )
+        after_reply = _EXISTING_AFTER_REPLY_CONNECTION
+    elif situation == "resource-uri-claim-name":
+        if scenario != "payroll":
+            raise unsupported()
+        claim = _safe_identity_name(claim_name, "claim_name")
+        client_id = _known_entra_client_id(state or {})
+        if not client_id:
+            raise ServiceNowConnectError(
+                "The confirmed Client ID is not recorded yet; do not show a "
+                "Resource URI value that is not confirmed."
+            )
+        text = "\n\n".join(
+            [
+                f"The connection's **Resource URI** is set to `{claim}`. "
+                "That field needs the Entra app's **Client ID**, not the "
+                "claim name.",
+                "If this connection is only used by this HR agent, correct "
+                f"it to `{client_id}` in the supported connection setup. If "
+                "it is shared, select or create a separate supported ESS "
+                "connection for HR rather than changing the shared "
+                "connection.",
+                "Return here and tell us which connection you used. We'll "
+                "check this agent's connection and link before continuing. "
+                "The administrator-confirmed payroll mapping stays in place.",
+            ]
+        )
+        after_reply = _EXISTING_AFTER_REPLY_CONNECTION
+    elif situation == "topic-off":
+        if scenario == "payroll":
+            text = (
+                "A required ServiceNow HRSD topic is off, so "
+                f"{agent} can't complete that request. We'll enable the "
+                "affected built-in topic and leave unrelated topics "
+                "unchanged."
+            )
+        else:
+            text = (
+                f"A ServiceNow {audience} topic needed for this request is "
+                "off. We'll turn on that built-in topic and leave unrelated "
+                "topics unchanged."
+            )
+        kind, after_reply = info, _VALIDATION_AFTER_TOPIC
+    elif situation == "agent-not-linked":
+        if scenario == "payroll":
+            text = (
+                "The selected ServiceNow connection isn't linked to "
+                f"**{agent}**. We'll link this agent to the selected "
+                "connection."
+            )
+        else:
+            link = "it" if scenario == "first-agent" else "this agent to it"
+            text = (
+                f"**{agent}** isn't linked to the selected ServiceNow "
+                f"connection. We'll link {link} and keep the completed "
+                "administrator setup."
+            )
+        kind, after_reply = info, _VALIDATION_AFTER_LINK
+    elif situation == "retry-request":
+        text = (
+            f"Try the {audience} request again in the Test pane and tell us "
+            "whether it returns the expected data."
+        )
+        after_reply = _VALIDATION_AFTER_RETRY
+    else:
+        if scenario not in {"first-agent", "second-agent"}:
+            raise unsupported()
+        text = "\n\n".join(
+            [
+                "The Entra setup is missing the required consent for the "
+                "ServiceNow connector, which blocks this sign-in setup.",
+                "Ask your Entra administrator to review the connector's "
+                "consent requirements in their instructions with your "
+                "ServiceNow administrator, accounting for any shared setup "
+                "before a repair.",
+                "Bring back their non-sensitive confirmation of the "
+                "completed supported setup and any changed values. We'll "
+                "recheck the affected setup before continuing; if a test is "
+                "needed, repeat the request in this agent's Test pane.",
+            ]
+        )
+        after_reply = _VALIDATION_AFTER_CONSENT
+    return {
+        "status": "validation-notice",
+        "decision": f"validation-{situation}",
+        "scenario": scenario,
+        "recordsNothing": True,
+        "renderBlock": {"kind": kind, "text": text},
+        "afterReply": after_reply,
+    }
+
+
+def _chat_message(result: dict[str, Any]) -> str:
+    """Build the one chat message the agent relays for this output.
+
+    Card titles are the questions themselves, so the explanation that used to
+    sit in the card body is sent here, before the card.
+    """
+    parts: list[str] = []
+
+    def add(text: Any) -> None:
+        if isinstance(text, str) and text.strip():
+            cleaned = text.strip()
+            if not any(cleaned in part for part in parts):
+                parts.append(cleaned)
+
+    render_block = result.get("renderBlock")
+    if isinstance(render_block, dict):
+        add(render_block.get("text"))
+    ordinary = result.get("ordinaryReply")
+    if isinstance(ordinary, dict):
+        add(ordinary.get("text"))
+    add(result.get("replyBeforeQuestion"))
+    body = {
+        key: item
+        for key, item in result.items()
+        if key not in {"renderBlock", "ordinaryReply"}
+    }
+    if result.get("status") in _MESSAGE_STOP_STATUSES:
+        add(result.get("message"))
+    elif (command_message := _test_reply_message(result)) is not None:
+        add(command_message)
+    for card in _pending_cards(body):
+        if card["question"].strip() != card["header"].strip():
+            add(card["question"])
+    for question in _pending_cards(body, typed=True):
+        add(question["header"])
+        add(question["question"])
+    return "\n\n".join(parts)
+
+
+def _output_waits_for_maker(
+    result: dict[str, Any],
+    command: str | None,
+) -> bool:
+    """True when the maker must reply or act outside chat before the flow moves."""
+    if result.get("status") == "error" or command in REALM_COMMANDS:
+        return True
+    explicit = result.get("waitsForMaker")
+    if isinstance(explicit, bool):
+        return explicit
+    if (
+        result.get("status") in _MESSAGE_STOP_STATUSES
+        or _test_reply_message(result) is not None
+        or _pending_cards(
+            {
+                key: item
+                for key, item in result.items()
+                if key not in {"renderBlock", "ordinaryReply"}
+            },
+            typed=True,
+        )
+    ):
+        return True
+    if has_wait_cue(_chat_message(result)):
+        return True
+    if result.get("pendingInput"):
+        return True
+    render_block = result.get("renderBlock")
+    if isinstance(render_block, dict) and render_block.get("kind") in (
+        _WAIT_RENDER_KINDS
+    ):
+        return True
+    status = result.get("status")
+    decision = result.get("decision")
+    if any(
+        isinstance(marker_source, str)
+        and any(marker in marker_source for marker in _WAIT_STATUS_MARKERS)
+        for marker_source in (status, decision)
+    ):
+        return True
+    if command == "resume-handoff":
+        # Nothing runnable is left, so there is nothing to auto-continue to.
+        return not (
+            isinstance(result.get("checkpoints"), dict)
+            or isinstance(result.get("action"), dict)
+        )
+    return False
+
+
+def _next_command(
+    result: dict[str, Any],
+    command: str | None,
+    args: Any,
+) -> str:
+    """Exact next step for an output that continues without the maker."""
+    checkpoints = result.get("checkpoints")
+    if isinstance(checkpoints, dict) and checkpoints.get("commands"):
+        lines = [
+            str(item["command"])
+            for item in checkpoints["commands"]
+            if isinstance(item, dict) and item.get("command")
+        ]
+        if lines:
+            return (
+                "Run each of these commands exactly (replace the leading "
+                "python with the launcher from /setup), then run "
+                "record-checkpoint-results with the results: "
+                + " ; ".join(lines)
+            )
+    action = result.get("action")
+    if isinstance(action, dict) and action.get("actionDoc"):
+        return (
+            f"Read {action['actionDoc']} now and follow it (apply the shared "
+            "permission and rollback gates first). When the action is done, "
+            f"continue with: {_resume_command(result, args, executed=_running_phase(result))}"
+        )
+    return _resume_command(result, args)
+
+
+def _running_phase(result: dict[str, Any]) -> list[str]:
+    lifecycle = result.get("lifecycle")
+    if (
+        isinstance(lifecycle, dict)
+        and lifecycle.get("decision") == "run-action"
+        and isinstance(lifecycle.get("phase"), dict)
+        and isinstance(lifecycle["phase"].get("id"), str)
+    ):
+        return [lifecycle["phase"]["id"]]
+    return []
+
+
+def _resume_command(
+    result: dict[str, Any],
+    args: Any,
+    *,
+    executed: list[str] | None = None,
+    extra_args: list[str] | None = None,
+) -> str:
+    """Exact resume-handoff command that carries this invocation's phase flags.
+
+    The controller keeps no per-invocation memory: every phase that is already
+    done must be passed again as ``--verified-phase`` or it is re-read.
+    """
+    slug = result.get("agentSlug") or getattr(args, "agent_slug", None)
+    provider = result.get("provider") or getattr(args, "provider", None)
+    parts = ["python scripts/connect_servicenow_da.py"]
+    if provider:
+        parts.append(f"--provider {provider}")
+    if slug:
+        parts.append(f"--agent-slug {slug}")
+    parts.append("resume-handoff")
+    flags: list[tuple[str, str]] = []
+    for flag, carried, extra in (
+        ("--executed-action", getattr(args, "executed_action", None), executed),
+        ("--verified-phase", getattr(args, "verified_phase", None), None),
+    ):
+        for phase_id in [*(carried or []), *(extra or [])]:
+            if (flag, phase_id) not in flags:
+                flags.append((flag, phase_id))
+    extra_list = list(extra_args or [])
+    for index in range(0, len(extra_list) - 1, 2):
+        pair = (extra_list[index], extra_list[index + 1])
+        if pair not in flags:
+            flags.append(pair)
+    parts.extend(f"{flag} {value}" for flag, value in flags)
+    return " ".join(parts)
+
+
+_RECORD_COMMANDS = frozenset({"record-admin-phase", "record-checkpoint-results"})
+
+_ASK_CARD_NEXT = (
+    "Ask the question in pendingCard now with one ask_user call using "
+    "pendingCard.askUserArguments exactly as given, then continue from the "
+    "maker's answer."
+)
+
 
 def _with_agent_rules(
     result: Any,
     command: str | None = None,
+    args: Any = None,
 ) -> Any:
     """Prepend rules to every command output; `adapt-question` output stays unchanged."""
     if not isinstance(result, dict) or command == "adapt-question":
         return result
     ordered: dict[str, Any] = {}
+    chat_message = _chat_message(result)
+    cards = _pending_cards(
+        {
+            key: item
+            for key, item in result.items()
+            if key not in {"renderBlock", "ordinaryReply"}
+        }
+    )
+    if chat_message or cards:
+        if chat_message:
+            ordered["chatMessage"] = chat_message
+        if cards:
+            ordered["endTurn"] = False
+            ordered["nextCommand"] = _ASK_CARD_NEXT
+            ordered["pendingCard"] = adapt_question_to_ask_user(cards[0])
+        elif _output_waits_for_maker(result, command):
+            ordered["endTurn"] = True
+            action = result.get("action")
+            if isinstance(action, dict) and action.get("actionDoc"):
+                ordered["afterReply"] = (
+                    f"When the maker replies, read {action['actionDoc']} and "
+                    "continue from its step that follows the maker's reply. "
+                    "Do not repeat or reword the message above. Afterwards "
+                    "continue with: "
+                    + _resume_command(
+                        result, args, executed=_running_phase(result)
+                    )
+                )
+        elif command in _RECORD_COMMANDS and result.get("resumeArguments"):
+            ordered["endTurn"] = False
+            ordered["nextCommand"] = (
+                "Continue now with: "
+                + _resume_command(
+                    result,
+                    args,
+                    extra_args=[str(item) for item in result["resumeArguments"]],
+                )
+            )
+        else:
+            ordered["endTurn"] = False
+            ordered["nextCommand"] = _next_command(result, command, args)
+    elif (
+        command == "agent-chooser"
+        and result.get("status") == "ready"
+        and result.get("realmHint")
+        and isinstance(result.get("selectedAgent"), dict)
+    ):
+        selected = result["selectedAgent"]
+        ordered["endTurn"] = False
+        ordered["nextCommand"] = (
+            "Run now, without asking the maker anything: python "
+            "scripts/connect_servicenow_da.py "
+            f"--provider {selected.get('provider')} "
+            f"--agent-slug {selected.get('slug')} discover-realm-target "
+            f"--realm {result['realmHint']}. It finds the promoted agent and "
+            "its link itself; never ask the maker for a link, a URL, or the "
+            "saved target."
+        )
+    elif command in _RECORD_COMMANDS and result.get("resumeArguments"):
+        ordered["endTurn"] = False
+        ordered["nextCommand"] = (
+            "Continue now with: "
+            + _resume_command(
+                result,
+                args,
+                extra_args=[str(item) for item in result["resumeArguments"]],
+            )
+        )
     if "renderBlock" in result:
         ordered["renderBlock"] = result["renderBlock"]
     ordered["agentRules"] = list(AGENT_RULES)
@@ -13572,8 +18503,44 @@ def _with_agent_rules(
     return ordered
 
 
+_GLOBAL_OPTIONS = ("--provider", "--maker-username", "--agent-id", "--agent-slug")
+
+
+def _hoist_global_options(argv: list[str]) -> list[str]:
+    """Accept the target options on either side of the subcommand.
+
+    argparse only reads these options before the subcommand, and a model that
+    writes them after it otherwise hits an "unrecognized arguments" error.
+    """
+    leading: list[str] = []
+    rest: list[str] = []
+    seen_command = False
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        name = token.split("=", 1)[0]
+        if name in _GLOBAL_OPTIONS:
+            if "=" in token:
+                leading.append(token)
+                index += 1
+            elif index + 1 < len(argv):
+                leading.extend(argv[index : index + 2])
+                index += 2
+            else:
+                rest.append(token)
+                index += 1
+            continue
+        if not seen_command and not token.startswith("-"):
+            seen_command = True
+        rest.append(token)
+        index += 1
+    return leading + rest if seen_command else list(argv)
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    args = build_parser().parse_args(
+        _hoist_global_options(sys.argv[1:] if argv is None else list(argv))
+    )
     context: dict[str, Any] | None = None
     try:
         profile = product_profile_for_provider(args.provider)
@@ -13603,7 +18570,46 @@ def main(argv: list[str] | None = None) -> int:
             result = agent_chooser_handoff(
                 selection_key=args.selection_key,
                 agent_link=args.agent_link,
+                agent_name=args.agent_name,
             )
+        elif args.command == "claim-confirmation-handoff":
+            result = None
+            if (
+                not args.custom_claim
+                and (args.agent_id is not None or args.agent_slug is not None)
+            ):
+                try:
+                    claim_context = load_context(
+                        agent_id=args.agent_id, agent_slug=args.agent_slug
+                    )
+                    claim_state = _load_lifecycle_state(claim_context)
+                    result = _recorded_entra_claim_reply(
+                        claim_context, claim_state
+                    )
+                except Exception:  # noqa: BLE001 - fall back to the generic reply
+                    result = None
+            if result is None:
+                result = claim_confirmation_handoff(
+                    custom_claim=args.custom_claim,
+                    claim_name_given=args.claim_name_given,
+                    servicenow_confirmed=args.servicenow_confirmed,
+                    second_agent=args.second_agent,
+                )
+        elif args.command == "metadata-url-handoff":
+            result = metadata_url_handoff(args.metadata_url)
+        elif args.command == "empty-service-areas-handoff":
+            result = empty_service_areas_handoff(args.realm)
+        elif (
+            args.command == "validation-notice"
+            and args.situation in _VALIDATION_CONTEXT_FREE
+        ):
+            result = validation_notice(
+                None, args.situation, args.scenario
+            )
+        elif args.command == "realm-setup-handoff":
+            result = realm_setup_handoff(args.situation)
+        elif args.command in REALM_COMMANDS and _workspace_not_prepared(Path(".")):
+            result = realm_setup_handoff("incomplete")
         else:
             context_kwargs: dict[str, Any] = {}
             if args.agent_id is not None or args.agent_slug is not None:
@@ -13669,12 +18675,22 @@ def main(argv: list[str] | None = None) -> int:
                 stage=args.stage,
                 captured_client_id=args.client_id,
                 captured_user_field=args.user_field,
+                custom_identifier=args.custom_identifier,
             )
         elif args.command == "record-identity-requirement":
             result = record_identity_requirement(
                 context,
                 choice=args.choice,
             )
+        elif (
+            args.command == "record-identity-direct"
+            and args.stage == "entra"
+            and args.claim_name
+            and args.claim_name.strip().casefold()
+            not in _STANDARD_USER_CLAIMS
+            and not args.claim_setup_confirmed
+        ):
+            result = claim_setup_confirmation_required(args.claim_name)
         elif args.command == "record-identity-direct":
             result = record_identity_direct(
                 context,
@@ -13717,6 +18733,16 @@ def main(argv: list[str] | None = None) -> int:
                     args.confirm_active_user_match
                 ),
             )
+            result = {
+                **result,
+                "resumeArguments": [
+                    "--executed-action",
+                    args.phase,
+                    *_verified_prefix_arguments(
+                        context, args.phase, include_self=False
+                    ),
+                ],
+            }
         elif args.command == "create":
             result = prepare_manual_connection(
                 context,
@@ -13757,6 +18783,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "topic-action-handoff":
             result = topic_action_handoff(context, offline=args.offline)
         elif args.command == "resume-handoff":
+            disclosure = _record_existing_disclosure(context, args.existing)
             result = resume_handoff(
                 context,
                 executed_actions=frozenset(args.executed_action),
@@ -13771,6 +18798,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.availability_context_sha256
                 ),
             )
+            _prepend_existing_disclosure(result, disclosure)
         elif args.command == "record-checkpoint-results":
             result = record_checkpoint_results(
                 context,
@@ -13812,12 +18840,58 @@ def main(argv: list[str] | None = None) -> int:
                 context,
                 contract_revision=args.contract_revision,
             )
+        elif args.command == "target-change-handoff":
+            result = target_change_handoff(context, args.change, args.target)
+        elif args.command == "realm-reply-notice":
+            result = realm_reply_notice(
+                context,
+                args.realm,
+                args.situation,
+                reported_realm=args.reported_realm,
+            )
+        elif args.command == "existing-identity-handoff":
+            result = existing_identity_handoff(
+                context,
+                args.existing,
+                args.situation,
+                connection_name=args.connection_name,
+                metadata_url=args.metadata_url,
+            )
+        elif args.command == "redo-step-notice":
+            result = redo_step_notice(context, args.step)
+        elif args.command == "test-failure-handoff":
+            result = test_failure_handoff(
+                _load_lifecycle_state(context),
+                args.reported_claim,
+                args.reported_user_field,
+                context=context,
+            )
+        elif (
+            args.command == "validation-notice"
+            and args.situation not in _VALIDATION_CONTEXT_FREE
+        ):
+            result = validation_notice(
+                context,
+                args.situation,
+                args.scenario,
+                connection_name=args.connection_name,
+                waiting_for=args.waiting_for,
+                entra_claim=args.entra_claim,
+                servicenow_claim=args.servicenow_claim,
+                claim_name=args.claim_name,
+            )
         elif args.command in REALM_COMMANDS:
-            result = run_realm_command(context, args)
+            if context is not None:
+                result = run_realm_command(context, args)
         elif args.command not in {
+            "validation-notice",
             "adapt-question",
             "list-agents",
             "agent-chooser",
+            "claim-confirmation-handoff",
+            "metadata-url-handoff",
+            "empty-service-areas-handoff",
+            "realm-setup-handoff",
         }:  # pragma: no cover
             raise ServiceNowConnectError("Unsupported command.")
     except (ServiceNowConnectError, AgentBuilderError, ValueError) as exc:
@@ -13869,9 +18943,10 @@ def main(argv: list[str] | None = None) -> int:
             )
         if details:
             error["details"] = details
-        print(json.dumps(_with_agent_rules(error), indent=2))
+        print(json.dumps(_with_agent_rules(error, None, args), indent=2))
         return 1
-    print(json.dumps(_with_agent_rules(result, args.command), indent=2))
+    output = _with_agent_rules(result, args.command, args)
+    print(json.dumps(output, indent=2))
     return 0
 
 

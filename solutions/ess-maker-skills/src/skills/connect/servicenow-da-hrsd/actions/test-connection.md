@@ -27,13 +27,11 @@ result question:
 ```json
 [
   {
-    "header": "Test ServiceNow HRSD",
-    "question": "What did the request return: your expected cases, an empty result, or an error? No need to share case contents.",
+    "header": "Did the request return the results you expected?",
+    "question": "No need to share case contents.",
     "options": [
-      { "label": "It returned the cases I expected" },
-      { "label": "It returned an empty result" },
-      { "label": "It returned an error" },
-      { "label": "Finish without testing" }
+      { "label": "Yes" },
+      { "label": "No" }
     ],
     "allowFreeformInput": false
   }
@@ -45,14 +43,21 @@ Never store response text, case/ticket data, URLs, identifiers, or free-form
 details:
 
 ```text
-python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-test --prompt-category list-my-open-hr-cases --result <pass-fail-untested-or-empty>
+python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-test --prompt-category list-my-open-hr-cases --result <pass-fail-untested-empty-or-unclear>
 ```
 
-- **It returned the cases I expected:** record `--result pass`.
-- **It returned an empty result:** run the same command with `--result empty`. Nothing is recorded and the test stays open; show the `message` field of the command output verbatim as an ordinary reply. Never record pass or fail for an empty result. The maker's next answer to the same question can still be pass, fail, or untested, so ask the result question again and return `ACTION_RESULT = "waiting"`.
-- **It returned an error:** record `--result fail` without inventing a failure category.
-- **Finish without testing:** record `--result untested`, then show the `message` field of the command output verbatim as an ordinary reply. Do not claim the integration is connected or working, do not run final validation, and do not show the final success message. The test stays open, so the next Connect run resumes at the Test-pane request. The Test step is only reached after the earlier setup steps are complete, so no setup blocker is outstanding at this point.
-- If the maker replies in chat with only "Done" or an unclear answer instead of using the question, ask the same question again and do not record evidence.
+- **Yes:** record `--result pass`.
+- **No:** do not record anything yet. Ask in the ordinary reply, as a short
+  chat question, what happened: "What did the request return: an empty result,
+  or an error? You can also tell us to finish without testing." Then map the
+  maker's typed reply:
+  - **Empty result:** run the same command with `--result empty`. Nothing is recorded and the test stays open; show the `message` field of the command output verbatim as an ordinary reply. Never record pass or fail for an empty result. The maker's next answer can still be pass, fail, or untested, so ask the result question again and return `ACTION_RESULT = "waiting"`.
+  - **Empty HR service areas (HR agent only):** when the maker says the HR service-area list is empty, run `empty-service-areas-handoff` and send its `chatMessage` verbatim; it records nothing, does not claim any role was checked, and the empty list alone is not proof of the cause. End the turn and follow `afterReply`.
+  - **Test or Prod destination replies:** for a Test or Prod agent, a "later" reply, a result from another realm, an offer to reuse the Dev connection, a Dev run that was never tested, an empty result that matches what the maker expected, a reply that gives no result, or a Test-pane error saying no ServiceNow user matches the sign-in claim value, run `realm-reply-notice --realm {test|prod} --situation {pause|wrong-realm|dev-connection|dev-untested|empty-matches|no-result|identity-mismatch}` and send its `chatMessage` verbatim with nothing before or after it. It records nothing, so write no statement about what was or was not recorded. End the turn and follow `afterReply`.
+  - **Request did not return the expected results:** when the maker says this request did not return the expected results (including when another ESS agent or Knowledge still works), run `test-failure-handoff` and send its `chatMessage` verbatim as a plain chat reply (no card, no Yes/No); it picks the first-agent, second-agent, existing-identity, or payroll wording itself, names another agent only when it is connected, records nothing, and never assumes a shared identity failure. Pass `--reported-claim` and `--reported-user-field` only when the supplied evidence actually names them. End the turn and follow `afterReply`.
+  - **Error:** record `--result fail` without inventing a failure category. Only when the maker also reports the actual saved metadata URL and it contains `/v2.0`, run `metadata-url-handoff --metadata-url "<reported URL>"` and send its `chatMessage` verbatim; never infer that diagnosis from a generic failure.
+  - **Finish without testing:** record `--result untested`, then show the `message` field of the command output verbatim as an ordinary reply. Do not claim the integration is connected or working, do not run final validation, and do not show the final success message. The test stays open, so the next Connect run resumes at the Test-pane request. The Test step is only reached after the earlier setup steps are complete, so no setup blocker is outstanding at this point.
+- If the maker replies in chat with only "Done" or an unclear answer instead of using the question, run the same command with `--result unclear`, show the `message` field verbatim as an ordinary reply (it is the clarifying question; in the existing sign-in setup mode it ends with the secrets caveat), and do not record evidence.
 - While the question is unanswered, the test is not performed or the maker is
   not ready, return `ACTION_RESULT = "waiting"` and do not record evidence.
 

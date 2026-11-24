@@ -13,6 +13,17 @@ read scopes, initialize a Graph client, or query the application. The Entra
 administrator owns the cloud checks; Connect validates only the returned local
 handoff, target binding, and confirmation receipt.
 
+When the lifecycle state carries `existingIdentity` (the maker said ESS should
+reuse an existing Knowledge, single sign-on, or Microsoft Graph sign-in setup),
+`identity-direct-handoff` returns the compatibility-review handoff. Send it
+verbatim; the setup steps in it are reference only and ESS never changes the
+shared sign-in configuration. See `existing-identity-handoff` in `entry.md`.
+
+When the other ESS ServiceNow agent already completed sign-in setup here (and the
+marker is not set), `identity-direct-handoff` returns the second-agent
+reuse-review handoff instead; send it verbatim. See "Second ESS agent reusing
+this instance's sign-in setup" in `entry.md`.
+
 Read `adminSetup.phaseHandoffs.entra-registration` first. If it is already
 `completed` or `reused` and stored checkpoint results are empty or all in the
 phase's `completionStatuses`, rerun
@@ -47,22 +58,21 @@ portal URL, agent binding, Test, Publish, lifecycle plan, or consent.
 - `none`: continue the normal Entra direct-capture flow without a reuse question.
 - `already-recorded`: continue; the owning Entra and OIDC checkpoints still
   evaluate the current evidence.
-- `source-selection-required`: ask one label-only question from the returned
-  candidate labels, then rerun with the selected internal `sourceKey`. Do not
-  expose the key.
 - `question-required`: pass the returned `question` object unchanged through
   the question tool. Its body contains the exact target, source agent, and
-  eligible identity items; its `options` are label-only. Translate the
-  selected label through `reuseDecisionChoices`.
-  - **Reuse shared identity**: run
+  eligible identity items; its options are only Yes/No. Several sources are
+  asked one at a time; never show a source picker. Translate the selected
+  label through `reuseDecisionChoices`. When `moreCandidates` is true, a
+  **No** is recorded and then `shared-reuse-handoff` is rerun to ask about the
+  next source.
+  - **Yes** (reuse the shared identity): run
     `record-shared-reuse --source-key <internal-source-key> --decision accept`.
     This rechecks only local source hash/scope/bindings and imports only the
     listed identity evidence. It does not call Connectivity or mark the owning
     checkpoints Passed.
-  - **Configure separately**: run
+  - **No** (configure separately): run
     `record-shared-reuse --source-key <internal-source-key> --decision decline`
     and continue normally.
-  - **Not now**: record nothing and return `ACTION_RESULT = "waiting"`.
 
 After an accepted reuse, rerun `identity-direct-handoff --stage entra`.
 If it returns `decision: no-action`, immediately return
@@ -87,18 +97,33 @@ Never infer physical-connection readiness from Shared Identity.
 
 For direct capture, first use the current `resume-handoff` business-group
 availability gate. Do not run this command or render administrator instructions
-until the Entra availability acknowledgement is current. A No answer pauses
-with the returned bring-admin reply and changes no state; a Yes answer is
+until the Entra availability acknowledgement is current. Any answer other than
+a clear Yes pauses through `resume-handoff --roles-available no`: send its
+returned `chatMessage` verbatim as plain chat, end the turn, and change no
+state. A Yes answer is
 recorded only by `resume-handoff --roles-available yes` with its exact group ID
 and context hash.
 
-After that acknowledgement, return the canonical runtime instructions from
+An Entra administrator reply the maker has already pasted or typed (in whole
+or in part) is evidence, never a reason to ask availability. Do not run the
+availability gate and never write your own "Are you available…" card: run the
+`record-identity-direct --stage entra` command in this guide with the supplied
+values right away and send its `chatMessage` verbatim; then run `resume-handoff`
+and send its `renderBlock.text` so the checklist shows the new step.
+
+After that acknowledgement, return the controller-built first-agent Entra administrator message, which follows the PM spec's step structure and shares its underlying steps with
 [the shared Entra administrator source](../../shared/runtime-instructions/entra-administrator.md)
-and native data questions without writing state:
+(the source file is reused as-is for realm messages), and native data questions without writing state:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} identity-direct-handoff --stage entra
 ```
+
+When the maker or an administrator says employees are identified by a payroll
+or other custom employee ID, add `--custom-identifier` to this first command
+(see `Custom employee identifier` in `src/skills/connect/servicenow/entry.md`).
+Later `identity-direct-handoff` calls keep the wording through the stored
+marker; render the returned text verbatim.
 
 Require `decision: instructions-required`. Render `ordinaryReply.text`
 verbatim; it already contains the plain-text lead-in before the
@@ -118,12 +143,19 @@ Client ID. Show the returned question verbatim. This hint is validated but not
 persisted, so a new chat without an atomic receipt may ask for Client ID again.
 Record the non-secret values only after the reply supplies both.
 
-For a reply that proposes a custom claim without configuring it, names two
+For a reply that proposes a custom claim without configuring it, and the maker says a custom claim is wanted, show the
+"Custom claim not confirmed" Message (run `claim-confirmation-handoff --custom-claim`)
+verbatim and nothing else; never suggest email as a fallback. For a reply that names two
 claims, gives a name without completion confirmation, reports missing
 attributes, an email format, or an Entra error, or that the maker is waiting
 for the claim, show the matching Message in `Clarification and recovery
 Messages` of `src/skills/connect/servicenow/entry.md`. Record nothing until
 the administrator's reply supplies the Client ID and a confirmed claim name.
+A custom claim name (anything other than `email` or `upn`) is recorded only
+with `--claim-setup-confirmed`, added when the Entra administrator confirms the
+claim setup is complete. Without it the command records nothing and returns the
+"We have the claim name" Message in `chatMessage`; send it verbatim, end the
+turn, and never ask a clarifying card about the name.
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-slug {SELECTED_AGENT_SLUG} record-identity-direct --stage entra --client-id "<application-client-id-guid>" --claim-name "<selected-claim-name>" --yes

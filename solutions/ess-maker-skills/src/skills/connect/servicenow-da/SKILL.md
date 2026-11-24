@@ -10,13 +10,40 @@ Run the state-free local chooser:
 python scripts/connect_servicenow_da.py agent-chooser
 ```
 
-Show the exact returned `question`. Its prepared-agent choices come only from
-canonical HR/IT setup entries for the current bound workspace environment.
-They are labeled as prepared in this workspace, not as every agent in the
+Show the exact returned `question`: a Yes/No card ("Connect {agent} to
+ServiceNow?") for the first prepared agent, never a list of agents. Its
+prepared-agent candidates come only from canonical HR/IT setup entries for the
+current bound workspace environment. The card title carries the agent's recorded
+Copilot Studio display name only (no product suffix, ID, link, or slug); a
+product name or ordinal is added only when two candidates would otherwise read
+the same. They are prepared in this workspace, not every agent in the
 environment. This command must not run a remote collection listing.
 
-When the maker selects a prepared agent, rerun with its returned internal
-selection key:
+**Skip the chooser when the agent is already known.** If the maker already gave
+a Copilot Studio agent link, or the agent was already selected, set up, or
+discussed earlier in the same conversation, do not show the question. Reuse
+that agent silently with the selection-key commands below (link form when a
+link is known, `prepared:{AGENT_ID}` otherwise) and continue only on
+`status: ready`. Follow the rules in `src/skills/connect/servicenow/entry.md`
+(**Choose the agent**); when the conversation names no agent or several agents,
+show the chooser as usual. When the maker names an agent only by name (for
+example "my Benefits agent"), run
+`agent-chooser --agent-name "{NAME_AS_TYPED}"`: an agent that is not an ESS HR
+or IT agent returns `unsupported-agent`; show its `message` verbatim, never ask
+for a link, and do not start Setup for it. When the maker also names a
+destination (for example "test the IT agent in Prod"), pass the words as typed:
+continue with `selectedAgent`, then run
+`discover-realm-target --realm {realmHint}` at once. It finds the promoted
+agent and its link by itself through the API even when its name differs from
+Dev; never ask the maker for a link or write your own question.
+When the named HR or IT agent is not prepared in this workspace, the controller
+returns `agent-link-required` with `requestedProduct`: show its `chatMessage`
+verbatim and follow its `afterReply`; never offer the other product's agent.
+Never match an agent by display name yourself.
+
+When the maker answers **Yes**, rerun with the returned `prepared:{ID}`
+selection key. When the maker answers **No**, rerun with the returned
+`next-agent:{N}` key (the last candidate's **No** key is `another-agent`):
 
 ```text
 python scripts/connect_servicenow_da.py agent-chooser \
@@ -28,8 +55,9 @@ invocation and continue to its normal provider lifecycle. Fresh supported
 identity and lifecycle checks still apply; local preparation is not remote
 success evidence.
 
-For **Use another agent (paste link)**, the selection-key command returns one
-focused freeform question. Show it exactly. After the maker pastes the full
+After the last **No**, or when no agent is prepared, the controller returns
+`status: agent-link-required` with one focused freeform question (plain chat,
+no options). Show it exactly. After the maker pastes the full
 Copilot Studio link, run:
 
 ```text
@@ -86,6 +114,33 @@ Message in the entry doc and offer **Choose a different agent**; do not hand
 off to Setup.
 
 The selected provider then invokes the shared lifecycle with
-`AGENT_SLUG = SELECTED_AGENT_SLUG`. Local state may label a choice
+`AGENT_SLUG = SELECTED_AGENT_SLUG`. When the maker said the organization
+already uses ServiceNow Knowledge, single sign-on, or the Microsoft Graph
+connector, carry that through the chooser and add `--existing knowledge` (or
+`sso`, `graph`) to the first `resume-handoff`; never skip it, never write the
+opening yourself, and never inspect existing Entra or OIDC configuration (see
+**Existing sign-in setup disclosed in the request** in
+`src/skills/connect/servicenow/entry.md`). Local state may label a choice
 `connected-revalidation-required`, but the provider must still perform normal
 live lifecycle re-verification before reporting it connected.
+
+**More than one agent in one request.** When one request names both ESS agents
+or all of them (for example "Check HR and IT in Prod"), first run
+`validation-notice --situation multi-agent`, send `chatMessage` verbatim with
+no preamble or trailer, and end the turn before any chooser, status, preflight,
+or checklist step (see **More than one agent in one request** in
+`src/skills/connect/servicenow/entry.md`). The controller's fixed text is the
+whole reply; no run starts.
+
+**A step failed with no controller message.** Controller messages always win.
+Only after a command returned an explicit failure (never after a confirmed or
+successful step), and when none covers the failure, run
+`redo-step-notice --step {connection|portal-url|topics|test}` and send
+`renderBlock.text` verbatim; it repeats the step with its non-secret values and
+never asks for or echoes a secret (see **A step failed and no controller
+message covers it** in `src/skills/connect/servicenow/entry.md`).
+
+When a destination check is paused, the checklist `renderBlock.text` already
+carries the controller's pause text followed by the repair steps for that
+blocker (connection, topics, missing sign-in values). Send it verbatim with the
+steps; never shorten it or leave out the steps.

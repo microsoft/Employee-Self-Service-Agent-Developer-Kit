@@ -20,7 +20,19 @@ command, and substitute it wherever a command shows `python`. If the launcher
 cannot import the kit's dependencies, stop and tell the maker to rerun
 `/setup`; do not repair the runtime from Connect.
 
-**STOP — render before acting.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant message — before any other tool call — must contain `renderBlock.text` verbatim (the grouped phases view; it already ends with the current step line). `renderBlock.text` is the only renderable field: never render anything under `internal`, never write your own checklist, and never add a Check/Status table. Never summarize it or write "render the plan" instead. At the start of a fresh run `renderBlock.text` begins with the connection opening ("We'll connect ... so employees can ..."); emit it verbatim as part of the same message, and never write your own opening or repeat it later. The Test-pane ready message in the current-task lead-in is controller-built: show it verbatim and never reword it, and when `record-test --result untested` or `--result empty` returns `message`, show that `message` verbatim (for `empty`, nothing is recorded and the Test step stays open; ask the result question again) and never claim the integration works. The portal URL confirmation question and options returned by `portal-url-confirmation` are controller-built: show them verbatim, and save nothing before the Maker selects Yes. This overrides the Message-block silence rule above.
+**STOP — render before acting.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant message — before any other tool call — must contain `renderBlock.text` verbatim (the setup checklist; it already ends with the current step line). `renderBlock.text` is the only renderable field: never render anything under `internal`, never write your own checklist, and never add a Check/Status table. Never summarize it or write "render the plan" instead. Every turn that shows a step update must include the latest `renderBlock.text` verbatim; it is returned every time and never deduplicated, so never skip it or reuse an older copy. At the start of a fresh run `renderBlock.text` begins with the connection opening ("We'll connect ... so employees can ...", or "We'll add ..." when another ESS agent in the same environment already has shared sign-in setup); emit it verbatim as part of the same message, and never write your own opening or repeat it later. The Test-pane ready message in the current-task lead-in is controller-built: show it verbatim and never reword it, and when `record-test --result untested` or `--result empty` returns `message`, show that `message` verbatim (for `empty`, nothing is recorded and the Test step stays open; ask the result question again) and never claim the integration works. The portal URL question is controller-built plain chat text inside the current-task message: show it verbatim, end the turn, and wait for the Maker's typed reply (never call a question card for it). The portal URL confirmation question and options returned by `portal-url-confirmation` are controller-built: show them verbatim, and save nothing before the Maker selects Yes. This overrides the Message-block silence rule above.
+
+**Controller output rules.** Every `connect_servicenow_da.py` output starts with `chatMessage`: send it verbatim as plain chat text before any other tool call. When a step's status changed or a phase completed, the checklist comes only from the `renderBlock.text` of `resume-handoff` and `record-checkpoint-results`: send that text verbatim in every turn that shows the maker a step update, every time it is returned, never skip it, never reuse an older copy, never write your own checklist, and never drop it because an earlier message already showed it; record commands (`record-*`, `set-*`, handoff and inspect commands) do not carry it, so after one of them finishes, the next `resume-handoff` result is the one that shows the latest checklist, and the latest `renderBlock.text` must be part of the turn's final message. Spec fixed-text replies (the realm, notice, chooser and not-found commands) are text-only by design and carry no checklist. If `endTurn` is `true`, end your turn right after sending it (the message asks the Maker to reply, return, paste, send or act outside chat); do not read the next document or run another command until the Maker replies, then follow `afterReply` when present. If `endTurn` is `false`, do not stop or wait: run `nextCommand` in the same turn. Wording such as "Return here", "tell us", "reply", "paste", "send" or "let us know" always means wait for the Maker. When `pendingCard` is present, ask it with one `ask_user` call using `pendingCard.askUserArguments` exactly as given: the card title is the question and the card has no body, so add no examples, warnings or notes to it; all explanation belongs in `chatMessage`. Option labels are Yes/No or very short; never rebuild them. A question that needs a typed answer (a Copilot Studio link, an instance URL, IDs) is never a card: it is part of `chatMessage` with `endTurn: true`, so the Maker answers in the normal chat box. Outputs that only carry a reply to the Maker (for example `unsupported-agent` or an unclear Test pane answer) also arrive as `chatMessage` with `endTurn: true`. `setup-required` and `setup-incomplete` are automatic Setup handoffs, not stops. When an output sets `waitsForMaker`, it overrides the wording cues above.
+
+**Follow the controller, not the request wording.** After `resume-handoff`, run only the command that `nextCommand` names. Do not call `claim-confirmation-handoff` or any identity handoff on your own because the maker mentioned an identifier such as a payroll ID: the controller already knows what is recorded for this agent and never asks again for a Client ID, claim, instance, or User Field it has saved. Put the target options (`--provider`, `--agent-slug`) before the subcommand, as in every `nextCommand`; the controller also accepts them after it.
+
+**Existing sign-in setup disclosed in the request.** When the maker says the organization already uses ServiceNow Knowledge, single sign-on, or the Microsoft Graph connector (for example "Our company already uses ServiceNow Knowledge"), in the first message or at any point before the first `resume-handoff`, remember it through the agent chooser and add `--existing knowledge` (or `sso`, `graph`) to the first `resume-handoff`: `python scripts/connect_servicenow_da.py --provider {PROVIDER} --agent-slug {SLUG} resume-handoff --existing knowledge`. That one command records the marker and puts the fixed compatibility opening at the start of `renderBlock.text`; send it verbatim as with every `resume-handoff`. Never skip the flag because the checklist looks complete, never write the opening yourself, and never detect, ask about, or inspect existing Entra or OIDC configuration: the maker's statement is the only source. The administrator handoffs are not skipped because Knowledge already works; the controller sends them with the compatibility-review wording. Later `resume-handoff` calls do not need the flag. Details are in **Existing sign-in setup** below.
+
+**More than one agent in one request.** When a single request names both ESS agents or all of them (for example "Check HR and IT in Prod", "set up both", "all agents"), this skill validates one agent per run. Your first action, before any capability emit, `agent-chooser`, `realm-status`, preflight, or checklist, is `python scripts/connect_servicenow_da.py --provider {PROVIDER} validation-notice --situation multi-agent`. Send `chatMessage` verbatim as the whole reply with no preamble and no trailer, and end the turn. It starts no run and records nothing, and no choice is preselected. When the maker's reply names one agent, run `agent-chooser --agent-name "{NAME_AS_TYPED}"` and continue only that agent for the destination they originally named; the other agent is a separate run later. When the reply names both again or neither, send the same message again. Never write this question yourself.
+
+**A step failed and no controller message covers it.** Controller messages always win: when a command returns its own `chatMessage` or `renderBlock` for the failure (test failure, validation notices, realm replies, empty service areas, metadata URL, existing identity), send that text and nothing else. Run this only after a command returned an explicit failure for that step (an error status or a failed result), never after the maker confirms a step or a command succeeds; after a success send only the next `renderBlock.text`, with no "redo" lead-in. Only when no such message exists, send the step's instructions again by running `python scripts/connect_servicenow_da.py --provider {PROVIDER} --agent-slug {SLUG} redo-step-notice --step {connection|portal-url|topics|test}` and send `renderBlock.text` verbatim. It repeats the same steps the maker saw, with the non-secret values from recorded state (sign-in type, Resource URI, instance name), and records nothing. Never paste, ask for, or echo a password, client secret, or token; the notice says such values come from the administrator. For identity (Entra or ServiceNow single sign-on) problems, re-run `identity-direct-handoff --stage entra|servicenow` instead. Never write your own instructions.
+
+**A Test or Prod check is paused and the maker asks what to do.** `check-realm` and `realm-status` render the whole destination checklist plus, right after the controller's "Validation is paused" text, the concrete steps for that blocker (connection, topics, missing sign-in values). Send `renderBlock.text` verbatim, including the steps. Never cut the steps, never summarize them, and never answer "the supported repair" without them. If a destination blocker block has no steps, run `redo-step-notice` for that step; do not improvise.
 
 **Hard rules.** Read `src/skills/connect/shared/lifecycle-runner.md` before the first action. When `resume-handoff` returns `renderBlock`, emit `renderBlock.text` verbatim as an assistant message; terminal output does not count. Never edit `lifecycle.json` by hand; record results with `record-checkpoint-results`. Run every command with the launcher resolved by `/setup` (`py -3`, `python3`, then `python`), never assuming bare `python`.
 
@@ -57,6 +69,66 @@ Before selecting an agent, run only
 request already includes a Copilot Studio link. Do not call `list-agents` or
 scan the environment. Continue to the mandatory `resume-handoff` boundary only
 when the chooser returns `status: ready`.
+
+**Reuse an agent the maker already named in this conversation.** Do not show
+the Yes/No agent question ("Connect {agent} to ServiceNow?") when the maker
+already gave or settled on the agent
+earlier in the same conversation: a Copilot Studio agent link pasted during
+Setup or any earlier turn, or an agent Setup or an earlier Connect turn already
+selected, attached, or prepared. Reuse it silently, without asking:
+
+- When a link is known, run
+  `agent-chooser --selection-key "another-agent" --agent-link "{LINK}"`.
+- Otherwise, when the agent ID is known from the conversation (for example the
+  ID Setup reported), run `agent-chooser --selection-key "prepared:{AGENT_ID}"`.
+- Otherwise, when the maker only named the agent (for example "my Benefits
+  agent"), run `agent-chooser --agent-name "{NAME_AS_TYPED}"` and follow its
+  result without showing a card: `ready` continues, `setup-incomplete` is the
+  Setup handoff, `agent-link-required` with `requestedProduct` (the HR or IT
+  agent the maker named is not prepared in this workspace) is a stop: send its
+  `chatMessage` verbatim, end the turn, and follow its `afterReply` once the
+  maker replies, staying on the named product (never offer or select the other
+  product's agent), and `unsupported-agent` shows its `message` verbatim (see
+  **Unsupported agent**). Never ask for a Copilot Studio link for a named agent
+    yourself (only the controller's not-prepared question above may ask for one)
+  and never start Setup for an unsupported one. When the maker also names a
+  destination (for example "test the IT agent in Prod"), pass the words as
+  typed. Pass the whole sentence as typed, for example "We've now promoted ESS
+  IT to Prod. Check ServiceNow there too." or "deployed HR to Test": the
+  controller picks out the agent (HR or IT) and the destination itself. The
+  same holds without a destination: "Connect ServiceNow for my HR agent." and
+  "my IT agent" both resolve to the Employee Self-Service HR or IT agent, so
+  never reduce, translate or guess the words, and never answer with the
+  unsupported-agent text yourself; only the controller's `unsupported-agent`
+  result may show it. The
+  controller splits off the destination, resolves the Dev agent, and
+  returns it with a `realmHint` and a `nextCommand`: use `selectedAgent`, then run
+  `discover-realm-target --realm {realmHint}` immediately. It finds the
+  promoted agent and its link through the API even when its name differs from
+  Dev. Do not ask the maker for the agent link or whether it was promoted, and
+  never write your own question. Never use `ask_user`, a card, or a chat
+  question to request a promoted URL, an agent link, or "the saved target";
+  the only question allowed is the controller's own `realm-target-not-found`
+  text. Run the two commands first, before reading other files. See `realms.md`
+  (**Agent names differ across environments**, **Discover the promoted agent**).
+- When the maker named no agent and wants a plain chat question instead of the
+  card, get it from
+  `python scripts/connect_servicenow_da.py --provider {PROVIDER} validation-notice --situation agent-chooser`
+  (see **Validation notices** below), send it verbatim, and map the reply to
+  one `prepared:{ID}` key.
+
+Continue only when the result is `status: ready`; then show the confirmation
+Message at the end of this section, with its **Choose a different agent**
+offer, which stays the maker's way to switch. Treat
+`setup-required` and `setup-incomplete` as the automatic Setup handoffs above,
+carrying the known link.
+
+Fall back to the normal chooser when the conversation names no agent, names
+more than one distinct agent, or the key returns an error such as the agent no
+longer being available. A single prepared agent that the maker never mentioned
+does not count as a choice already made: show the chooser. An agent the maker
+named that is not an ESS HR or IT agent is not a fallback case: use
+`--agent-name` as above and show the unsupported-agent message.
 
 `setup-required` (branch `workspace-not-prepared` or `explicit-agent-link`) and
 `setup-incomplete` (branch `setup-not-finished`: the agent is already in this
@@ -206,7 +278,8 @@ rollback gates, action-result handling, or L.5 completion.
 ## ServiceNow additions to the shared runner
 
 These rules apply only to ServiceNow and extend `lifecycle-runner.md`; no other
-provider uses them.
+provider uses them. Where they differ from `lifecycle-runner.md`, these rules
+win for ServiceNow.
 
 - **Role attestation.** For **Maker configuration and validation**, the **Yes**
   answer to the availability question asked at the start of that group is also
@@ -214,11 +287,14 @@ provider uses them.
   `portal-url`). The controller records `roleAttestations.{requiredRole}` in
   the same write as the group acknowledgement (and backfills it for an
   already-acknowledged group on resume). Do not show `permission-gate.md`'s
-  **Confirm role** question for those phases, so those phases never show
-  **Confirm role**. If `roleAttestations.{requiredRole}` is missing or invalid
+  Yes/No role question for those phases, so those phases never show a role
+  question. If `roleAttestations.{requiredRole}` is missing or invalid
   at a mutating phase, do not run the action or ask a role question there:
   rerun `resume-handoff` so the phase-start question is asked first. A **No**
-  answer records nothing and mutates nothing.
+  answer records nothing and mutates nothing. In ServiceNow the role question
+  is only a Yes/No card titled "Do you have the {REQUIRED_ROLE} role to
+  perform this step?"; there is no "not sure" option, and any reply that is
+  not a clear Yes is treated as No.
 - **Administrator instructions.** Render `ordinaryReply.text` verbatim; it
   already contains the plain-text lead-in and the Ready-to-send fenced block.
 - **Phase `renderBlock.text`.** After **Yes**, the newly returned
@@ -231,15 +307,53 @@ provider uses them.
   when both are recorded.
 - **Final `renderBlock.text`.** Its closing sentence states what the
   Maker-reported Test pane result does and does not cover.
+- **Setup checklist.** For ServiceNow, `renderBlock.text` is the flat setup
+  checklist: a title, "Complete these tasks to finish setup.", and one
+  checkbox line per setup task (checked when done, unchecked otherwise, a
+  short note only when a task needs attention; no phases, roles, or legend).
+  It already ends with the current step line where one applies. Where
+  `lifecycle-runner.md` describes grouped phases, collaboration groups, or
+  the generic **Ready to start?** plan confirmation, the flat checklist and the
+  controller transport replace it for ServiceNow. The flat `progress.items`
+  and everything under `internal` are data. The setup checklist and current
+  status have already been shown in an ordinary reply, so ServiceNow action
+  questions are question-only.
+- **Shared identity reuse.** Several sources are asked one Yes/No question at
+  a time: after a **No** with `moreCandidates` true, the decline is recorded
+  and `shared-reuse-handoff` is rerun for the next source. For
+  `question-required`, pass its canonical question through the active question
+  adapter. Translate **Yes** to the existing target-scoped
+  `record-shared-reuse ... --decision accept` and **No** to
+  `--decision decline`. Do not render or ask Entra availability in the same
+  turn.
+- **Identity requirement.** When the Entra action returns
+  `handoffMode: identity-requirement`, ask that routing-only question as a
+  plain chat question with a typed answer, never a card, because the
+  identifier types cannot be expressed as Yes/No; never render Email/UPN/Pay
+  ID options. Use the separate `identityRequirementChoices` mapping to
+  translate the typed answer to the recorder's CLI choice. An answer that
+  names no identifier type (for example `Not sure`) returns waiting, writes no
+  receipt, and shows no administrator instructions.
+- **Next command.** The controller puts the full command in `nextCommand`; run
+  that command exactly. Never run a bare `resume-handoff` after an action or a
+  record command, because the controller keeps no memory between calls and
+  would select the same phase again.
+- **Availability No.** On **No**, or on any answer that is not a clear
+  **Yes** (for example "I'm waiting for the administrator" or "not yet"),
+  rerun with the same group ID and context hash and the roles-available
+  option set to no.
+  The controller returns the waiting message in `chatMessage` with
+  `endTurn: true` and no card. Send it verbatim as plain chat and end the
+  turn; when the maker returns, rerun the same `resume-handoff` command
+  without the roles-available option to ask the Yes/No question again.
 
 ## Parse the handoff
 
 Parse the returned `servicenow.resume-handoff.v1` object:
 
 - before any lifecycle action/checkpoint, show
-  `renderBlock.text` as an ordinary agent response. It renders
-  HR's four or IT's three collaboration groups with one responsible role and
-  nested internal-step statuses. When
+  `renderBlock.text` as an ordinary agent response. It renders the flat setup
+  checklist: one line per task, with finished tasks checked. When
   `transport.businessGroupAvailability.gateRequired` is false, continue
   without an availability question. When true, ask only
   `transport.businessGroupAvailability.question`: serialize that exact
@@ -257,10 +371,21 @@ Parse the returned `servicenow.resume-handoff.v1` object:
   acknowledged current group it contains the exact current task, target,
   owner, runbook/location, expected non-secret evidence, and completion
   boundary. Availability remains acknowledgement only. On
-  **No**, rerun with the same group/context and `--roles-available no`, show
-  the returned group-specific `unavailableReply`, and re-ask the identical
-  question. Do not advance the current/future group, phase, or evidence on
-  **No**. Preflight and instance input never ask availability. This replaces
+  **No**, or any answer that is not a clear **Yes** (for example "I'm waiting
+  for the administrator"), rerun with the same group/context and
+  `--roles-available no`, then send the returned `chatMessage` verbatim as
+  plain chat and end the turn. Never reword it, add your own explanation, or
+  re-ask. Do not advance the current/future group, phase, or evidence. When the
+  maker returns, rerun the same command without `--roles-available` to ask
+  the Yes/No question again.
+  Preflight and instance input never ask availability. An administrator
+  reply the maker has already pasted or typed is evidence, never a trigger
+  for availability: record it with the matching `record-*` command at once
+  and never write your own availability card. The availability question is
+  asked only when the next step needs an administrator and it is not yet known
+  who will act; it names that person (for example "Is your ServiceNow
+  administrator available to complete this step?") and is never asked about
+  the Maker who is already chatting. This replaces
   the generic **Ready to start?** prompt; all mutation confirmations and admin
   evidence gates remain separate;
 
@@ -268,8 +393,8 @@ Parse the returned `servicenow.resume-handoff.v1` object:
   `servicenow.phase-progress.v1` and require its labels/order to match the
   selected provider contract. Render only each item's returned
   `customerLabel`, never its internal phase ID or long contract label. Always emit the freshly returned
-  `renderBlock.text` (the grouped phases view with each step's current
-  status and the current step line) as an assistant message: after plan
+  `renderBlock.text` (the flat setup checklist with a checked or unchecked box
+  per task and the current step line) as an assistant message: after plan
   acceptance, on every phase completion/next-phase transition, waiting
   pause, blocked/error transition, and completion. The flat
   `progress.items` list is data, not a rendering; everything under
@@ -280,8 +405,8 @@ Parse the returned `servicenow.resume-handoff.v1` object:
   `record-checkpoint-results --outcome in-progress` return it), then pass the
   exact compact returned canonical object through the same
   `adapt-question` stdin command and call `ask_user` with the returned
-  `askUserArguments` verbatim. Preserve the complete body and option labels.
-  Do not add a
+  `askUserArguments` verbatim. The card shows only the question title and its
+  short option labels; its body was already sent as chat text. Do not add a
   `Progress` field, checklist, phase table, description, default, required
   input, hidden input, or second question;
 - for blocked/error results, emit the error `renderBlock.text` and the
@@ -399,14 +524,19 @@ Entra handoff. You won't need to restart.
 **End message.**
 
 **Maker pauses for an administrator.** When the maker says they will return
-later while an administrator reply is outstanding, show the first Message. When
-they return, show the second, rerun `resume-handoff` (which rechecks
-permission), and then continue with the next question it returns:
+later while an administrator reply is outstanding, show the first Message. Any
+later message from the maker in this setup (including "continue" or any other
+words) means they want to continue; never ask a Yes/No question to confirm it.
+Show the second Message, rerun `resume-handoff` (which rechecks permission),
+and only after it succeeds show the third Message and wait for the reply. Do
+not render the administrator's ready-to-send message again. Record the reply
+with the existing commands; when items are missing, use the matching
+clarification Message:
 
 **Message:**
 
 We're waiting for your ServiceNow administrator's saved-configuration
-confirmation and User Field.
+confirmation, User Claim, and User Field.
 
 When you return, paste their non-sensitive reply or send those items
 individually. Don't include employee identifiers or secrets. You won't need to
@@ -424,6 +554,14 @@ Next, we'll need your ServiceNow administrator's reply.
 
 **End message.**
 
+**Message:**
+
+Paste their non-sensitive saved-configuration confirmation, User Claim, and
+User Field—or send those items individually. Don't include employee
+identifiers or secrets.
+
+**End message.**
+
 **Conflicting Client IDs.** When the Entra reply contains more than one
 different Client ID, record nothing and show:
 
@@ -436,12 +574,51 @@ Send that value here.
 
 **End message.**
 
-**Custom claim not confirmed.** When a custom claim (for example employee ID)
-is mentioned but the Entra administrator has not confirmed it, show the
-following. The maker is not asked to select an identity mapping or invent a
-claim name; a proposed name, a name alone, or a vague "done" does not establish
-readiness. When some items are already confirmed, ask only for the missing
-ones:
+**Custom employee identifier (payroll ID).** Only when the maker or an
+administrator says employees are identified by a payroll or other custom
+employee ID (not by email or UPN), pass `--custom-identifier` on the first
+`identity-direct-handoff --stage entra` call. The controller stores a
+non-sensitive `customIdentifier` marker (no identifier values) so every later
+step keeps the custom-identifier wording after a resume: the Entra and
+ServiceNow handoffs ask for the exact custom claim name and tell the
+administrators to review the existing setup first, and the connection step says
+to use a supported ESS ServiceNow connection if one is available and otherwise
+create one. A custom claim name alone does not switch wording; only the flag or
+the stored marker does. The existing-identity (Knowledge, SSO, Graph) wording
+takes precedence when both apply. Render the returned text verbatim.
+
+**Custom claim not confirmed.** Only when the maker says a custom claim (or
+custom field) is wanted and the Entra administrator has not confirmed it, and
+only when no `nextCommand` is pending, show
+the following Message verbatim as the whole reply. Mentioning an employee ID or
+another field without saying a custom claim is wanted does not trigger it:
+never point the maker to Part 4 then; run the same command without
+`--custom-claim` and send its reply, which only asks the Entra administrator to
+confirm the exact claim name. This
+applies at any point in the journey, including while waiting for the
+ServiceNow administrator's reply. Do not explain the current claim, list your
+own next steps, record anything, or ask a question. Get the Message from the
+controller instead of writing it: run
+`python scripts/connect_servicenow_da.py --provider {PROVIDER} claim-confirmation-handoff --custom-claim`
+(add `--claim-name-given` when the Entra administrator's exact claim name is
+already stated; the reply then asks the Entra administrator to complete the
+custom-claim work and return the confirmation plus the exact configured claim
+name, and ignores `--servicenow-confirmed`; otherwise add
+`--servicenow-confirmed` when the ServiceNow
+administrator's saved-configuration confirmation with the matching User Claim
+and User Field is already supplied; add `--second-agent` when the maker is
+adding a second agent that reuses another agent's setup), send `chatMessage` verbatim and follow
+`endTurn`/`afterReply`. The command records nothing and needs no agent state. The maker
+is not asked to select an identity mapping or invent a claim name; a proposed
+name, a name alone, or a vague "done" does not establish readiness. End the
+turn and wait; the next message from the maker continues the setup.
+
+When some items are already confirmed, ask only for the missing ones: when the
+Entra administrator's exact claim name is already stated, show the "We have
+the claim name" Message below instead of asking for the name again; when the ServiceNow administrator's
+saved-configuration confirmation with the matching User Claim and User Field
+is already supplied, omit the third paragraph. Never drop the last paragraph:
+the already supplied values stay in place.
 
 **Message:**
 
@@ -454,8 +631,8 @@ complete, including the appropriate format and populated source attribute for
 every intended employee.
 
 Then ask your ServiceNow administrator to confirm that the supported
-configuration is saved, with the matching User Field. Don't send employee
-identifiers or secrets.
+configuration is saved, with the matching User Claim and User Field. Don't send
+employee identifiers or secrets.
 
 We'll keep the Client ID already supplied.
 
@@ -466,7 +643,12 @@ custom claim "is configured" without naming it, record nothing about the claim,
 never guess a name from the phrase, and show the first Message. When the reply
 contains two possible claim names, show the second. When an exact name is given
 without confirmation that its setup is complete, show the third, substituting
-the stated name:
+the stated name. Get it from the controller: run `record-identity-direct
+--stage entra --claim-name "<name>" --yes` without `--claim-setup-confirmed`
+(it records nothing and returns this Message in `chatMessage`). Never ask a
+clarifying card about the name, and record a custom name only after the Entra
+administrator confirms the setup is complete (then add
+`--claim-setup-confirmed`):
 
 **Message:**
 
@@ -498,6 +680,273 @@ Bring back their non-sensitive confirmation; you don't need to resend the name
 or the Client ID. Don't include employee identifiers or secrets.
 
 **End message.**
+
+**Metadata URL with `/v2.0` reported.** Only when the maker (or an administrator
+reply) states the actual saved OIDC metadata URL and it contains `/v2.0`; never
+infer it from a generic failure or from a URL that was not reported. Get the
+Message from the controller instead of writing it: run
+`python scripts/connect_servicenow_da.py --provider {PROVIDER} metadata-url-handoff --metadata-url "<reported URL>"`,
+send `chatMessage` verbatim as the whole reply, and follow `endTurn` and
+`afterReply`. The command records nothing and changes no shared identity
+configuration; the corrected URL it shows is derived from the reported one.
+If it returns `no-diagnosis`, this scenario does not apply: do not call it a
+known setup problem and continue the normal flow. Do not ask a Yes/No
+question. When the maker returns, any message means they want to continue:
+record only the administrators' non-sensitive reply and recheck the affected
+setup before the Test-pane request is repeated. An unresolved compatibility
+conflict stays paused. The Message is, with the directory GUID taken from the
+reported URL:
+
+**Message:**
+
+That metadata URL contains `/v2.0`, which is a known setup problem for this
+connection.
+
+Ask your ServiceNow administrator to review the saved URL against the supported
+ESS metadata URL below, coordinating compatibility with your Entra
+administrator before any repair:
+
+`https://login.microsoftonline.com/{DIRECTORY_GUID}/.well-known/openid-configuration`
+
+Don't change an existing configuration serving SSO or the Microsoft Graph
+connector. If compatibility is unresolved, the administrators need to resolve it
+manually.
+
+Bring back their non-sensitive confirmation that the supported configuration is
+saved and any changed setup values. We'll recheck the affected setup before you
+repeat the request in this agent's Test pane.
+
+**End message.**
+
+**Existing sign-in setup (Knowledge, single sign-on, or Microsoft Graph).** When
+the maker says ESS should reuse an existing ServiceNow Knowledge, single
+sign-on, or Microsoft Graph sign-in setup, add `--existing {knowledge|sso|graph}`
+to the first `resume-handoff` (see **Read this first**), or, when the first
+`resume-handoff` already ran, in a later message, run
+`python scripts/connect_servicenow_da.py --provider {PROVIDER} existing-identity-handoff --existing {knowledge|sso|graph}`
+before anything else and send `chatMessage` verbatim. The maker's statement
+supplies the context: never detect, ask about, or inspect existing Entra or
+OIDC configuration. The command records only a non-identity marker
+(`existingIdentity`) in the lifecycle state, so every later administrator
+message keeps the compatibility-review wording instead of the standard setup
+wording: the Entra and ServiceNow handoffs from `identity-direct-handoff`, the
+connection guidance, the waiting reminder, and the final messages are already
+switched by the marker and must be sent verbatim. The administrators confirm
+compatibility first. The setup steps in their handoffs are reference only, and
+ESS never changes the shared sign-in configuration. After their confirmation
+the normal flow continues. Never fall back to the standard wording partway
+through, and never write these messages yourself.
+
+When a later reply matches one of these situations, run the same command with
+`--situation <name>`, send `chatMessage` verbatim, end the turn for a waiting
+reply, and follow `afterReply`. None of them shows a card or a Yes/No question,
+and none records identity values:
+
+- `setup-incomplete`, `setup-complete`: basic ADK setup is not finished, then
+  finished.
+- `entra-incomplete`, `two-client-ids`: the Entra
+  administrator's reply is incomplete or names two registrations. A reply
+  that gives the Client ID is enough; never ask anyone for the Directory
+  (tenant) ID, because the controller takes it from the signed-in
+  environment.
+- `servicenow-incomplete`, `servicenow-fields-unnamed`: the ServiceNow
+  administrator's reply is incomplete or does not name the User Claim and
+  User Field.
+- `coexistence-conflict`, `replace-configuration`, `different-registration`:
+  the administrators report a conflict, ask to replace the existing
+  configuration, or report a different registration. Never authorize
+  replacing a configuration that serves SSO or Graph.
+- `custom-claim`, `resolution-missing-mapping`: a custom claim or an agreed
+  resolution is missing its mapping confirmation.
+- `knowledge-connector`, `existing-connection`, `connection-disconnected`:
+  the maker offers the existing Knowledge or SSO connection, names a
+  connection, or the connection is not connected. Pass `--connection-name
+  "<name the maker used>"` when one was named.
+- `missing-consent`: only when a supported check shows missing consent, never
+  from a generic failure.
+- `metadata-url --metadata-url "<the URL the maker reports>"`: the same
+  `/v2.0` diagnosis as `metadata-url-handoff`, in the compatibility-review
+  wording.
+- `waiting`, `resumed`, `blocked-finish`: the maker asks for status, comes
+  back, or tries to finish while a confirmation is outstanding.
+- `hr-prerequisite-self-confirmed` (HR agent only): the maker confirms the
+  HR prerequisite without the administrator's reply.
+- `topic-off`, `binding-missing`, `retry-after-fix`: a supported check shows a
+  required built-in topic is off or the agent isn't linked to the selected
+  connection (never from a generic failure). Send the matching message, apply
+  only that targeted correction, keep the completed administrator setup and
+  the Knowledge connector unchanged, then send `retry-after-fix`. In this mode
+  the portal confirmation question reads "Is **{URL}** the portal employees
+  should use for {IT tickets|HR cases}?" and the URL is saved only after the
+  maker confirms.
+
+**Second ESS agent reusing this instance's sign-in setup.** When the other ESS
+ServiceNow agent (HR for IT, IT for HR) already completed sign-in setup in this
+tenant and environment, the controller switches the administrator messages to
+the reuse-review wording on its own; no marker or maker statement is needed and
+the first-agent flow is unchanged. Send these controller messages verbatim and
+never write them yourself: the Entra and ServiceNow handoffs from
+`identity-direct-handoff` (lead-in, "Earlier {other agent} values/mapping -
+review before using", "Review the existing setup first", and setup
+instructions only for work the administrators determine is needed), the
+connection guidance (select an existing connection available for this agent,
+with no new connection required), and the final message, which states that the
+other agent wasn't retested in this setup. The existing-identity marker takes
+priority: when it is set, the compatibility-review wording above applies
+instead. Both agents use the same wording with only the agent name swapped.
+
+**Target changes (environment, agent, instance, tenant, or signed-in user).**
+When the maker switches to another environment or agent, or says the instance,
+tenant, or signed-in user is different, get the Message from the controller
+instead of writing it: run
+`python scripts/connect_servicenow_da.py --provider {PROVIDER} target-change-handoff --change {environment|agent|instance|tenant|user}`
+(add `--target "<new environment or agent name>"` for an environment or agent
+change, using the friendly name the maker used, never an ID or a URL). Send
+`chatMessage` verbatim, then follow `nextCommand` and `afterReply`. The command
+records nothing. Do not reuse evidence from the earlier target until the
+permission and applicability checks pass; only the affected evidence is
+reopened. For a promoted Test or Prod destination, the realm-change and
+different-instance messages in `realms.md` apply instead. The Message for an
+environment change is:
+
+**Message:**
+
+That changes the target environment. We'll check your permission for
+**{Agent} in {New environment}** and which earlier setup information still
+applies.
+
+We won't reuse evidence from {Previous environment} without those checks.
+
+**End message.**
+
+When the existing sign-in setup marker is set, the last line is "We won't assume
+that the connection or test evidence from {Previous environment} applies
+there." The command applies it automatically.
+
+**Test or Prod Test-pane replies.** For a Test or Prod destination, these
+maker replies are controller-owned fixed text. Run
+`python scripts/connect_servicenow_da.py --provider {PROVIDER} realm-reply-notice --realm {test|prod} --situation {SITUATION}`,
+send `chatMessage` verbatim as the whole reply (no preamble, no trailer, no
+sentence about what was or was not recorded), and follow `endTurn` and
+`afterReply`. The command records nothing. Situations: `pause` (the maker will
+run the request later), `wrong-realm` with `--reported-realm {dev|test}` (the
+maker reports a result from another realm), `dev-connection` (the maker offers
+the Dev connection), `dev-untested` (Dev was never tested), `empty-matches` (an
+empty result that matches what the maker expected), `no-result` (the reply says
+nothing about the result), and `identity-mismatch` (the maker's Test-pane error
+says no ServiceNow user matches the sign-in claim value; never use it for a
+generic failure). The "returned no cases, but I expected cases" reply is
+recorded with `record-realm-test --result fail --failure-category
+empty-result`, whose output already contains the follow-up text.
+
+**HR service areas empty (HR agent only).** When the maker reports that the
+HR service-area list is empty (for example when creating an HR case), get the
+Message from the controller instead of writing it: run
+`python scripts/connect_servicenow_da.py --provider {PROVIDER} empty-service-areas-handoff`
+(add `--realm test` or `--realm prod` for a Test or Prod destination), send
+`chatMessage` verbatim as the whole reply, and follow `endTurn` and
+`afterReply`. The command records nothing. Never claim the employee's roles
+were checked, never assign a role, and never treat the empty list alone as
+proof of the cause. For the IT agent the command returns `no-diagnosis`; this
+scenario does not apply. Do not ask a Yes/No question. When the maker returns,
+any message means they want to continue: record only the administrator's
+non-sensitive reply, rerun the recheck of the affected setup, then ask them to
+repeat the HR request in the Test pane and tell us whether the service areas
+appear. The Dev Message is:
+
+**Message:**
+
+An empty HR service-area list can occur when the signed-in employee doesn't have
+the required ServiceNow HR access.
+
+Ask your ServiceNow administrator to review the access for the account used in
+this request through your organization's normal process. The administrator
+instructions identify the applicable roles: `sn_hr_core.basic`,
+`sn_hr_core.manager`, or `sn_hr_core.admin`.
+
+Return with their non-sensitive reply after any required access work is
+complete. We'll recheck the applicable setup. Then repeat the HR request in this
+agent's Test pane and tell us whether the service areas appear.
+
+**End message.**
+
+**The Test request didn't return the expected results.** When the maker says
+this agent's Test pane request did not return the expected results (including
+when another ESS agent or Knowledge still works), get the Message from the
+controller instead of writing it: run
+`python scripts/connect_servicenow_da.py --provider {PROVIDER} test-failure-handoff`,
+send `chatMessage` verbatim as the whole reply, and follow `endTurn` and
+`afterReply`. The command records nothing and is a plain chat question: no card,
+no Yes/No. Never assume a shared identity failure merely because this agent's
+request failed. Add `--reported-claim "<claim>" --reported-user-field "<field>"`
+only when the administrators' reply or the maker's evidence actually names the
+claim and User Field; the controller names the mismatch only when they differ
+from the saved mapping, and otherwise asks for the specific error or result. Ask
+only for what is still missing, and never for the whole setup history. Missing
+consent or a `/v2.0` metadata URL is named only when a supported check or an
+actual reported URL shows it (use `metadata-url-handoff` for the URL); never
+infer either from a generic failure. When the maker returns, any message means
+they want to continue: record only the administrators' non-sensitive reply,
+recheck the affected setup, then ask the maker to repeat the request in the
+Test pane. The controller picks the variant itself and names the other agent
+(HR or IT) only when that agent is actually connected, uses the existing-identity
+wording when the marker is set, and uses the payroll wording when the saved
+User Claim is a custom claim. The first-agent Message without identity evidence
+is:
+
+**Message:**
+
+The request didn't return the expected tickets. We'll check the setup
+information already supplied to narrow down the problem.
+
+If more information is needed, we'll ask for the specific error or result—not
+the whole setup history.
+
+We haven't identified the cause yet.
+
+Did the Test pane show an error, an empty result, or something else? If there
+was an error, send only its text without ticket contents, employee identifiers,
+tokens, or other secrets.
+
+**End message.**
+
+When another agent is connected, the first paragraph names the agent
+("IT didn't return the expected tickets. We'll check the IT setup information
+already supplied to narrow down the problem.") and the second ends "not the
+whole HR setup history." With the existing sign-in setup marker, the second
+paragraph is "If more information is needed, we'll ask for the specific result
+or error—not the whole setup history." With a custom (payroll) User Claim, the
+Message is "That doesn't match the result you expected. We'll check the
+available setup information before asking you for anything else." followed by
+"We can't identify the cause from the information available yet." and "Did the
+Test pane show an error or only an empty result?" with the same secrets caveat.
+
+With evidence that the claim and User Field differ from the saved mapping, the
+reply continues after its first paragraph with the mismatch text for the
+variant. For a second agent it is:
+
+**Message:**
+
+The supplied evidence shows a mismatch between the sign-in claim and ServiceNow
+user field.
+
+Ask your ServiceNow administrator to review the mismatch with your Entra
+administrator and confirm a supported mapping that accounts for the shared
+setup's existing uses. Don't change an existing OIDC configuration serving SSO
+or the Microsoft Graph connector.
+
+Bring back their non-sensitive confirmation that the configuration is saved and
+supports IT, the exact User Claim and User Field, and any changed registration
+or claim values. If a custom claim changed, also bring back its completed-setup
+confirmation for the intended employees.
+
+We'll recheck the affected setup before you repeat the IT request in this
+agent's Test pane.
+
+**End message.**
+
+For the HR agent the same message is used with HR and IT swapped and "cases" for
+"tickets".
 
 **Claim attributes missing.** When the Entra administrator says the identifiers
 are not populated for every employee who will use this agent, pause the claim
@@ -698,6 +1147,22 @@ ID.
 
 **End message.**
 
+**Share another agent's Entra app.** When the maker wants this agent to use the
+same Entra app as another ServiceNow agent (for example IT sharing HR's app)
+but identifies employees by a different claim, this is the same path as a
+different registration, not shared-setup reuse: reuse only applies when the
+app and the claim both match. Never edit saved state by hand. Ask once, in
+plain chat, for the Entra administrator's confirmation that the shared app now
+sends the exact claim for this agent, together with that app's Client ID, then
+run `record-identity-direct --stage entra` with that Client ID and claim name
+(add `--claim-setup-confirmed` for a custom claim). The controller replaces the
+recorded Client ID, retires the earlier ServiceNow confirmation and connection
+evidence tied to the old Client ID, and the ServiceNow administrator must
+confirm the saved configuration for the shared app with this agent's User Claim
+and User Field (the other agent's claim and field do not apply). One existing
+Connected connection with the shared app's values can then serve both agents;
+the agent's own saved connection settings must still select it.
+
 **Maker selects the Knowledge connector.** When the maker asks whether to
 select the ServiceNow Knowledge connection for the ESS agent, show the first
 Message, substituting the agent, the confirmed Client ID, and the ServiceNow
@@ -760,6 +1225,56 @@ We'll recheck the affected setup before continuing. Don't include employee
 identifiers or secrets.
 
 **End message.**
+
+**Validation notices (controller-emitted).** For the situations below, get
+the Message from the controller instead of writing it: run
+`python scripts/connect_servicenow_da.py --provider {PROVIDER} validation-notice --situation {SITUATION}`
+with the extra arguments listed, send `chatMessage` verbatim as the whole
+reply, and follow `endTurn` and `afterReply`. The command records nothing and
+shows no card or Yes/No. `--scenario {first-agent|second-agent|payroll}` is
+derived from the saved state (second agent when another ESS agent already
+uses the connection); pass `payroll` explicitly only for the HR payroll
+custom-claim flow. When the command errors because the spec defines no wording
+for that scenario, do not write one: name the actual blocker, its owner, and
+the exact outstanding action instead. A saved existing-identity marker routes
+the existing-identity situations to `existing-identity-handoff`; only the
+context-free situations below are shared.
+
+- `agent-chooser`: no saved state is needed. When the maker has not named an
+  agent, ask the plain question instead of the Yes/No agent card, then map the
+  reply to `agent-chooser --selection-key "prepared:{AGENT_ID}"` (or
+  `another-agent --agent-link`).
+- `multi-agent`: no saved state is needed. Use it as the very first action when
+  one request names both ESS agents or all of them (for example "Check HR and
+  IT in Prod"). It is the plain question "This skill validates one ESS agent
+  per run. Which should we check first ...?" with no preselected choice. Send
+  it verbatim with no preamble or trailer and end the turn; start no run and
+  record nothing. Map the reply to `agent-chooser --agent-name`.
+- `instance-question` (first agent only): the plain question for the
+  ServiceNow instance URL; never accept credentials.
+- `knowledge-only-exit`: when the maker only wants ServiceNow Knowledge and no
+  ESS connection, send the message and end the turn. Start no setup and record
+  nothing.
+- `sso-conflict`: use this instead of the hand-written conflict Message above.
+  Never change or troubleshoot the existing SSO or Graph configuration.
+- `claim-contradiction` (add `--entra-claim` and `--servicenow-claim`, only
+  when the administrators' replies name different claims).
+- `blocked-finish` (add `--waiting-for servicenow`, or `--waiting-for
+  entra-claim` for payroll): when the maker asks to finish, or reports the
+  integration done, while required setup is incomplete. Claim neither success
+  nor completion. When a different blocker remains, name it instead.
+- `connection-disconnected` (add `--connection-name "<friendly name>"`, never
+  an ID or a URL) and `no-usable-connection` (second agent; the confirmed
+  Client ID and instance name must already be recorded).
+- `resource-uri-claim-name` (payroll; add `--claim-name "<claim>"`): only when
+  the maker's reply shows the connection's Resource URI is set to the claim
+  name.
+- `topic-off` and `agent-not-linked`: only after a supported check or the
+  maker's observed result shows it. Then run the topics or connection step and
+  `retry-request`.
+- `missing-consent`: only when a supported check identifies the missing
+  consent. Never infer it from a generic failure, and never claim a live-tenant
+  consent check ran when it did not.
 
 ## ServiceNow rules
 

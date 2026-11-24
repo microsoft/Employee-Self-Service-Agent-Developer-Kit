@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -227,7 +228,7 @@ def test_servicenow_connect_does_not_ask_the_maker_for_a_tenant_id() -> None:
     messages = entry.split("## Clarification and recovery Messages", 1)[
         1
     ].split("## ServiceNow rules", 1)[0]
-    assert "tenant ID" not in messages
+    assert "tenant ID" not in " ".join(messages.split())
     realms = (connect / "servicenow" / "realms.md").read_text(
         encoding="utf-8"
     )
@@ -401,7 +402,7 @@ def test_servicenow_only_runner_rules_live_in_entry_not_shared_runner() -> None:
         "that group is also the role attestation for every mutating phase in it",
         "`roleAttestations.{requiredRole}` in the same write as the group "
         "acknowledgement",
-        "so those phases never show **Confirm role**",
+        "so those phases never show a role question",
         "rerun `resume-handoff` so the phase-start question is asked first",
         "A **No** answer records nothing and mutates nothing",
         "Render `ordinaryReply.text` verbatim",
@@ -490,15 +491,28 @@ def test_servicenow_connect_entry_has_flow_clarification_messages() -> None:
         "that the HR Service Delivery Core plugin is installed and active.",
         "You won't need to restart.",
         "We're waiting for your ServiceNow administrator's "
-        "saved-configuration confirmation and User Field.",
+        "saved-configuration confirmation, User Claim, and User Field.",
         "We're continuing the ServiceNow setup for **{AGENT_NAME} in "
         "{ENVIRONMENT_NAME}**.",
+        "We're rechecking your permission to configure this agent before we "
+        "continue. Next, we'll need your ServiceNow administrator's reply.",
+        "Paste their non-sensitive saved-configuration confirmation, User "
+        "Claim, and User Field—or send those items individually. Don't "
+        "include employee identifiers or secrets.",
+        "means they want to continue; never ask a Yes/No question to "
+        "confirm it.",
         "The reply contains more than one Client ID. Ask your Entra "
         "administrator which **Client ID** ServiceNow should use.",
         "We need the Entra administrator to confirm the custom claim before "
         "ServiceNow can use it to identify employees.",
         "Ask them to complete the custom-claim work in Part 4 of their "
         "instructions.",
+        "Then ask your ServiceNow administrator to confirm that the supported "
+        "configuration is saved, with the matching User Claim and User Field. "
+        "Don't send employee identifiers or secrets.",
+        "We'll keep the Client ID already supplied.",
+        "show the following Message verbatim as the whole reply",
+        "ask only for the missing ones",
         "Send the reported conflict to your Entra and ServiceNow "
         "administrators.",
         "We won't change that configuration or troubleshoot the conflict.",
@@ -547,6 +561,10 @@ def test_servicenow_connect_confirms_agent_only_after_ready_and_resumes_once() -
     assert "`setup-incomplete`" in chooser
     assert "no longer available" in chooser
     assert "at most one resume per invocation" in chooser
+    assert "Reuse an agent the maker already named in this conversation" in entry
+    assert 'agent-chooser --selection-key "prepared:{AGENT_ID}"' in entry
+    assert "does not count as a choice already made" in entry
+    assert "Skip the chooser when the agent is already known" in chooser
 
 
 def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
@@ -621,7 +639,7 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     assert "askUserArguments" in prompt
     assert "{message, requestedSchema}" in prompt
     assert "`questions: [...]` is internal host output" in prompt
-    assert "HR's four or IT's three collaboration groups" in prompt
+    assert "It renders the flat setup checklist" in " ".join(prompt.split())
     assert "Preflight and instance input never ask availability" in prompt
     assert "with `--roles-available yes`" in prompt
     assert "`--business-group-id`" in prompt
@@ -830,12 +848,13 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "--details" not in test
     assert "save the current authored draft" in test
     assert "selected ServiceNow connection" in test
-    assert '"label": "It returned the cases I expected"' in test
-    assert '"label": "It returned an empty result"' in test
-    assert '"label": "It returned an error"' in test
+    assert '"label": "Yes"' in test
+    assert '"label": "No"' in test
+    for removed in ("Expected results", "Empty result", "Finish without testing"):
+        assert f'"label": "{removed}"' not in test
     assert "empty result or an error" not in test
     assert "`--result empty`" in test
-    assert '"label": "Finish without testing"' in test
+    assert "`--result untested`" in test
     assert 'ACTION_RESULT = "waiting"' in test
     assert "Do not ask a second failure-classification question" in (
         " ".join(test.split())
@@ -854,8 +873,8 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "missing target topic" in topics
     assert "must not repeat the confirmed update" in topics
     assert "adapt-question" in topics
-    assert "while the\n  question is pending" in topics
-    assert "Absence of\n  an answer is not cancellation" in topics
+    assert "while pending, do not return an" in topics
+    assert "Absence of an answer is not cancellation" in topics
     assert "Maker-selected public ServiceNow instance" in preflight
     assert "does not ask the Maker to classify setup\nprogress" in preflight
     assert "which situation matches" not in preflight
@@ -891,16 +910,13 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     )
     assert "com.sn_hr_core" in plugins
     assert (
-        '"label": "Yes, all listed installed-and-ready evidence is present"'
+        '"label": "Yes"'
         in plugins
     )
     assert (
-        '"label": "No, one or more required items are missing"' in plugins
+        '"label": "No"' in plugins
     )
-    assert (
-        '"label": "Not sure, the administrator still needs to check"'
-        in plugins
-    )
+    assert '"label": "Not sure"' not in plugins
     assert "[Open HR Service Delivery Core]({HR_CORE_PLUGIN_URL})" in plugins
     assert "OIDC capability belongs to the later ServiceNow OIDC phase" in (
         plugins
@@ -983,13 +999,14 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     )
     assert "shared-reuse-handoff" not in preflight
     assert "pass the returned `question` object unchanged" in entra_normalized
-    assert "its `options` are label-only" in entra_normalized
+    assert "its options are only Yes/No" in entra_normalized
     assert "Translate the selected label through `reuseDecisionChoices`" in (
         entra_normalized
     )
     assert "physical connections" in entra_normalized
     assert "It makes no API call" in entra_normalized
-    assert "**Reuse shared identity**" in entra
+    assert "**Yes** (reuse the shared identity)" in entra
+    assert "Not now" not in entra
     assert "If it returns `decision: no-action`, immediately return" in entra
     assert "Do not render instructions, call the question tool" in (
         entra_normalized
@@ -1011,11 +1028,11 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     )
     assert "Only when no exact candidate exists" in credential
     assert (
-        '"label": "Completed, the connection is created and shows Connected"'
+        '"label": "Yes"'
         in credential
     )
     assert (
-        '"label": "Not yet, the connection is not ready"' in credential
+        '"label": "No"' in credential
     )
     assert "do not ask\nfor a connection ID or GUID" in credential
     assert "This is the only question for that path" in credential_normalized
@@ -1027,9 +1044,10 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "inspect-portal-url" in portal
     assert "portal-reuse-handoff" in portal
     assert "record-portal-reuse" in portal
-    assert "`portalSourceChoices`" in portal
+    assert "`nextSourceKey`" in portal
+    assert "`source-selection-required`" not in portal
     assert "`portalDecisionChoices`" in portal
-    assert "**Reuse saved portal URL**" in portal
+    assert "Reuse the saved employee portal URL" in portal
     assert "Never ask the Maker to type it" in portal
     assert "make no update call" in portal
     assert "do not complete the phase or copy" in portal_normalized
@@ -1130,7 +1148,7 @@ def test_da_servicenow_itsm_skill_uses_isolated_shared_lifecycle() -> None:
 
     assert "agent-chooser" in chooser
     assert "must not run a remote collection listing" in chooser
-    assert "Use another agent (paste link)" in chooser
+    assert "status: agent-link-required" in chooser
     assert "focused freeform question" in chooser
     assert "pastes the full\nCopilot Studio link" in chooser
     assert "Never persist the choice to `.local/config.json`" in chooser
@@ -1166,12 +1184,13 @@ def test_da_servicenow_itsm_skill_uses_isolated_shared_lifecycle() -> None:
     assert "Global.ServiceNowITSMPortalBaseURI" in portal
     assert "Show my open IT tickets" in test
     assert "record `--result untested`" in test
-    assert '"label": "It returned the tickets I expected"' in test
-    assert '"label": "It returned an empty result"' in test
-    assert '"label": "It returned an error"' in test
+    assert '"label": "Yes"' in test
+    assert '"label": "No"' in test
+    for removed in ("Expected results", "Empty result", "Finish without testing"):
+        assert f'"label": "{removed}"' not in test
     assert "empty result or an error" not in test
     assert "`--result empty`" in test
-    assert '"label": "Finish without testing"' in test
+    assert "`--result untested`" in test
     assert "--failure-category" not in test
     assert "decides pass, fail, or untested" in " ".join(test.split())
     assert "Do not require a non-empty" not in test
@@ -1348,3 +1367,291 @@ def test_connect_completion_uses_human_verified_wording_without_realm_text() -> 
         flat = " ".join(text[name].split())
         assert "Maker-reported Test pane result" in flat
         assert "human-verified" in flat
+
+
+_SERVICENOW_DA_DOCS = (
+    "src/skills/connect/servicenow-da-hrsd",
+    "src/skills/connect/servicenow-da-itsm",
+)
+
+
+def test_servicenow_da_cards_offer_only_yes_no_choices() -> None:
+    root = _ROOT / "solutions" / "ess-maker-skills"
+    texts = []
+    for folder in _SERVICENOW_DA_DOCS:
+        texts.extend(
+            path.read_text(encoding="utf-8")
+            for path in (root / folder).rglob("*.md")
+        )
+    texts.append(
+        (root / "src/skills/connect/servicenow/entry.md").read_text(
+            encoding="utf-8"
+        )
+    )
+    for text in texts:
+        for banned in ('"label": "Not sure"', '"label": "Not now"'):
+            assert banned not in text
+        for banned in ("**Not now**", "**Not sure**"):
+            assert banned not in text
+        for banned in (
+            "**Another instance**",
+            "Another agent",
+            "Use another agent (paste link)",
+            "No / not sure",
+            "Yes, I have this role",
+            "`portalSourceChoices`",
+            "`source-selection-required`",
+            "Which ServiceNow connection should this agent use?",
+            "Which destination should we check, Test or Prod?",
+        ):
+            assert banned not in text, banned
+        labels = re.findall(r'"label":\s*"([^"]*)"', text)
+        assert set(labels) <= {"Yes", "No"}, labels
+        titles = re.findall(r'"title":\s*"([^"]*)"', text)
+        assert {t for t in titles if t in {"Test", "Prod"}} == set()
+    realms = (
+        root / "src/skills/connect/servicenow/realms.md"
+    ).read_text(encoding="utf-8")
+    assert {"Test", "Prod"}.isdisjoint(
+        re.findall(r'"title":\s*"([^"]*)"', realms)
+    )
+    entry = (root / "src/skills/connect/servicenow/entry.md").read_text(
+        encoding="utf-8"
+    )
+    assert "role question is only a Yes/No card" in " ".join(entry.split())
+
+
+def test_plugin_not_active_reply_is_only_the_two_waiting_sentences() -> None:
+    root = _ROOT / "solutions" / "ess-maker-skills" / "src" / "skills" / "connect"
+    doc = (
+        root / "servicenow-da-hrsd" / "actions" / "verify-plugin-prerequisites.md"
+    ).read_text(encoding="utf-8")
+    no_branch = doc.split("- **No:**", 1)[1].split("After **Yes**", 1)[0]
+    assert "show only this fixed waiting text" in no_branch
+    assert "direct link and identifiers" not in no_branch
+    assert "HR setup is waiting for your ServiceNow administrator" in no_branch
+    assert "Bring back that confirmation when it's ready" in no_branch
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_custom_claim_not_confirmed_is_routed_to_the_spec_message(profile: str) -> None:
+    actions = _SOLUTION / "src" / "skills" / "connect" / f"servicenow-da-{profile}" / "actions"
+    for name in ("guide-entra-registration.md", "guide-servicenow-oidc.md"):
+        text = " ".join((actions / name).read_text(encoding="utf-8").split())
+        assert '"Custom claim not confirmed" Message' in text, name
+        assert "verbatim" in text, name
+        assert "email" in text, name
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_custom_claim_name_alone_is_gated_in_docs(profile: str) -> None:
+    root = _SOLUTION / "src" / "skills" / "connect"
+    actions = root / f"servicenow-da-{profile}" / "actions"
+    for path in (
+        actions / "guide-entra-registration.md",
+        actions / "guide-servicenow-oidc.md",
+        root / "servicenow" / "entry.md",
+    ):
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        if path.name != "guide-servicenow-oidc.md":
+            assert "--claim-setup-confirmed" in text, path.name
+        assert "clarifying card" in text, path.name
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_v2_metadata_url_diagnosis_is_routed_in_docs(profile: str) -> None:
+    root = _SOLUTION / "src" / "skills" / "connect"
+    actions = root / f"servicenow-da-{profile}" / "actions"
+    for path in (
+        actions / "guide-servicenow-oidc.md",
+        actions / "test-connection.md",
+        root / "servicenow" / "entry.md",
+    ):
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert "metadata-url-handoff" in text, path.name
+        assert "generic failure" in text, path.name
+
+
+def test_empty_service_areas_diagnosis_is_routed_in_hr_docs() -> None:
+    root = _SOLUTION / "src" / "skills" / "connect"
+    for path in (
+        root / "servicenow" / "entry.md",
+        root / "servicenow" / "realms.md",
+        root / "servicenow-da-hrsd" / "actions" / "test-connection.md",
+    ):
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert "empty-service-areas-handoff" in text, path.name
+
+
+def test_target_change_notice_is_routed_in_shared_docs() -> None:
+    root = _SOLUTION / "src" / "skills" / "connect" / "servicenow"
+    for name in ("entry.md", "realms.md"):
+        text = " ".join((root / name).read_text(encoding="utf-8").split())
+        assert "target-change-handoff" in text, name
+
+
+def test_validation_notice_is_routed_in_entry_docs() -> None:
+    entry = " ".join(
+        (_SOLUTION / "src" / "skills" / "connect" / "servicenow" / "entry.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "validation-notice --situation" in entry
+    for situation in (
+        "agent-chooser",
+        "multi-agent",
+        "knowledge-only-exit",
+        "sso-conflict",
+        "claim-contradiction",
+        "blocked-finish",
+        "connection-disconnected",
+        "missing-consent",
+    ):
+        assert f"`{situation}`" in entry or f"`{situation} " in entry, situation
+    assert "Never infer it from a generic failure" in entry
+
+
+def test_agent_names_differing_across_environments_is_routed_in_docs() -> None:
+    root = _SOLUTION / "src" / "skills" / "connect" / "servicenow"
+    for name in ("entry.md", "realms.md"):
+        text = " ".join((root / name).read_text(encoding="utf-8").split())
+        assert "realmHint" in text, name
+    realms_doc = " ".join((root / "realms.md").read_text(encoding="utf-8").split())
+    assert "Agent names differ across environments" in realms_doc
+
+
+def test_existing_identity_handoff_is_routed_in_shared_docs() -> None:
+    root = _SOLUTION / "src" / "skills" / "connect"
+    entry = " ".join((root / "servicenow" / "entry.md").read_text(encoding="utf-8").split())
+    assert "existing-identity-handoff" in entry
+    assert "never detect, ask about, or inspect existing Entra or OIDC configuration" in entry
+    for profile in ("hrsd", "itsm"):
+        for name in ("guide-entra-registration.md", "guide-servicenow-oidc.md"):
+            text = " ".join(
+                (root / f"servicenow-da-{profile}" / "actions" / name)
+                .read_text(encoding="utf-8")
+                .split()
+            )
+            assert "existingIdentity" in text, (profile, name)
+            assert "existing-identity-handoff" in text, (profile, name)
+
+
+def test_multi_agent_request_is_routed_before_any_command() -> None:
+    root = _SOLUTION / "src" / "skills" / "connect"
+    docs = {
+        "entry": root / "servicenow" / "entry.md",
+        "realms": root / "servicenow" / "realms.md",
+        "router": root / "servicenow-da" / "SKILL.md",
+        "hrsd": root / "servicenow-da-hrsd" / "SKILL.md",
+        "itsm": root / "servicenow-da-itsm" / "SKILL.md",
+    }
+    for name, path in docs.items():
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert "validation-notice --situation multi-agent" in text, name
+        assert "Check HR and IT in Prod" in text, name
+
+
+def test_named_destination_runs_discovery_first_and_never_asks_for_a_link() -> None:
+    root = _SOLUTION / "src" / "skills" / "connect"
+    for name, path in {
+        "entry": root / "servicenow" / "entry.md",
+        "realms": root / "servicenow" / "realms.md",
+        "router": root / "servicenow-da" / "SKILL.md",
+    }.items():
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert "discover-realm-target --realm {realmHint}" in text, name
+        assert "test the IT agent in Prod" in text, name
+    realms = " ".join(
+        (root / "servicenow" / "realms.md").read_text(encoding="utf-8").split()
+    )
+    assert "realm-target-not-found" in realms
+    assert 'Never write your own "please paste the URL"' in realms
+
+
+def test_plain_servicenow_destination_requests_route_before_the_setup_gate() -> None:
+    instructions = (_SOLUTION / ".github" / "copilot-instructions.md").read_text(
+        encoding="utf-8"
+    )
+    routes = instructions.split("### Setup-independent routes", 1)[1].split(
+        "### Setup gate for all other requests", 1
+    )[0]
+    text = " ".join(routes.split())
+    assert "We've now promoted ESS IT to Prod. Check ServiceNow there too." in text
+    assert "src/skills/connect/servicenow/entry.md" in text
+    assert "`agent-chooser`, then `discover-realm-target --realm <test|prod>`" in text
+    assert "Never ask the maker for an agent link, a URL" in text
+
+
+def test_no_doc_tells_the_model_to_ask_for_a_promoted_url_or_link() -> None:
+    allowed = ("never", "do not", "don't", "not ", "without", "only the controller")
+    pattern = re.compile(
+        r"(ask|request|prompt)[^.\n]{0,40}(promoted|prod|test)[^.\n]{0,20}"
+        r"(url|link)|(paste|provide)[^.\n]{0,30}promoted[^.\n]{0,20}(url|link)",
+        re.IGNORECASE,
+    )
+    roots = [
+        _SOLUTION / "src" / "skills" / "connect" / "servicenow",
+        _SOLUTION / "src" / "skills" / "connect" / "servicenow-da",
+        _SOLUTION / "src" / "skills" / "connect" / "servicenow-da-hrsd",
+        _SOLUTION / "src" / "skills" / "connect" / "servicenow-da-itsm",
+    ]
+    files = [_SOLUTION / ".github" / "copilot-instructions.md"]
+    for root in roots:
+        files.extend(root.rglob("*.md"))
+    for path in files:
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        for match in pattern.finditer(text):
+            start = max(0, match.start() - 160)
+            context = text[start : match.end() + 40].casefold()
+            assert any(word in context for word in allowed), (
+                path.name,
+                match.group(0),
+            )
+
+
+def test_redo_step_fallback_is_routed_and_never_replaces_spec_text() -> None:
+    root = _SOLUTION / "src" / "skills" / "connect"
+    for name, path in {
+        "entry": root / "servicenow" / "entry.md",
+        "router": root / "servicenow-da" / "SKILL.md",
+    }.items():
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert "redo-step-notice --step" in text, name
+        assert "Controller messages always win" in text, name
+        assert "explicit failure" in text, name
+        assert "never after" in text.casefold(), name
+        assert "never shorten it" in text or "Never cut the steps" in text, name
+    realms = " ".join(
+        (root / "servicenow" / "realms.md").read_text(encoding="utf-8").split()
+    )
+    assert "How to fix the {HR|IT} connection in {Environment}" in realms
+    assert "How to fix the {HR|IT} topics in {Environment}" in realms
+
+
+def test_existing_identity_flag_is_routed_to_the_first_resume() -> None:
+    root = _SOLUTION / "src" / "skills" / "connect"
+    docs = {
+        "entry": root / "servicenow" / "entry.md",
+        "router": root / "servicenow-da" / "SKILL.md",
+        "hrsd": root / "servicenow-da-hrsd" / "SKILL.md",
+        "itsm": root / "servicenow-da-itsm" / "SKILL.md",
+    }
+    for name, path in docs.items():
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert "resume-handoff --existing" in text or "`--existing knowledge`" in text, name
+        assert "never write" in text.lower() or "never skip" in text.lower(), name
+    entry = " ".join(docs["entry"].read_text(encoding="utf-8").split())
+    assert "Existing sign-in setup disclosed in the request" in entry
+    assert "not skipped because Knowledge already works" in entry
+
+
+def test_test_failure_handoff_is_routed_in_docs() -> None:
+    root = _SOLUTION / "src" / "skills" / "connect"
+    for path in (
+        root / "servicenow" / "entry.md",
+        root / "servicenow-da-hrsd" / "actions" / "test-connection.md",
+        root / "servicenow-da-itsm" / "actions" / "test-connection.md",
+    ):
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert "test-failure-handoff" in text, path.name
+        assert "shared identity failure" in text, path.name

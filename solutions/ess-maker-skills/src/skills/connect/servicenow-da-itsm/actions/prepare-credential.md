@@ -112,18 +112,18 @@ show both verbatim. The native question carries only the completion decision:
 ```json
 [
   {
-    "header": "ServiceNow connection",
-    "question": "Did you create the connection, and does Copilot Studio show it as Connected for this agent? If you reply in chat instead, name the connection you used, for example: \"I created {CONNECTION_DISPLAY_NAME}. Copilot Studio shows Connected.\"\n\nSelecting the completed option triggers one fresh connection check and one check of the agent's saved settings. The name is optional guidance and is not a readiness gate.",
+    "header": "Did you create the connection, and does Copilot Studio show it as Connected for this agent?",
+    "question": "If you reply in chat instead, name the connection you used, for example: \"I created {CONNECTION_DISPLAY_NAME}. Copilot Studio shows Connected.\"\n\nAnswering Yes triggers one fresh connection check and one check of the agent's saved settings. The name is optional guidance and is not a readiness gate.",
     "options": [
-      { "label": "Completed, the connection is created and shows Connected" },
-      { "label": "Not yet, the connection is not ready" }
+      { "label": "Yes" },
+      { "label": "No" }
     ],
     "allowFreeformInput": false
   }
 ]
 ```
 
-After **Completed, the connection is created and shows Connected** (or a chat
+After **Yes** (or a chat
 reply that says so), run:
 
 ```text
@@ -137,8 +137,10 @@ draft connection reference:
   draft uses it, and the step is recorded; return `ACTION_RESULT = "applied"`.
 - `choice-required`: more than one healthy exact connection exists. Use the
   selector below; do not create a duplicate and do not expose connection IDs.
-- `not-ready`: show its explicit remediation, keep the step incomplete, and
-  return `ACTION_RESULT = "waiting"`. Do not record arbitrary fallback state.
+- `not-ready`: show its remediation verbatim (it names which setting did not
+  match, such as the Resource URI, Instance Name, or sign-in type), keep the
+  step incomplete, and return `ACTION_RESULT = "waiting"`. Do not paraphrase
+  it into a generic "not found" and do not record arbitrary fallback state.
 - A blocking issue (error with `details.blockingIssue`) means the connection
   is fine but the agent does not use it yet. Show the error text verbatim,
   keep the step incomplete, and return `ACTION_RESULT = "waiting"`:
@@ -156,35 +158,43 @@ draft connection reference:
 - A command/read error is authoritative. Report it and stop; on HTTP 429,
   honor the cooldown/Retry-After and do not immediately retry the workflow.
 
-If the Maker selects **Not yet, the connection is not ready**, return
+If the Maker selects **No**, return
 `ACTION_RESULT = "waiting"` without running completion or recording evidence.
 
 For multiple healthy exact candidates discovered by the initial
-`inspect-admin-setup`, build the supported selector options directly from
-`credentialResolution.healthyExactCandidates`. If a post-Completed
-`resolve-credential` unexpectedly returns `choice-required` because inventory
-changed, use that command's returned candidates. In either case, each option
-label is the returned bounded `label`, and the corresponding internal value is
-its `selectionKey`. The Maker sees and selects only the non-secret label;
-never ask them to copy the key or connection ID.
+`inspect-admin-setup`, use `credentialResolution.healthyExactCandidates`. If a
+post-Completed `resolve-credential` unexpectedly returns `choice-required`
+because inventory changed, use that command's result instead: it carries the
+first candidate's Yes/No `question`, its `questionSelectionKey`, and the
+remaining candidates' `followUpQuestions` (each with its own `selectionKey`).
+The Maker sees only a Yes/No question per bounded, non-secret connection
+label; never show a connection picker and never ask them to copy the key or
+connection ID.
+
+Ask the candidates one at a time:
+
+1. Ask the first candidate's question (pass it through `adapt-question`).
+2. **Yes**: run `resolve-credential --selection-key <that candidate's selectionKey>`.
+3. **No**: ask the next `followUpQuestions` entry. After the last **No**,
+   return `ACTION_RESULT = "waiting"` and ask in plain chat which connection
+   to use or whether to create a new one; do not run a command.
 
 <!-- visible-handoff-question:v1-select-credential -->
 ```json
 [
   {
-    "header": "Choose ServiceNow connection",
-    "question": "Fresh read-only inventory found multiple healthy exact ServiceNow connections in this environment. Each already uses Microsoft Entra ID User Login with the required Resource URI and Instance Name.\n\nChoose the connection to use for this agent. No new connection will be created. Make sure this agent's Connection Settings use the same connection.",
+    "header": "Use the ServiceNow connection {CANDIDATE_LABEL_1}?",
+    "question": "Fresh read-only inventory found multiple healthy exact ServiceNow connections in this environment. This one already uses Microsoft Entra ID User Login with the required Resource URI and Instance Name.\n\nNo new connection will be created. Make sure this agent's Connection Settings use the same connection.",
     "options": [
-      { "label": "{CANDIDATE_LABEL_1}" },
-      { "label": "{CANDIDATE_LABEL_2}" }
+      { "label": "Yes" },
+      { "label": "No" }
     ],
     "allowFreeformInput": false
   }
 ]
 ```
 
-Replace the example options with exactly one option per returned candidate.
-Map the selected label to its returned `selectionKey`, then run:
+On **Yes**, run:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} resolve-credential --selection-key <internal-selection-key>

@@ -41,10 +41,11 @@ realm never change a realm's recorded state.
     [Independent administrator flow](#independent-administrator-flow)).
 - The required ServiceNow topics must be turned on in the promoted realm. They
   are not compared with Dev's topic states.
-- We do not promote or publish an agent. In Test and Production we only read
-  topic states and the portal value and never change them. A fix belongs in
-  Dev, followed by a new promotion through the maker's own deployment process
-  and a new check.
+- We do not promote or publish an agent. The checks in Test and Production are
+  read-only. A required topic that is off, or a missing portal URL, is handled
+  as the destination's own repair (see [Runtime problems](#runtime-problems));
+  the controller records what should change, never a Dev-side fix, and does not
+  mutate the destination itself.
 
 ### Independent administrator flow
 
@@ -78,6 +79,41 @@ step is expected to change.
 
 ## Resolve the realm
 
+**Request names both agents.** When one request names both ESS agents or all
+of them (for example "Check HR and IT in Prod"), do not run `realm-status` or
+any other command first. Run `validation-notice --situation multi-agent`, send
+`chatMessage` verbatim as the whole reply (no preamble, no trailer, no
+checklist), and end the turn. It says:
+
+> This skill validates one ESS agent per run. Which should we check first—**Employee Self-Service HR** or **Employee Self-Service IT**?
+
+No choice is preselected, no run starts, and nothing is recorded. When the
+maker names one agent, select it with `agent-chooser --agent-name` and continue
+only that agent for the destination they originally named; the other agent is a
+separate run later.
+
+**Agent names differ across environments.** The promoted agent can have a
+different display name in Test or Prod than in Dev. When the maker names an
+agent together with a destination (for example "test the IT agent in Prod"),
+pass the words as typed to `agent-chooser --agent-name "{NAME_AS_TYPED}"`; the
+controller splits off the destination itself. It resolves the Dev agent from
+stable evidence only: the Dev agent's name, a promoted agent that realm
+discovery already verified and recorded (its recorded name or its Copilot
+Studio link), or a single prepared agent of that kind (HR or IT). When the
+result is `ready`, continue with `selectedAgent`, use `realmHint` as the
+destination, and **run `discover-realm-target --realm {realmHint}` next**
+without asking the maker anything. That command finds the promoted agent and
+its link by itself through the read-only ALM family check from the Dev agent,
+whatever its display name is, and records its name, ID, and link. A saved Dev
+target never means the promoted agent is unknown: always run discovery first.
+Never decide which agent a name belongs to yourself, never pick between
+candidates, and never infer the agent from a display name alone. Never write
+your own "please paste the URL" or "the saved target is Dev" message. Only the
+controller asks, and only after discovery ran: when `discover-realm-target`
+returns `status: realm-target-not-found`, send its `chatMessage` verbatim and
+end the turn (it names what was searched). Texts about the destination use the
+destination agent's recorded name.
+
 On every invocation, run the status first and use the controller's
 `activeTargetRealm` and `targets`. Never infer the realm from conversation
 text. A bare `/connect` after Dev is Ready does not activate Test or
@@ -102,22 +138,46 @@ publish, or give deployment instructions.
 
 If the maker asks to check ServiceNow after promotion but does not say Test or
 Production, and the controller's `activeTargetRealm` does not settle it, ask
-with `ask_user`. Never infer the destination from conversation text. If the
+with `ask_user` (card title = the question, Yes/No only; put any explanation
+in the chat message). Never infer the destination from conversation text. If the
 agent is also unknown, ask for that next, and do not ask again for context that
 is already established.
+
+Ask the destination as a sequence of Yes/No questions, never a Test/Prod
+picker. First ask "Should we check Test?". On **Yes**, the destination is
+`test`. On **No**, ask "Should we check Prod?". On **Yes**, the destination is
+`prod`. If both are **No**, ask in chat which destination to check and wait for
+a typed reply; do not run a realm command.
 
 ```json
 {
   "message": "",
   "requestedSchema": {
     "properties": {
-      "destination": {
+      "checkTest": {
         "type": "string",
-        "title": "Destination",
-        "description": "Which destination should we check, Test or Prod?",
+        "title": "Should we check Test?",
         "oneOf": [
-          { "const": "test", "title": "Test" },
-          { "const": "prod", "title": "Prod" }
+          { "const": "yes", "title": "Yes" },
+          { "const": "no", "title": "No" }
+        ]
+      }
+    }
+  }
+}
+```
+
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "checkProd": {
+        "type": "string",
+        "title": "Should we check Prod?",
+        "oneOf": [
+          { "const": "yes", "title": "Yes" },
+          { "const": "no", "title": "No" }
         ]
       }
     }
@@ -137,9 +197,8 @@ If promotion completion is unknown, ask once with `ask_user`:
         "title": "Promotion",
         "description": "Has the agent already been promoted to the requested realm?",
         "oneOf": [
-          { "const": "yes", "title": "Yes, promotion is complete - check again" },
-          { "const": "no", "title": "No, I need to complete promotion first" },
-          { "const": "later", "title": "Not now" }
+          { "const": "yes", "title": "Yes" },
+          { "const": "no", "title": "No" }
         ]
       }
     }
@@ -147,17 +206,30 @@ If promotion completion is unknown, ask once with `ask_user`:
 }
 ```
 
-An explicit statement that promotion completed, or a pasted agent link,
-already answers it. On **No**, give the Dev agent link and the deployment-owner
-handoff, then ask the maker to return after promotion. **Not now** preserves
-all progress.
+An explicit statement that promotion completed, a pasted agent link, or a
+request to check or test the agent in a named Test or Prod destination already
+answers it: run `discover-realm-target` (see **Discover the promoted agent**)
+instead of asking. Ask this question only when the maker's request leaves
+promotion genuinely open. On **No**, give the Dev agent link and the
+deployment-owner handoff, then ask the maker to return after promotion. All
+progress is preserved.
 
 ## Discover the promoted agent
 
 Test and Production can each be checked whenever the maker asks; neither
 waits for Dev to be Ready, and Production does not wait for Test.
 
-- Maker said the agent was promoted, with no link:
+**Discovery always runs first.** As soon as the maker names Test or Prod for HR
+or IT (for example "check IT in Prod", "test the IT agent in Prod", or "we
+promoted it"), and the recorded targets do not already include that realm, run
+`discover-realm-target --realm {test|prod}` before anything else. Do not ask
+"Has the agent already been promoted?", do not ask for an agent link, and do
+not tell the maker that only Dev is saved. The command reads the promoted agent
+from the Dev agent's ALM family through the API and finds it even when its
+display name or link is different in each environment. Ask the maker only when
+it returns `realm-target-not-found`, with its `chatMessage` verbatim.
+
+- Maker named the destination, or said the agent was promoted, with no link:
 
   ```text
   python scripts/connect_servicenow_da.py --provider {SELECTED_PROVIDER} --agent-slug {SELECTED_AGENT_SLUG} discover-realm-target --realm {test|prod}
@@ -184,14 +256,16 @@ the requested realm is rejected with a clear message; never trust it.
 Do not ask the maker for an environment ID, BotId, flow ID, ALM family, or
 deployed commit.
 
-If the controller cannot prove one environment, show the safe environment names
-or URLs it returns and ask the maker to choose one. Leave the choice unset,
-then rerun with `--environment "{ENVIRONMENT_NAME_OR_URL}"`.
+If the controller finds no promoted agent, or more than one, it returns
+`status: realm-target-not-found` with a fixed `chatMessage` that says what was
+searched and asks for the agent link. Send it verbatim as the whole reply and
+end the turn; follow its `afterReply` when the maker answers. It records
+nothing. This is the only case where the maker is asked for a link.
 
-If discovery fails, keep the active realm and all completed administrator work.
-Show the observed failure and the returned remediation. Offer **Check again**,
-**Choose another environment**, and **Not now** with `ask_user`. Reuse a supplied
-environment selection on **Check again**. Do not send the maker back to Dev.
+If discovery fails any other way, keep the active realm and all completed administrator work.
+Show the observed failure and the returned remediation. Ask one Yes/No question with `ask_user`: "Should we check again?" Reuse a supplied
+environment selection on **Yes**. On **No**, ask in chat which environment to use, or
+stop and preserve all progress. Do not send the maker back to Dev.
 
 ## Realm stages
 
@@ -223,28 +297,71 @@ Test and Production use the same three stages, completed separately per realm.
 | Stage | Result |
 |---|---|
 | Connections | Read-only. Done when the connection exists in this environment, is Connected, is bound to this agent, uses Microsoft Entra ID User Login, and its instance and client ID match the expected values. In an independent run the checks start only after both administrator replies are recorded. |
-| Runtime configuration | Read-only. Done when the required ServiceNow topics are turned on and the portal URL is set. Otherwise the block says to go back to Dev, update the topics or portal URL, publish the agent in Dev, deploy (promote) it to the destination again through your own deployment process, and reply "Done". Nothing is edited in Test or Prod. |
-| Maker validation | The maker runs the ServiceNow scenario in this realm's Test pane. Record it with `record-realm-test --realm {test|prod} --prompt-category {CATEGORY} --result {pass|fail|untested}`. Use `untested` only when the maker chooses to finish without testing; it is never a pass, never completes validation, and a later pass or fail replaces it. |
+| Runtime configuration | Read-only check. Done when the required ServiceNow topics are turned on and the portal URL is set. Otherwise the block says which one needs attention (see [Runtime problems](#runtime-problems)); nothing is promoted or published. |
+| Maker validation | The maker runs the ServiceNow scenario in this realm's Test pane. Record it with `record-realm-test --realm {test|prod} --prompt-category {CATEGORY} --result {pass|fail|untested}`. Use `untested` only when the maker chooses to finish without testing; it is never a pass, never completes validation, and a later pass or fail replaces it. If the maker reports the expected data while only the portal URL is missing, the pass is saved as reported (not complete) until the portal is fixed and rechecked. |
 
 ### Connection problems
 
 When the connection is missing, is not linked to this agent, is disconnected,
 or does not use the expected values, the block shows ❌ on the connection step
-and ends with "Validation is paused" naming the condition found, followed by
-numbered steps in the destination environment:
+and ends with the controller's "Validation is paused" text naming the condition
+found, unchanged and first. The controller then appends, in the same block, a
+"How to fix the {HR|IT} connection in {Environment}" section: plain steps to
+open the destination agent's **Settings > Connection Settings > ServiceNow**,
+create the connection (or link the existing connected one) with the recorded
+non-secret values (sign-in type, Resource URI, instance name), select it for
+the agent, and reply **Done**. For a missing destination connection it also
+explains that connections don't travel with the agent, so the connection is
+created in that environment with the already-confirmed values. Send the whole
+block verbatim; never write your own steps, never ask for or echo a secret
+(the block says a client secret comes from the administrator), never suggest
+reusing the Dev connection, and never claim success. The checks stay read-only:
+nothing is created, linked, or changed for the maker. When the maker returns,
+run `check-realm --realm {test|prod}` again; the controller text asks the maker
+to return once the supported destination repair is complete. The same steps follow the
+untested variant of the pause. When the administrator-confirmed values are
+missing, the block appends "How to provide what's missing" (the values come
+from the administrators; paste their reply, never a secret).
 
-- Missing, or different from the expected values: create the connection in
-  Copilot Studio under **Settings > Connection Settings > ServiceNow > Connect
-  > Create new connection** with Microsoft Entra ID User Login, the expected
-  Resource URI and Instance name, and the maker's own sign-in.
-- Not linked to the agent: select the connection under **Settings > Connection
-  Settings > ServiceNow** and save the agent settings.
-- Disconnected: reconnect it until Copilot Studio shows **Connected**.
+### Runtime problems
 
-Each ends with: reply "Done" and we'll recheck this step only. Never suggest
-reusing the Dev connection and never claim success. The checks stay read-only:
-nothing is created, linked, or changed for the maker. When the maker replies
-"Done", run `check-realm --realm {test|prod}` again.
+- **Required topic off.** The block says: "A required ServiceNow {HR|IT} topic
+  is off in **{Agent} in {Environment}**, so the agent can't complete that
+  request." then "We'll enable the affected built-in topic and leave unrelated
+  topics unchanged." The controller records the topics to enable as a request
+  (`repairs.enableTopics` in `realm-status`). The controller never changes the
+  destination, and no supported command for it exists yet; do not invent one.
+  The block appends "How to fix the {HR|IT} topics in {Environment}" with the
+  only supported path: fix the topics in Dev (run `/connect servicenow`
+  again), publish in Dev, deploy to the destination again, and reply "Done".
+  Never tell the maker to turn topics on directly in the destination. Send it
+  verbatim, then run
+  `check-realm --realm {test|prod}` when the maker returns.
+- **Portal URL missing.** The block says the agent is missing its employee
+  portal URL so its {case|ticket} links may not open correctly, and asks: "What
+  is the full HTTPS base URL employees should use for {HR cases|IT tickets}?"
+  Run this with the maker's answer:
+
+  ```text
+  python scripts/connect_servicenow_da.py --provider {SELECTED_PROVIDER} --agent-slug {SELECTED_AGENT_SLUG} record-realm-portal-url --realm {test|prod} --portal-url "{URL}"
+  ```
+
+  The URL must be HTTPS on the recorded ServiceNow instance. When the maker
+  gave it without `https://`, the command records nothing and returns a
+  confirmation question; after the maker confirms, rerun it with
+  `--confirm-portal-url`. It records the request only and returns: "We'll save
+  that URL for the {HR|IT} agent in {Environment}. The shared identity setup
+  stays in place." The controller never changes Test or Prod itself and no
+  supported command for that exists yet, so do not invent one. Tell the maker
+  the change is pending and to return when it is complete, then run
+  `check-realm`. Keep the shared identity setup.
+- **Expected data returned but the portal URL is missing.** When the maker
+  reports a pass while only the portal URL is missing, `record-realm-test`
+  records it as reported. The block says: "Your {HR|IT} request returned the
+  expected data, but the agent in **{Environment}** is missing its employee
+  portal URL. We need to fix that before this setup can be called complete."
+  and asks the portal URL question. After the portal is fixed and rechecked,
+  the result becomes a pass without asking the maker to repeat the request.
 
 Use `check-realm` to re-read the stages, and `select-realm --realm
 {dev|test|prod}` to switch between realms that were already discovered.
@@ -313,7 +430,10 @@ contents" instead of "case contents".
 
 **Maker pauses**
 
-When the maker says they will run the request later, record nothing and say:
+When the maker says they will run the request later, run `realm-reply-notice
+--realm {test|prod} --situation pause` and send `chatMessage` verbatim. Write
+nothing before or after it and no statement about what was or was not
+recorded; the command records nothing. It says:
 
 > We're waiting for your real-data request in **{Agent} in {Environment}**.
 >
@@ -341,17 +461,24 @@ result does not substitute for Prod. When the maker returns, run
 then resume at the Test-pane request; a later pass or fail replaces the
 untested result.
 
-If a setup blocker remains when the maker asks to finish without testing, do
-not record untested. Show the specific validation-paused message for that
-blocker, then add: "This destination remains untested; its setup isn't
-complete. Your progress is saved at the destination connection repair."
+If a setup blocker remains when the maker asks to finish without testing, run
+the same `record-realm-test --result untested` command: while a connection or
+runtime step is blocked the controller saves it as untested (never a pass) and
+the block shows the specific validation-paused message ending with "This
+destination remains untested; its setup isn't complete. Your progress is saved
+at the destination connection repair." If an earlier step is only waiting (for
+example an administrator reply), the command refuses and records nothing; show
+that step's instruction instead. When the maker returns after the repair,
+`check-realm` rechecks and resumes at the Test-pane request.
 
 **Reply gives no usable result**
 
 When the maker replies with only "Done", "Finished", or anything else that does
 not say what the request returned, do not treat it as pass or fail and do not
-run `record-realm-test`. Ask once, and keep asking until the reply says what
-was returned and whether it matched:
+run `record-realm-test`. Run `realm-reply-notice --realm {test|prod}
+--situation no-result` and send `chatMessage` verbatim with nothing before or
+after it. Keep asking until the reply says what was returned and whether it
+matched. It says:
 
 > What did the request from **{Agent} in {Environment}** return, and was that
 > what you expected?
@@ -376,33 +503,48 @@ what to do next.
 
 ### Recovery rules
 
+Each situation below that has a `realm-reply-notice` command is controller-owned
+fixed text. When the maker's reply matches, run the command, send `chatMessage`
+verbatim with nothing before or after it (no preamble, no trailer, no sentence
+about what was or was not recorded), and end your turn. Do not improvise these
+replies from this guide.
+
 - **Wrong environment tested.** When the result came from the Dev agent (or from
-  Test while Prod is being checked), say the following and do not record the
-  result:
+  Test while Prod is being checked), run `realm-reply-notice --realm
+  {test|prod} --situation wrong-realm --reported-realm {dev|test}` and do not
+  record the result. It says:
 
   > That's a {Dev|Test} result; we still need a result from **{Environment}**.
   >
   > Open **{Agent} in {Environment}** and run the request in that agent's
   > **Test pane**. Then tell us whether it returns the expected data.
-- **Expected empty result.** Open with: "That doesn't match the result you
-  expected. We'll check the available setup information for the agent in
-  **{Environment}** before asking you for anything else." Check the setup items
-  first. If no cause shows, ask: "Did the Test pane show an error or only an
-  empty result?" Tell the maker to send only the error text, without case or
-  ticket contents, employee identifiers, tokens, or other secrets. Never blame
-  sign-in mapping, connection references or promotion without evidence.
-- **Empty result that matches what the maker expected (no records).** Say:
+- **Expected empty result.** Record it with `record-realm-test --result fail
+  --failure-category empty-result`. The controller's checklist block already
+  ends with the text below; send `chatMessage` verbatim and add nothing,
+  including any statement about what was recorded. It opens with: "That doesn't
+  match the result you expected. We'll check the available setup information
+  for the agent in **{Environment}** before asking you for anything else." When
+  no setup cause shows it continues: "We can't identify the cause from the
+  information available yet." and asks: "Did the Test pane show an error or only
+  an empty result?" It tells the maker to send only the error text, without case
+  or ticket contents, employee identifiers, tokens, or other secrets. Never
+  blame sign-in mapping, connection references or promotion without evidence.
+- **Empty result that matches what the maker expected (no records).** Run
+  `realm-reply-notice --realm {test|prod} --situation empty-matches` (nothing
+  is recorded, and it is not a pass). It says:
 
   > That matches what you expected, but an empty result alone doesn't show
   > whether the agent can retrieve your HR data.
   >
-  > Try a supported request for data you know exists for your account, then tell
-  > us whether the result matches. You can also finish without testing.
+  > Try a supported request for ServiceNow data you know exists for your
+  > account, then tell us whether the result matches. You can also finish
+  > without testing.
 
-  In the IT agent say "your IT data" instead of "your HR data".
+  In the IT agent it says "your IT data" instead of "your HR data".
 - **Maker offers the Dev connection.** For example "Use the connection from Dev.
-  It already works." Say the following, and do not assume a cross-environment
-  connection can be selected directly:
+  It already works." Run `realm-reply-notice --realm {test|prod} --situation
+  dev-connection`, then run `check-realm`. Do not assume a cross-environment
+  connection can be selected directly. It says:
 
   > A working Dev connection doesn't tell us whether a usable connection is
   > available and linked to this agent in **{Environment}**.
@@ -410,8 +552,9 @@ what to do next.
   > We'll check the destination's connection and agent link. You don't need to
   > resend applicable administrator confirmations.
 - **Dev was never tested.** For example "Dev was configured, but we skipped the
-  test. We've deployed to Test now." Say the following, and do not upgrade Dev's
-  status or ask the maker to restart Dev:
+  test. We've deployed to Test now." Run `realm-reply-notice --realm
+  {test|prod} --situation dev-untested`, then run the realm check. Do not
+  upgrade Dev's status or ask the maker to restart Dev. It says:
 
   > The Dev integration was left untested, so we don't have a working result
   > from that realm.
@@ -419,6 +562,11 @@ what to do next.
   > This run will establish the result for **{Agent} in {Environment}**. We still
   > need its destination connection and agent link, followed by your real-data
   > request.
+- **Target changes in Dev (environment, agent, instance, tenant, or signed-in
+  user).** Get the Message from the controller
+  (`target-change-handoff --change ...`, see `entry.md`) and send `chatMessage`
+  verbatim; it records nothing, and earlier evidence is reused only after the
+  permission and applicability checks pass.
 - **Maker changes the realm.** For example "Check Prod instead." Say the
   following, using the destination the maker named and the other realm's name
   in the last sentence:
@@ -427,9 +575,16 @@ what to do next.
   > and revalidate the destination connection and agent link.
   >
   > The {Test|Prod} result won't count as a {Prod|Test} result.
-- **Maker says the destination uses a different ServiceNow instance.** Say the
-  following, and do not reuse the earlier mapping:
-
+- **Maker says the destination uses a different ServiceNow instance.** Pass the
+  named instance with `--expected-instance "{INSTANCE}"` on `check-realm`. When
+  it differs from the retained instance, the controller pauses the destination
+  (`instancePause`), keeps the earlier result for its original instance, and
+  returns the text below as `message`. Send it verbatim and do not continue
+  with the new instance; every other realm command returns the same pause
+  until the maker names the retained instance again. The resolution path for a
+  different instance is an open product decision: do not invent one.
+  `target-change-handoff --change instance` returns the same text while a
+  Test or Prod run is active.
   > That changes the shared-instance assumption behind this promotion path. We
   > can't treat the earlier administrator setup as evidence for a different
   > instance.
@@ -437,7 +592,15 @@ what to do next.
   > This destination run is paused while support for the different-instance path
   > is resolved. We'll retain the earlier result only for its original instance
   > and identify which setup information needs review.
-- **Sign-in identity does not match (HR and IT).** Say:
+- **Sign-in identity does not match (HR and IT).** Use this when the maker
+  pastes a Test-pane error that says no ServiceNow user matches the sign-in
+  claim value (or the user was not found for the sign-in claim), or a
+  supported check shows the mismatch. Never infer it from a generic failure.
+  Run `realm-reply-notice --realm {test|prod} --situation identity-mismatch`
+  and send `chatMessage` verbatim (intro and ready-to-send message). Do not
+  add a preamble such as "the setup checks passed" and do not add a trailer
+  such as "tell me when it's fixed". The command needs the confirmed instance
+  name and never includes a tenant ID. It says:
 
   > The supplied evidence shows that the sign-in claim value doesn't match the
   > administrator-confirmed ServiceNow user field.
@@ -479,8 +642,13 @@ what to do next.
   >
   > **Do not send employee identifiers, record contents, or secrets.**
 
-  Re-check after the maker says it is fixed.
-- **Empty HR service areas (HR only).** Say:
+  Re-check after the maker returns: record only the administrators'
+  non-sensitive reply with the existing identity commands, then run
+  `check-realm --realm {test|prod}`. A fresh Test-pane request is still
+  required; earlier success does not validate the changed configuration.
+- **Empty HR service areas (HR only).** Get the Message from the controller
+  (`empty-service-areas-handoff --realm {test|prod}`) and send `chatMessage`
+  verbatim; it records nothing. The text is:
 
   > The HR service-area list is empty. Employees using HR scenarios need one of
   > the ServiceNow roles `sn_hr_core.basic`, `sn_hr_core.manager`, or
@@ -500,7 +668,21 @@ what to do next.
   > continue. If those checks find no blocking issue, the outstanding step is
   > your real-data request in this agent's Test pane.
 
-  Then run `check-realm --realm {test|prod}` and emit its block.
+  Then run `check-realm --realm {test|prod}`. After an untested finish, its
+  block already opens with this text; emit it verbatim.
+- **Basic ADK setup is not complete (realm commands).** The controller gates
+  every realm command: when the workspace is not Setup-complete it returns
+  `status: setup-required` with the text below. Send `chatMessage` verbatim,
+  hand over to `/setup`, and return afterward. It records nothing.
+
+  > Before we can continue, we need to finish basic ADK setup. We'll hand over
+  > to the setup skill and return here afterward.
+
+  When setup finishes and the maker returns, run
+  `realm-setup-handoff --situation complete` and send:
+
+  > We'll continue with the ESS agent you just set up. You can select a
+  > different supported ESS agent before we continue.
 
 ## Manual validation
 
@@ -508,20 +690,24 @@ what to do next.
 |---|---|
 | Dev has no lifecycle record, or lacks any administrator-confirmed value, then Test is checked | The block explains that the full ServiceNow setup runs for Test, asks for the instance, then walks the Entra administrator and ServiceNow administrator steps (⏳ until each reply is recorded) before checking the connection, topics, and portal. |
 | Dev holds every administrator-confirmed value, then Test is checked | The block explains that the Dev sign-in setup and mapping are reused, shows no administrator step, and checks the Test connection, topics, portal URL, and real-data test. |
-| Connection is on in Dev but missing in Test | The checklist shows ❌ on the connection step with "Validation is paused", then Dev-style steps to create the connection in Test, ending with reply "Done". The Dev connection is never suggested. |
-| Connection exists in Test but is not bound to the agent | ❌ on the connection step; steps to select the connection under Connection Settings and save, then reply "Done". |
-| Connection in Test is disconnected | ❌ on the connection step; steps to reconnect until it shows Connected, then reply "Done". |
-| Instance or client ID differs from the expected value | ❌ on the connection step with the exact difference and the steps to create a matching connection in the destination. |
-| Required topic off, or portal URL not set, in Prod | ❌ on the Topics or Portal URL step; go back to Dev, update, publish the agent in Dev, deploy (promote) it to the destination again, then reply "Done". Nothing is edited in Test or Prod. |
-| Everything passes before the Test-pane request | Permission, connection, topics, and portal rows show ✅ and the real-data row shows ⏳ Waiting for you, followed by the Test-pane request. |
+| Connection is on in Dev but missing in Test | The checklist shows ❌ on the connection step with "Validation is paused", the return-after-repair wording, then "How to fix the connection" steps with the recorded Resource URI and instance name; no Dev connection is suggested. |
+| Connection exists in Test but is not bound to the agent | ❌ on the connection step; the text says the connection isn't linked to the agent and asks the maker to return once the supported repair is complete. |
+| Connection in Test is disconnected | ❌ on the connection step; the text says it is disconnected and asks the maker to return once the supported repair is complete. |
+| Instance or client ID differs from the expected value | ❌ on the connection step with the exact difference and the same return-after-repair wording. |
+| Required topic off in Test or Prod | ❌ on the Topics step; "We'll enable the affected built-in topic and leave unrelated topics unchanged." The request is recorded; nothing is changed by the controller. |
+| Portal URL not set in Test or Prod | ❌ on the Portal URL step; the block asks for the full HTTPS base URL. `record-realm-portal-url` records the request and confirms with "We'll save that URL for the {HR\|IT} agent in {Environment}." |
+| Maker reports the expected data but the portal URL is missing | The pass is saved as reported (not complete); the block says the request returned the expected data but the agent is missing its portal URL and asks the URL question. |
+| Maker names a different ServiceNow instance for the destination | The destination run is paused and the earlier result is retained for the original instance; other realm commands return the pause text. |
+| Realm command before basic ADK setup is complete | `setup-required` with "Before we can continue, we need to finish basic ADK setup." Nothing is recorded. || Everything passes before the Test-pane request | Permission, connection, topics, and portal rows show ✅ and the real-data row shows ⏳ Waiting for you, followed by the Test-pane request. |
 | A step fails | Later rows stay ⬜ and only the failing step's instruction is shown. |
 | Prod is checked before Test is Ready | Prod is checked on its own. |
 | Maker replies "Done" after fixing a step | `check-realm` reruns; the step turns ✅ without repeating earlier answers. |
-| Maker asks to check ServiceNow after promotion without saying Test or Prod | We ask "Which destination should we check, Test or Prod?" and do not guess. |
+| Maker asks to check ServiceNow after promotion without saying Test or Prod | We ask "Should we check Test?" and, on No, "Should we check Prod?" as Yes/No cards, and do not guess. |
 | Account lacks access (denied) vs. access check could not finish | Denied: ask a maker with the Environment Maker role to run it. Inconclusive: validation is paused, not denied, retry the permission check. |
 | Maker replies only "Done." to the Test-pane request | We don't record pass or fail and ask what the request from the agent in that environment returned and whether it matched. |
 | Maker says "Finish without testing" and no setup blocker remains | `record-realm-test --result untested` saves it as untested (not a pass) and we show the untested-finish message. A later pass or fail replaces it. |
-| Maker says "Finish without testing" while a setup blocker remains | Nothing is recorded as untested; we show the specific validation-paused message for the blocker. |
+| Maker says "Finish without testing" while a setup blocker remains | `record-realm-test --result untested` saves it as untested when a connection or runtime step is blocked, and we show the validation-paused message plus "This destination remains untested; its setup isn't complete." |
 | Maker tested the Dev agent instead of the promoted one | We ask for a result from the promoted environment and record nothing. |
+| One request names both agents ("Check HR and IT in Prod") | `validation-notice --situation multi-agent` is the first action: "This skill validates one ESS agent per run. Which should we check first—**Employee Self-Service HR** or **Employee Self-Service IT**?" Plain chat, no preselected choice, no run, nothing recorded. |
 | Maker's expected data came back empty | We check setup first, then ask whether the Test pane showed an error or only an empty result. |
 | Pass is recorded in Test or Prod | The completion message says what was verified and what was not, and does not mention publishing. |

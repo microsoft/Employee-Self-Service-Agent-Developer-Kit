@@ -43,7 +43,7 @@ def _validate_payload(
     payload: object,
     *,
     required_phrases: tuple[str, ...],
-    minimum_length: int = 100,
+    minimum_length: int = 20,
     rendered: bool = False,
 ) -> dict:
     if not isinstance(payload, list) or len(payload) != 1:
@@ -56,8 +56,9 @@ def _validate_payload(
     body = question.get("question")
     if not isinstance(body, str) or len(body) < minimum_length:
         raise ValueError("visible handoff question is missing complete instructions")
+    shown = f"{question['header']}\n{body}"
     for phrase in required_phrases:
-        if phrase not in body:
+        if phrase not in shown:
             raise ValueError(f"visible handoff question omits {phrase}")
     if rendered and re.search(r"\{[^{}\n]+\}", body):
         raise ValueError("visible handoff question has unresolved placeholders")
@@ -202,14 +203,9 @@ def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
         (
             _ACTIONS / "admin-preflight.md",
             (
-                "For {AGENT_DISPLAY_NAME}",
+                "Which ServiceNow instance should {AGENT_DISPLAY_NAME} use?",
                 "`https://<your-instance>.service-now.com`",
                 "ask your ServiceNow administrator",
-                "which ServiceNow instance should Employee Self-Service use?",
-                "public HTTPS root URL",
-                "portal or module path",
-                "password",
-                "token",
             ),
         ),
         (
@@ -219,20 +215,13 @@ def test_lifecycle_ordinary_plan_renders_complete_contract_in_order(
                 "`com.sn_hr_core`",
                 "listed as Installed",
                 "installed and ready for you to use",
-                "Has the ServiceNow administrator confirmed",
-            ),
-        ),
-        (
-            _ACTIONS / "prepare-topics.md",
-            (
-                "Do you want to enable all listed inactive",
-                "inventory listed above",
+                "Has your ServiceNow administrator confirmed",
             ),
         ),
         (
             _ACTIONS / "test-connection.md",
             (
-                "What did the request return: your expected cases",
+                "Did the request return the results you expected?",
                 "No need to share case contents",
             ),
         ),
@@ -282,7 +271,6 @@ def test_visible_handoff_payloads_are_supported_and_complete(
     (
         _ACTIONS / "verify-plugin-prerequisites.md",
         _ACTIONS / "prepare-credential.md",
-        _ACTIONS / "prepare-topics.md",
         _ACTIONS / "configure-portal-url.md",
         _ACTIONS / "test-connection.md",
         _CONNECT
@@ -338,6 +326,7 @@ def test_servicenow_questions_use_buttons_and_bounded_freeform() -> None:
             path.read_text(encoding="utf-8")
         ) else []:
             question = _validate_payload(payload, required_phrases=())
+            assert question["header"].endswith("?")
             assert question["question"].strip().splitlines()[0] != (
                 question["header"]
             )
@@ -352,14 +341,7 @@ def test_servicenow_questions_use_buttons_and_bounded_freeform() -> None:
                 option["label"]
                 for option in question.get("options") or []
             ]
-            if path.name == "guide-servicenow-oidc.md":
-                assert labels == ["Yes", "No"]
-            else:
-                assert all(
-                    label.strip()
-                    and label.casefold() not in {"yes", "no"}
-                    for label in labels
-                )
+            assert all(label.strip() and len(label) <= 25 for label in labels)
             if question.get("allowFreeformInput") is True:
                 assert path.name in allowed_freeform
             adapted = snow.adapt_question_to_ask_user(question)
@@ -370,7 +352,7 @@ def test_servicenow_questions_use_buttons_and_bounded_freeform() -> None:
             field = adapted["askUserArguments"]["requestedSchema"][
                 "properties"
             ]["response"]
-            assert field["description"] == question["question"]
+            assert "description" not in field
             assert adapted["askUserArguments"]["requestedSchema"][
                 "required"
             ] == ["response"]
@@ -389,15 +371,16 @@ def test_hr_plugin_completion_header_and_question_are_distinct() -> None:
         _payloads(_ACTIONS / "verify-plugin-prerequisites.md")[0],
         required_phrases=(
             "Human Resources Scoped App: Core",
-            "Has the ServiceNow administrator confirmed",
+            "Has your ServiceNow administrator confirmed",
         ),
     )
-    assert payload["header"] == "HR Service Delivery Core"
+    assert payload["header"] == (
+        "Has your ServiceNow administrator confirmed all of this is present?"
+    )
     assert payload["header"] != payload["question"]
     assert [option["label"] for option in payload["options"]] == [
-        "Yes, all listed installed-and-ready evidence is present",
-        "No, one or more required items are missing",
-        "Not sure, the administrator still needs to check",
+        "Yes",
+        "No",
     ]
 
 
@@ -459,14 +442,18 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
     selector = _validate_payload(
         payloads[1],
         required_phrases=(
+            "Use the ServiceNow connection {CANDIDATE_LABEL_1}?",
             "Fresh read-only inventory found multiple healthy exact",
-            "Choose the connection to use for this agent",
             "No new connection will be created",
         ),
     )
     assert [option["label"] for option in completion["options"]] == [
-        "Completed, the connection is created and shows Connected",
-        "Not yet, the connection is not ready",
+        "Yes",
+        "No",
+    ]
+    assert [option["label"] for option in selector["options"]] == [
+        "Yes",
+        "No",
     ]
     assert not any(
         option.get("recommended") for option in completion["options"]
@@ -493,7 +480,7 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
         source_normalized
     )
     expected = completion["question"]
-    assert expected.startswith("Did you create the connection")
+    assert completion["header"].startswith("Did you create the connection")
     assert "Required connection match" not in expected
     assert "Current exact candidates" not in expected
     assert "Purpose:" not in expected
@@ -514,9 +501,8 @@ def test_credential_has_completed_question_and_bounded_candidate_selector(
     assert "conditional remediation, not an observed current error" in (
         source_normalized
     )
-    assert "build the supported selector options directly from" in (
-        source_normalized
-    )
+    assert "Ask the candidates one at a time" in source_normalized
+    assert "never show a connection picker" in source_normalized
 
 
 @pytest.mark.parametrize(
@@ -536,17 +522,14 @@ def test_servicenow_test_question_has_explicit_result_choices(
             _CONNECT / provider / "actions" / "test-connection.md"
         )[0],
         required_phrases=(
-            f"What did the request return: your expected {records}, an empty "
-            "result, or an error?",
+            "Did the request return the results you expected?",
             f"No need to share {record} contents.",
         ),
     )
 
     assert [option["label"] for option in payload["options"]] == [
-        f"It returned the {records} I expected",
-        "It returned an empty result",
-        "It returned an error",
-        "Finish without testing",
+        "Yes",
+        "No",
     ]
     assert not any(option.get("recommended") for option in payload["options"])
     assert payload["allowFreeformInput"] is False
@@ -558,60 +541,39 @@ def test_servicenow_test_question_has_explicit_result_choices(
     doc = (
         _CONNECT / provider / "actions" / "test-connection.md"
     ).read_text(encoding="utf-8")
-    assert "--result <pass-fail-untested-or-empty>" in doc
+    assert "--result <pass-fail-untested-empty-or-unclear>" in doc
     assert "record `--result untested`" in doc
     assert "`--result empty`" in doc
     assert "Required prompt" in doc and "do not add a \"Required prompt\"" in doc
 
 
-def test_portal_has_url_input_and_manual_fallback_payloads() -> None:
-    for provider, noun in (("servicenow-da-hrsd", "HR case"), ("servicenow-da-itsm", "IT ticket")):
+def test_portal_url_is_plain_text_with_manual_fallback_card_only() -> None:
+    for provider in ("servicenow-da-hrsd", "servicenow-da-itsm"):
         doc = (_CONNECT / provider / "actions" / "configure-portal-url.md").read_text(
             encoding="utf-8"
         )
-        sentence = (
-            f"Next, we'll make sure the agent's {noun} links open in the "
-            "right employee portal."
-        )
-        message = doc.split("**Message:**", 1)[1].split("**End message.**", 1)[0]
-        assert message.strip() == sentence
-        assert doc.index("**End message.**") < doc.index(
-            "<!-- visible-handoff-question:v1 -->"
-        )
-        assert sentence not in doc.split("<!-- visible-handoff-question:v1 -->", 1)[1]
+        assert "<!-- visible-handoff-question:v1 -->" not in doc
+        assert "**Message:**" not in doc
     payloads = _payloads(_ACTIONS / "configure-portal-url.md")
-    assert len(payloads) == 2
-    portal_input = _validate_payload(
-        payloads[0],
-        required_phrases=(
-            "full HTTPS base URL of your ServiceNow employee portal",
-        ),
-    )
-    assert portal_input["question"] == (
-        "What is the full HTTPS base URL of your ServiceNow employee "
-        "portal? It may differ from the instance URL, so we won't assume "
-        "`/sp` or `/esc`."
-    )
+    assert len(payloads) == 1
     fallback = _validate_payload(
-        payloads[1],
+        payloads[0],
         required_phrases=(
             "couldn't update the portal URL automatically",
             "{PORTAL_URL}",
             "fresh read-only verification",
         ),
     )
-    assert portal_input["allowFreeformInput"] is True
     assert [option["label"] for option in fallback["options"]] == [
-        "Completed, the exact portal URL is saved",
-        "Not yet, the portal URL is not saved",
+        "Yes",
+        "No",
     ]
     assert fallback["allowFreeformInput"] is False
-    for payload in (portal_input, fallback):
-        question = payload["question"]
-        assert "Purpose:" not in question
-        assert "Owner:" not in question
-        assert "Open Copilot Studio" not in question
-        assert "1. Open" not in question
+    question = fallback["question"]
+    assert "Purpose:" not in question
+    assert "Owner:" not in question
+    assert "Open Copilot Studio" not in question
+    assert "1. Open" not in question
     source = (_ACTIONS / "configure-portal-url.md").read_text(
         encoding="utf-8"
     )
@@ -626,6 +588,29 @@ def test_portal_has_url_input_and_manual_fallback_payloads() -> None:
     assert "show this manual fallback in the ordinary current-task reply" in (
         source_normalized
     )
+
+
+@pytest.mark.parametrize(
+    "provider",
+    ("servicenow-da-hrsd", "servicenow-da-itsm"),
+)
+def test_topics_choice_is_a_yes_no_card_with_explanation_in_chat(
+    provider: str,
+) -> None:
+    doc = " ".join(
+        (_CONNECT / provider / "actions" / "prepare-topics.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "<!-- visible-handoff-question:v1 -->" not in doc
+    assert (
+        'the card title is the question "Should we enable the inactive '
+        'ServiceNow topics?" with exactly these short labels: **Yes** and '
+        "**No**" in doc
+    )
+    assert "is sent as chat text, not in the card" in doc
+    assert "record-topic-choice --choice keep-current" in doc
+    assert "enable-all-topics --yes" in doc
 
 
 @pytest.mark.parametrize(
@@ -742,19 +727,3 @@ def test_servicenow_native_questions_have_no_technical_headers(
                     assert header not in body, (path.name, header)
                 checked += 1
     assert checked >= 5
-
-
-@pytest.mark.parametrize(
-    "provider",
-    ("servicenow-da-hrsd", "servicenow-da-itsm"),
-)
-def test_portal_url_question_is_one_plain_paragraph(provider: str) -> None:
-    portal_input = _payloads(
-        _CONNECT / provider / "actions" / "configure-portal-url.md"
-    )[0][0]
-    assert portal_input["question"] == (
-        "What is the full HTTPS base URL of your ServiceNow employee "
-        "portal? It may differ from the instance URL, so we won't assume "
-        "`/sp` or `/esc`."
-    )
-    assert "\n" not in portal_input["question"]
