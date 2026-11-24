@@ -305,13 +305,23 @@ Test and Production use the same three stages, completed separately per realm.
 When the connection is missing, is not linked to this agent, is disconnected,
 or does not use the expected values, the block shows ❌ on the connection step
 and ends with the controller's "Validation is paused" text naming the condition
-found. The repair mechanism for a destination connection is an open
-engineering question, so the text does not give a menu path or numbered
-steps. Do not invent one. It ends by asking the maker to return once the
-supported destination repair is complete, and says we'll recheck the
-destination setup. Never suggest reusing the Dev connection and never claim
-success. The checks stay read-only: nothing is created, linked, or changed for
-the maker. When the maker returns, run `check-realm --realm {test|prod}` again.
+found, unchanged and first. The controller then appends, in the same block, a
+"How to fix the {HR|IT} connection in {Environment}" section: plain steps to
+open the destination agent's **Settings > Connection Settings > ServiceNow**,
+create the connection (or link the existing connected one) with the recorded
+non-secret values (sign-in type, Resource URI, instance name), select it for
+the agent, and reply **Done**. For a missing destination connection it also
+explains that connections don't travel with the agent, so the connection is
+created in that environment with the already-confirmed values. Send the whole
+block verbatim; never write your own steps, never ask for or echo a secret
+(the block says a client secret comes from the administrator), never suggest
+reusing the Dev connection, and never claim success. The checks stay read-only:
+nothing is created, linked, or changed for the maker. When the maker returns,
+run `check-realm --realm {test|prod}` again; the controller text asks the maker
+to return once the supported destination repair is complete. The same steps follow the
+untested variant of the pause. When the administrator-confirmed values are
+missing, the block appends "How to provide what's missing" (the values come
+from the administrators; paste their reply, never a secret).
 
 ### Runtime problems
 
@@ -320,9 +330,12 @@ the maker. When the maker returns, run `check-realm --realm {test|prod}` again.
   request." then "We'll enable the affected built-in topic and leave unrelated
   topics unchanged." The controller records the topics to enable as a request
   (`repairs.enableTopics` in `realm-status`). The controller never changes the
-  destination, and no supported command for it exists yet; do not invent one
-  or send the maker to a menu path. Tell the maker the change is pending and
-  to return when it is complete, then run `check-realm --realm {test|prod}`.
+  destination, and no supported command for it exists yet; do not invent one.
+  The block appends "How to turn the {HR|IT} topics on in {Environment}" with
+  the steps (open the agent, **Topics**, turn on the ServiceNow topics that
+  show Off, or fix them in Dev and deploy again if the environment doesn't
+  allow changes) and "reply **Done**". Send it verbatim, then run
+  `check-realm --realm {test|prod}` when the maker returns.
 - **Portal URL missing.** The block says the agent is missing its employee
   portal URL so its {case|ticket} links may not open correctly, and asks: "What
   is the full HTTPS base URL employees should use for {HR cases|IT tickets}?"
@@ -676,7 +689,7 @@ replies from this guide.
 |---|---|
 | Dev has no lifecycle record, or lacks any administrator-confirmed value, then Test is checked | The block explains that the full ServiceNow setup runs for Test, asks for the instance, then walks the Entra administrator and ServiceNow administrator steps (⏳ until each reply is recorded) before checking the connection, topics, and portal. |
 | Dev holds every administrator-confirmed value, then Test is checked | The block explains that the Dev sign-in setup and mapping are reused, shows no administrator step, and checks the Test connection, topics, portal URL, and real-data test. |
-| Connection is on in Dev but missing in Test | The checklist shows ❌ on the connection step with "Validation is paused" and the return-after-repair wording; no menu path or Dev connection is suggested. |
+| Connection is on in Dev but missing in Test | The checklist shows ❌ on the connection step with "Validation is paused", the return-after-repair wording, then "How to fix the connection" steps with the recorded Resource URI and instance name; no Dev connection is suggested. |
 | Connection exists in Test but is not bound to the agent | ❌ on the connection step; the text says the connection isn't linked to the agent and asks the maker to return once the supported repair is complete. |
 | Connection in Test is disconnected | ❌ on the connection step; the text says it is disconnected and asks the maker to return once the supported repair is complete. |
 | Instance or client ID differs from the expected value | ❌ on the connection step with the exact difference and the same return-after-repair wording. |

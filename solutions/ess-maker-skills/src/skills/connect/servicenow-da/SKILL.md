@@ -134,3 +134,8 @@ When none covers the failure, run
 `renderBlock.text` verbatim; it repeats the step with its non-secret values and
 never asks for or echoes a secret (see **A step failed and no controller
 message covers it** in `src/skills/connect/servicenow/entry.md`).
+
+When a destination check is paused, the checklist `renderBlock.text` already
+carries the controller's pause text followed by the repair steps for that
+blocker (connection, topics, missing sign-in values). Send it verbatim with the
+steps; never shorten it or leave out the steps.

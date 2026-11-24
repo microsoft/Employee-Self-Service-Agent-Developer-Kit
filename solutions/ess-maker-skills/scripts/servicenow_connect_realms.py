@@ -1773,22 +1773,136 @@ def _agent_reference(context: Mapping[str, Any]) -> str:
     return f"[**{agent}**]({url})" if url else f"**{agent}**"
 
 
+_REPAIR_SAFETY = (
+    "You don't need to paste a password, client secret, or token here. If "
+    "anything like that is requested, it comes from your administrator and "
+    "stays out of this chat."
+)
+
+
+def connection_repair_steps(
+    reason: str,
+    label: str,
+    context: Mapping[str, Any],
+    values: Mapping[str, Any] | None = None,
+) -> str:
+    """Plain-language steps that follow the spec pause text for a connection.
+
+    Built only from recorded non-secret values. The Client ID doubles as the
+    Resource URI, as in the original connection step.
+    """
+    values = values or {}
+    agent = str(context["agent"])
+    kind = str(context["kind"])
+    instance = str(values.get("instanceName") or "").strip()
+    client_id = str(values.get("clientId") or "").strip()
+    resource = (
+        f"`{client_id}`"
+        if client_id
+        else "the Application (client) ID your Microsoft Entra administrator "
+        "confirmed"
+    )
+    instance_text = (
+        f"`{instance}`—not the full URL"
+        if instance
+        else "the ServiceNow instance name your administrator confirmed—not "
+        "the full URL"
+    )
+    open_step = (
+        f"1. Open {_agent_reference(context)} in **{label}** and go to "
+        "**Settings > Connection Settings > ServiceNow**."
+    )
+    create_values = [
+        "   - **Authentication type:** Microsoft Entra ID User Login",
+        f"   - **Resource URI:** {resource}",
+        f"   - **Instance name:** {instance_text}",
+    ]
+    if reason == "connection-not-bound":
+        lead = (
+            f"A ServiceNow connection already exists in {label}, so you "
+            f"only need to link it to {agent}."
+        )
+        steps = [
+            open_step,
+            "2. Select the connection that shows **Connected** for this "
+            "agent.",
+            "3. If no connection is listed there, choose **Connect > Create "
+            "new connection** and use:",
+            *create_values,
+            "4. Complete the sign-in.",
+        ]
+    else:
+        if reason == "connection-unhealthy":
+            lead = (
+                f"The connection in {label} needs to be signed in again or "
+                "replaced."
+            )
+        elif reason == "connection-mismatch":
+            lead = (
+                f"The connection in {label} needs to use the values below. "
+                "Create a new connection that does, then use it for this "
+                "agent."
+            )
+        else:
+            lead = (
+                f"Connections don't travel with the agent when it moves to "
+                f"{label}, so the ServiceNow connection has to be created in "
+                f"{label} itself. Use the same confirmed sign-in values; you "
+                "don't need to repeat the administrator work."
+            )
+        steps = [
+            open_step,
+            "2. Select **Connect > Create new connection** and use:",
+            *create_values,
+            "3. Complete the sign-in.",
+            f"4. Select that connection for {agent} so it shows "
+            "**Connected**.",
+        ]
+    return "\n\n".join(
+        [
+            f"**How to fix the {kind} connection in {label}**",
+            lead,
+            "\n".join(steps),
+            f"When it shows **Connected**, reply **Done** and we'll recheck "
+            "this step only.",
+            _REPAIR_SAFETY,
+        ]
+    )
+
+
+def missing_values_steps(missing: list[str] | None) -> str:
+    wanted = ", ".join(missing or []) or "the confirmed sign-in values"
+    return "\n\n".join(
+        [
+            "**How to provide what's missing**",
+            f"These values come from your administrators, not from Copilot "
+            f"Studio: {wanted}. Ask your Microsoft Entra administrator for "
+            "the Application (client) ID and your ServiceNow administrator "
+            "for the instance name, then paste their reply here.",
+            _REPAIR_SAFETY,
+        ]
+    )
+
+
 def _connection_instruction(
     stage: Mapping[str, Any],
     label: str,
     context: Mapping[str, Any],
     *,
     untested: bool = False,
+    values: Mapping[str, Any] | None = None,
 ) -> str:
-    """Pause text only: the destination repair mechanism is not invented."""
-    return connection_pause_text(
-        str(stage.get("reason") or ""),
+    """Spec pause text first, then the steps to repair the connection."""
+    reason = str(stage.get("reason") or "")
+    pause = connection_pause_text(
+        reason,
         agent=str(context["agent"]),
         label=label,
         kind=str(context["kind"]),
         differences=stage.get("differences") or [],
         untested=untested,
     )
+    return f"{pause}\n\n{connection_repair_steps(reason, label, context, values)}"
 
 
 def _portal_question(context: Mapping[str, Any]) -> str:
@@ -1837,6 +1951,30 @@ def _portal_reported_instruction(
         f"the agent in **{label}** is missing its employee portal URL. We "
         "need to fix that before this setup can be called complete.\n\n"
         + _portal_question(context)
+    )
+
+
+def topics_repair_steps(label: str, context: Mapping[str, Any]) -> str:
+    agent = str(context["agent"])
+    product = str(context.get("product") or context["kind"])
+    return "\n\n".join(
+        [
+            f"**How to turn the {context['kind']} topics on in {label}**",
+            "\n".join(
+                [
+                    f"1. Open {_agent_reference(context)} in **{label}** and "
+                    "go to **Topics**.",
+                    f"2. Find the ServiceNow {product} topics that show "
+                    "**Off** and turn each one on. Leave unrelated topics "
+                    "as they are.",
+                    f"3. If {label} doesn't let you change topics there, "
+                    f"turn them on in Dev instead, publish {agent} in Dev, "
+                    f"and deploy it to {label} again through your own "
+                    "deployment process.",
+                ]
+            ),
+            "When they're on, reply **Done** and we'll recheck this step only.",
+        ]
     )
 
 
@@ -2007,6 +2145,11 @@ def render_realm_block(
     elif status == "needs-maker":
         connection = ("⏳", "Waiting for the missing sign-in details")
         instruction = str(connections.get("message") or "")
+        if connections.get("reason") == "expected-values-missing":
+            instruction = (
+                f"{instruction}\n\n"
+                f"{missing_values_steps(connections.get('missing'))}"
+            )
     elif status == "blocked":
         connection = ("❌", "Needs attention")
         instruction = _connection_instruction(
@@ -2017,6 +2160,7 @@ def render_realm_block(
                 validation.get("status") == "untested"
                 and validation.get("blockedBy")
             ),
+            values=(target.get("expected") or {}).get("values"),
         )
 
     reported = validation.get("status") == "reported"
@@ -2034,6 +2178,10 @@ def render_realm_block(
             instruction = _topics_instruction(
                 runtime, label, context, reported=reported
             )
+            if instruction is not None:
+                instruction = (
+                    f"{instruction}\n\n{topics_repair_steps(label, context)}"
+                )
             if instruction is None:
                 instruction = _promoted_fix_instruction(
                     f"no ServiceNow topics were found in {label}, so {agent} "

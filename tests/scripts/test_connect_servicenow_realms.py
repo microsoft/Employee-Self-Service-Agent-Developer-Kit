@@ -1545,7 +1545,7 @@ def test_realm_block_prod_request_matches_the_spec_variant() -> None:
         ),
     ],
 )
-def test_realm_block_connection_problems_pause_without_a_menu_path(
+def test_realm_block_connection_problems_pause_then_give_repair_steps(
     reference: dict[str, str],
     connections: list[dict[str, Any]],
     named: str,
@@ -1554,14 +1554,67 @@ def test_realm_block_connection_problems_pause_without_a_menu_path(
         connections=realms.evaluate_connections(FOUNDATION, reference, connections)
     )
     assert _icons(block) == ["✅", "❌", "⬜", "⬜", "⬜"]
-    assert "**Validation is paused:**" in block
-    assert named in block
-    assert "return here and tell us" in block
-    assert "We'll recheck" in block
-    for invented in ("Settings", "Create new connection", "**Connected**", "Dev connection"):
-        assert invented not in block
+    paused = block.index("**Validation is paused:**")
+    steps = block.index("**How to fix the HR connection in Test**")
+    assert paused < block.index(named) < block.index("return here and tell us")
+    assert block.index("We'll recheck") < steps
+    after = block[steps:]
+    assert "**Settings > Connection Settings > ServiceNow**" in after
+    assert "Microsoft Entra ID User Login" in after
+    assert f"`{CLIENT_ID}`" in after
+    assert "**Instance name:**" in after
+    assert "reply **Done**" in after
+    assert "client secret" in after and "comes from your administrator" in after
     assert "BLOCKED" not in block
     assert "Show my open HR cases" not in block
+
+
+def test_realm_block_missing_destination_connection_explains_why_it_is_created() -> None:
+    block = _rendered(
+        "prod",
+        connections=realms.evaluate_connections(FOUNDATION, {}, []),
+        context=_render_context(kind="IT", agent="Employee Self-Service (IT)"),
+    )
+    assert "**How to fix the IT connection in Prod**" in block
+    assert "Connections don't travel with the agent" in block
+    assert "created in Prod itself" in block
+    assert "Select that connection for Employee Self-Service (IT)" in block
+
+
+def test_realm_block_untested_connection_blocker_still_gives_steps() -> None:
+    registry = _registry()
+    target = registry["targets"]["test"]
+    realms.apply_checks(
+        target,
+        connections=realms.evaluate_connections(FOUNDATION, {}, []),
+        runtime=realms.evaluate_runtime(FOUNDATION, [_topic("a")], {"valid": True}),
+    )
+    realms.record_validation(
+        target,
+        prompt_category=PROMPT,
+        allowed_prompt_category=PROMPT,
+        result="untested",
+        failure_category=None,
+    )
+    block = realms.realm_status(registry, render=_render_context())["renderBlock"][
+        "text"
+    ]
+    assert block.index("This destination remains untested") < block.index(
+        "**How to fix the HR connection in Test**"
+    )
+
+
+def test_realm_block_missing_sign_in_values_say_who_provides_them() -> None:
+    block = _rendered(
+        connections=realms.evaluate_connections(
+            {"values": {}, "adminConfirmed": True}, {}, []
+        )
+    )
+    assert block.index("We still need administrator confirmation for") < block.index(
+        "**How to provide what's missing**"
+    )
+    assert "Application (client) ID" in block.split("**How to provide")[1]
+    assert "client secret" in block
 
 
 def test_realm_block_topics_disabled_is_enabled_by_the_agent() -> None:
@@ -1583,6 +1636,10 @@ def test_realm_block_topics_disabled_is_enabled_by_the_agent() -> None:
     ) in block
     assert "Publish the agent in Dev" not in block
     assert "run `/connect servicenow` again" not in block
+    steps = block.index("**How to turn the HR topics on in Test**")
+    assert block.index("We'll enable the affected built-in topic") < steps
+    assert "Find the ServiceNow" in block[steps:]
+    assert "reply **Done**" in block[steps:]
 
 
 def test_realm_block_portal_problem_asks_for_the_url() -> None:

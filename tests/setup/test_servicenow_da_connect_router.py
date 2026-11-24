@@ -1579,6 +1579,12 @@ def test_redo_step_fallback_is_routed_and_never_replaces_spec_text() -> None:
         text = " ".join(path.read_text(encoding="utf-8").split())
         assert "redo-step-notice --step" in text, name
         assert "Controller messages always win" in text, name
+        assert "never shorten it" in text or "Never cut the steps" in text, name
+    realms = " ".join(
+        (root / "servicenow" / "realms.md").read_text(encoding="utf-8").split()
+    )
+    assert "How to fix the {HR|IT} connection in {Environment}" in realms
+    assert "How to turn the {HR|IT} topics on in {Environment}" in realms
 
 
 def test_existing_identity_flag_is_routed_to_the_first_resume() -> None:
