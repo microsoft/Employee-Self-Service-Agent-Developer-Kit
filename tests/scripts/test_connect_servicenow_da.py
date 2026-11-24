@@ -19114,6 +19114,70 @@ def test_existing_identity_second_agent_keeps_the_s3_opening(
     assert "already uses ServiceNow" not in text
 
 
+def _resume_with_disclosure(context, kind):
+    disclosure = snow._record_existing_disclosure(context, kind)
+    result = snow.resume_handoff(context, executed_actions=frozenset())
+    snow._prepend_existing_disclosure(result, disclosure)
+    return result
+
+
+@pytest.mark.parametrize("profile", ["itsm", "hrsd"])
+def test_resume_handoff_existing_flag_leads_with_the_s3_opening_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, profile)
+    with snow.product_profile_context(selected):
+        first = _resume_with_disclosure(context, "knowledge")
+        again = _resume_with_disclosure(context, "knowledge")
+        state = snow._load_lifecycle_state(context)
+    text = first["renderBlock"]["text"]
+    assert text.startswith("We'll connect **Employee Self-Service")
+    assert text.count("Your administrators will confirm whether ESS can use") == 1
+    assert "The Knowledge connection itself isn't the connection ESS needs." in text
+    assert "https://dev123456.service-now.com" in text
+    assert "Your administrators will confirm" not in again["renderBlock"]["text"]
+    assert state["existingIdentity"]["kind"] == "knowledge"
+    assert set(state["existingIdentity"]) == {"kind", "recordedAt"}
+
+
+def test_resume_handoff_existing_flag_leads_with_the_notice_after_the_opening(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(selected):
+        snow.resume_handoff(context, executed_actions=frozenset())
+        result = _resume_with_disclosure(context, "knowledge")
+    text = result["renderBlock"]["text"]
+    assert text.startswith("Your administrators will confirm whether ESS can use")
+    assert "We'll connect" not in text
+    assert result["recordsIdentityValues"] is False
+    assert result["changesSharedConfiguration"] is False
+
+
+def test_resume_handoff_without_existing_flag_is_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(selected):
+        result = _resume_with_disclosure(context, None)
+        state = snow._load_lifecycle_state(context)
+    assert "Your administrators will confirm" not in result["renderBlock"]["text"]
+    assert "existingIdentity" not in state
+
+
+def test_resume_handoff_parser_accepts_existing_kinds_only() -> None:
+    parser = snow.build_parser()
+    parsed = parser.parse_args(["resume-handoff", "--existing", "graph"])
+    assert parsed.existing == "graph"
+    assert parser.parse_args(["resume-handoff"]).existing is None
+    with pytest.raises(SystemExit):
+        parser.parse_args(["resume-handoff", "--existing", "oidc"])
+
+
 def _second_agent_context(monkeypatch, tmp_path, profile, other, mapping=True):
     monkeypatch.setattr(snow, "ACTIVE_AGENT_NAME", None)
     other_context, _, other_profile = _recording_setup(monkeypatch, tmp_path, other)

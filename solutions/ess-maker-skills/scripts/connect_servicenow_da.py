@@ -14101,6 +14101,17 @@ def build_parser() -> argparse.ArgumentParser:
     resume_parser.add_argument("--executed-action", action="append", default=[])
     resume_parser.add_argument("--verified-phase", action="append", default=[])
     resume_parser.add_argument(
+        "--existing",
+        choices=tuple(_EXISTING_IDENTITY_KINDS),
+        help=(
+            "Pass when the maker said the organization already uses "
+            "ServiceNow Knowledge (knowledge), single sign-on (sso) or the "
+            "Microsoft Graph connector (graph). Records the existing-sign-in "
+            "marker and leads the output with the fixed compatibility "
+            "opening."
+        ),
+    )
+    resume_parser.add_argument(
         "--roles-available",
         choices=("yes", "no"),
         help=(
@@ -17074,6 +17085,60 @@ def existing_identity_handoff(
     return result
 
 
+def _record_existing_disclosure(
+    context: dict[str, Any],
+    kind: str | None,
+) -> dict[str, Any] | None:
+    """Record the maker's existing-sign-in disclosure before resuming.
+
+    Only the non-identity marker is written. Returns None when the maker did
+    not disclose existing sign-in setup.
+    """
+    if kind is None:
+        return None
+    if kind not in _EXISTING_IDENTITY_KINDS:
+        raise ServiceNowConnectError("Unsupported existing integration kind.")
+    state = _ensure_lifecycle_state(context)
+    marker = state.get("existingIdentity")
+    newly_recorded = not (
+        isinstance(marker, dict) and marker.get("kind") == kind
+    )
+    if newly_recorded:
+        state["existingIdentity"] = {"kind": kind, "recordedAt": _utc_now()}
+        _write_lifecycle_state(context, state)
+    return {
+        "kind": kind,
+        "newlyRecorded": newly_recorded,
+        "openingShownBefore": bool(state.get("openingShown")),
+    }
+
+
+def _prepend_existing_disclosure(
+    result: dict[str, Any],
+    disclosure: dict[str, Any] | None,
+) -> None:
+    """Make sure the maker sees the S3 compatibility notice exactly once.
+
+    A fresh run already opens with the S3 opening. When the run is a resume
+    (the opening was shown earlier or the setup has saved progress), lead the
+    checklist with the fixed notice so the disclosure is never skipped.
+    """
+    if disclosure is None or not disclosure["newlyRecorded"]:
+        return
+    block = result.get("renderBlock")
+    if not isinstance(block, dict):
+        return
+    kind = str(disclosure["kind"])
+    text = str(block.get("text") or "")
+    notice = _existing_identity_notice(kind)
+    if notice in text:
+        return
+    block["text"] = f"{notice}\n\n{text}" if text else notice
+    result["existingIdentity"] = kind
+    result["recordsIdentityValues"] = False
+    result["changesSharedConfiguration"] = False
+
+
 _TEST_FAILURE_AFTER_REPLY_UNKNOWN = (
     "End your turn after sending the message; this is a plain chat "
     "question, not a card. Map the maker's typed reply: an error, record "
@@ -18378,6 +18443,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "topic-action-handoff":
             result = topic_action_handoff(context, offline=args.offline)
         elif args.command == "resume-handoff":
+            disclosure = _record_existing_disclosure(context, args.existing)
             result = resume_handoff(
                 context,
                 executed_actions=frozenset(args.executed_action),
@@ -18392,6 +18458,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.availability_context_sha256
                 ),
             )
+            _prepend_existing_disclosure(result, disclosure)
         elif args.command == "record-checkpoint-results":
             result = record_checkpoint_results(
                 context,

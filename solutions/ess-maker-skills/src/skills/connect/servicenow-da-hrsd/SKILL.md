@@ -66,6 +66,8 @@ Render the ServiceNow `resume-handoff.progress` checklist and current-step
 updates exactly as the shared runner specifies; do not suppress them under
 the ordinary Message-block silence rule.
 
+**Existing sign-in setup.** When the maker said the organization already uses ServiceNow Knowledge, single sign-on, or the Microsoft Graph connector, the first `resume-handoff` must carry `--existing knowledge` (or `sso`, `graph`). Its `renderBlock.text` then starts with the fixed compatibility opening; send it verbatim, never write it yourself, never inspect existing Entra or OIDC configuration, and never skip the administrator handoffs because Knowledge already works.
+
 On every first run and resume, show the controller's HR collaboration groups
 and nested internal-step statuses as an ordinary response. Preflight and
 instance input run without an availability question. When the controller

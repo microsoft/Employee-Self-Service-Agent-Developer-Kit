@@ -105,6 +105,12 @@ Message in the entry doc and offer **Choose a different agent**; do not hand
 off to Setup.
 
 The selected provider then invokes the shared lifecycle with
-`AGENT_SLUG = SELECTED_AGENT_SLUG`. Local state may label a choice
+`AGENT_SLUG = SELECTED_AGENT_SLUG`. When the maker said the organization
+already uses ServiceNow Knowledge, single sign-on, or the Microsoft Graph
+connector, carry that through the chooser and add `--existing knowledge` (or
+`sso`, `graph`) to the first `resume-handoff`; never skip it, never write the
+opening yourself, and never inspect existing Entra or OIDC configuration (see
+**Existing sign-in setup disclosed in the request** in
+`src/skills/connect/servicenow/entry.md`). Local state may label a choice
 `connected-revalidation-required`, but the provider must still perform normal
 live lifecycle re-verification before reporting it connected.

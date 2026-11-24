@@ -26,6 +26,8 @@ cannot import the kit's dependencies, stop and tell the maker to rerun
 
 **Follow the controller, not the request wording.** After `resume-handoff`, run only the command that `nextCommand` names. Do not call `claim-confirmation-handoff` or any identity handoff on your own because the maker mentioned an identifier such as a payroll ID: the controller already knows what is recorded for this agent and never asks again for a Client ID, claim, instance, or User Field it has saved. Put the target options (`--provider`, `--agent-slug`) before the subcommand, as in every `nextCommand`; the controller also accepts them after it.
 
+**Existing sign-in setup disclosed in the request.** When the maker says the organization already uses ServiceNow Knowledge, single sign-on, or the Microsoft Graph connector (for example "Our company already uses ServiceNow Knowledge"), in the first message or at any point before the first `resume-handoff`, remember it through the agent chooser and add `--existing knowledge` (or `sso`, `graph`) to the first `resume-handoff`: `python scripts/connect_servicenow_da.py --provider {PROVIDER} --agent-slug {SLUG} resume-handoff --existing knowledge`. That one command records the marker and puts the fixed compatibility opening at the start of `renderBlock.text`; send it verbatim as with every `resume-handoff`. Never skip the flag because the checklist looks complete, never write the opening yourself, and never detect, ask about, or inspect existing Entra or OIDC configuration: the maker's statement is the only source. The administrator handoffs are not skipped because Knowledge already works; the controller sends them with the compatibility-review wording. Later `resume-handoff` calls do not need the flag. Details are in **Existing sign-in setup** below.
+
 **Hard rules.** Read `src/skills/connect/shared/lifecycle-runner.md` before the first action. When `resume-handoff` returns `renderBlock`, emit `renderBlock.text` verbatim as an assistant message; terminal output does not count. Never edit `lifecycle.json` by hand; record results with `record-checkpoint-results`. Run every command with the launcher resolved by `/setup` (`py -3`, `python3`, then `python`), never assuming bare `python`.
 
 ## Admit the workspace
@@ -646,7 +648,9 @@ repeat the request in this agent's Test pane.
 
 **Existing sign-in setup (Knowledge, single sign-on, or Microsoft Graph).** When
 the maker says ESS should reuse an existing ServiceNow Knowledge, single
-sign-on, or Microsoft Graph sign-in setup, in the first message or later, run
+sign-on, or Microsoft Graph sign-in setup, add `--existing {knowledge|sso|graph}`
+to the first `resume-handoff` (see **Read this first**), or, when the first
+`resume-handoff` already ran, in a later message, run
 `python scripts/connect_servicenow_da.py --provider {PROVIDER} existing-identity-handoff --existing {knowledge|sso|graph}`
 before anything else and send `chatMessage` verbatim. The maker's statement
 supplies the context: never detect, ask about, or inspect existing Entra or

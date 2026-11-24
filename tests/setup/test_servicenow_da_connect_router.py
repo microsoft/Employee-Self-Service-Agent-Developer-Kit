@@ -1527,6 +1527,24 @@ def test_existing_identity_handoff_is_routed_in_shared_docs() -> None:
             assert "existing-identity-handoff" in text, (profile, name)
 
 
+def test_existing_identity_flag_is_routed_to_the_first_resume() -> None:
+    root = _SOLUTION / "src" / "skills" / "connect"
+    docs = {
+        "entry": root / "servicenow" / "entry.md",
+        "router": root / "servicenow-da" / "SKILL.md",
+        "hrsd": root / "servicenow-da-hrsd" / "SKILL.md",
+        "itsm": root / "servicenow-da-itsm" / "SKILL.md",
+        "runner": root / "shared" / "lifecycle-runner.md",
+    }
+    for name, path in docs.items():
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert "resume-handoff --existing" in text or "`--existing knowledge`" in text, name
+        assert "never write" in text.lower() or "never skip" in text.lower(), name
+    entry = " ".join(docs["entry"].read_text(encoding="utf-8").split())
+    assert "Existing sign-in setup disclosed in the request" in entry
+    assert "not skipped because Knowledge already works" in entry
+
+
 def test_test_failure_handoff_is_routed_in_docs() -> None:
     root = _SOLUTION / "src" / "skills" / "connect"
     for path in (
