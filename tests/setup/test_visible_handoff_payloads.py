@@ -84,11 +84,11 @@ def test_lifecycle_plan_confirmation_is_exact_and_separate_from_reply() -> None:
     assert _payloads(path) == [
         [
             {
-                "header": "Ready to start?",
-                "question": "Nothing starts until you answer Yes.",
+                "header": "Start connection",
+                "question": "Ready to start?",
                 "options": [
-                    {"label": "Yes"},
-                    {"label": "No"},
+                    {"label": "Yes, let's go"},
+                    {"label": "Not now"},
                 ],
                 "allowFreeformInput": False,
             }

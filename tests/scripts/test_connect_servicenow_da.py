@@ -18289,7 +18289,6 @@ def test_pasted_admin_reply_is_never_followed_by_an_availability_card() -> None:
         .read_text(encoding="utf-8")
         .split()
     )
-    assert "never deduplicated" in runner
     assert "counts as shown only when the output ends the turn" not in runner
     for provider in ("servicenow-da-hrsd", "servicenow-da-itsm"):
         preflight = " ".join(

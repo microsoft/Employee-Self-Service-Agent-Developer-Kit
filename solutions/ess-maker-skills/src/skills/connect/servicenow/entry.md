@@ -273,7 +273,8 @@ rollback gates, action-result handling, or L.5 completion.
 ## ServiceNow additions to the shared runner
 
 These rules apply only to ServiceNow and extend `lifecycle-runner.md`; no other
-provider uses them.
+provider uses them. Where they differ from `lifecycle-runner.md`, these rules
+win for ServiceNow.
 
 - **Role attestation.** For **Maker configuration and validation**, the **Yes**
   answer to the availability question asked at the start of that group is also
@@ -285,7 +286,10 @@ provider uses them.
   question. If `roleAttestations.{requiredRole}` is missing or invalid
   at a mutating phase, do not run the action or ask a role question there:
   rerun `resume-handoff` so the phase-start question is asked first. A **No**
-  answer records nothing and mutates nothing.
+  answer records nothing and mutates nothing. In ServiceNow the role question
+  is only a Yes/No card titled "Do you have the {REQUIRED_ROLE} role to
+  perform this step?"; there is no "not sure" option, and any reply that is
+  not a clear Yes is treated as No.
 - **Administrator instructions.** Render `ordinaryReply.text` verbatim; it
   already contains the plain-text lead-in and the Ready-to-send fenced block.
 - **Phase `renderBlock.text`.** After **Yes**, the newly returned
@@ -298,6 +302,45 @@ provider uses them.
   when both are recorded.
 - **Final `renderBlock.text`.** Its closing sentence states what the
   Maker-reported Test pane result does and does not cover.
+- **Setup checklist.** For ServiceNow, `renderBlock.text` is the flat setup
+  checklist: a title, "Complete these tasks to finish setup.", and one
+  checkbox line per setup task (checked when done, unchecked otherwise, a
+  short note only when a task needs attention; no phases, roles, or legend).
+  It already ends with the current step line where one applies. Where
+  `lifecycle-runner.md` describes grouped phases, collaboration groups, or
+  the generic **Ready to start?** plan confirmation, the flat checklist and the
+  controller transport replace it for ServiceNow. The flat `progress.items`
+  and everything under `internal` are data. The setup checklist and current
+  status have already been shown in an ordinary reply, so ServiceNow action
+  questions are question-only.
+- **Shared identity reuse.** Several sources are asked one Yes/No question at
+  a time: after a **No** with `moreCandidates` true, the decline is recorded
+  and `shared-reuse-handoff` is rerun for the next source. For
+  `question-required`, pass its canonical question through the active question
+  adapter. Translate **Yes** to the existing target-scoped
+  `record-shared-reuse ... --decision accept` and **No** to
+  `--decision decline`. Do not render or ask Entra availability in the same
+  turn.
+- **Identity requirement.** When the Entra action returns
+  `handoffMode: identity-requirement`, ask that routing-only question as a
+  plain chat question with a typed answer, never a card, because the
+  identifier types cannot be expressed as Yes/No; never render Email/UPN/Pay
+  ID options. Use the separate `identityRequirementChoices` mapping to
+  translate the typed answer to the recorder's CLI choice. An answer that
+  names no identifier type (for example `Not sure`) returns waiting, writes no
+  receipt, and shows no administrator instructions.
+- **Next command.** The controller puts the full command in `nextCommand`; run
+  that command exactly. Never run a bare `resume-handoff` after an action or a
+  record command, because the controller keeps no memory between calls and
+  would select the same phase again.
+- **Availability No.** On **No**, or on any answer that is not a clear
+  **Yes** (for example "I'm waiting for the administrator" or "not yet"),
+  rerun with the same group ID and context hash and the roles-available
+  option set to no.
+  The controller returns the waiting message in `chatMessage` with
+  `endTurn: true` and no card. Send it verbatim as plain chat and end the
+  turn; when the maker returns, rerun the same `resume-handoff` command
+  without the roles-available option to ask the Yes/No question again.
 
 ## Parse the handoff
 

@@ -104,26 +104,23 @@ is needed:
 ```json
 [
   {
-    "header": "Do you have the {REQUIRED_ROLE} role to perform this step?",
-    "question": "This step requires the **{REQUIRED_ROLE}** role. I can't verify that automatically for this system, so I need you to confirm you (or the person doing this step) hold that role before we continue.",
+    "header": "Confirm role",
+    "question": "This step requires the **{REQUIRED_ROLE}** role. I can't verify that automatically for this system, so I need you to confirm you (or the person doing this step) hold that role before we continue.\n\nDo you have the {REQUIRED_ROLE} role to perform this step?",
     "options": [
-      { "label": "Yes" },
-      { "label": "No" }
+      { "label": "Yes, I have this role", "recommended": true },
+      { "label": "No / not sure" }
     ],
     "allowFreeformInput": false
   }
 ]
 ```
 
-The options are only **Yes** and **No**; no third "not sure" option. A reply that
-is not a clear Yes (for example "not sure") is treated as **No**.
-
-**If the user chose "Yes":**
+**If the user chose "Yes, I have this role":**
 - Set `GATE_RESULT = "pass"`.
 - Set `GATE_EVIDENCE = { "verifiedBy": "attested", "note": "user attested {REQUIRED_ROLE} for {STEP_ID}" }`.
 - Return to the calling file.
 
-**If the user chose "No" (or replied that they are not sure):**
+**If the user chose "No / not sure":**
 
 **Message:**
 

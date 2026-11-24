@@ -121,14 +121,14 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
     assert "`preActionHandoff`" in runner
     assert "Do not render\nor ask Entra availability in the same turn" in runner
     assert "After decline, the next\nresume may ask Entra availability" in runner
-    assert "only after the user explicitly selects **Yes**" in (
+    assert "only after the user explicitly selects **Yes, let's go**" in (
         plan_normalized
     )
     assert "The `question` field itself must contain the complete" not in plan
     assert "rendered question" not in plan
 
-    refusal = plan.split('**If "No":**', 1)[1].split(
-        '**If "Yes" on a first run', 1
+    refusal = plan.split('**If "Not now":**', 1)[1].split(
+        '**If "Yes, let\'s go" on a first run', 1
     )[0]
     assert "Stop here. On a first run, do not write the state file" in refusal
     assert "preserve the existing state unchanged" in refusal
@@ -136,14 +136,14 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
     assert "next invocation should show this same plan again" in (
         " ".join(refusal.split())
     )
-    acceptance = plan.split('**If "Yes" on a first run', 1)[1].split(
-        '**If "Yes" after a contract revision changed', 1
+    acceptance = plan.split('**If "Yes, let\'s go" on a first run', 1)[1].split(
+        '**If "Yes, let\'s go" after a contract revision changed', 1
     )[0]
     assert "stateInitializationCommand" in acceptance
     assert 'structured `status: "initialized"` success result' in acceptance
     assert 'every phase at `status: "pending"`' in acceptance
     reapproval = plan.split(
-        '**If "Yes" after a contract revision changed', 1
+        '**If "Yes, let\'s go" after a contract revision changed', 1
     )[1]
     assert "update only" in reapproval
     assert "Do not reset or delete existing phase status, action" in reapproval
@@ -155,7 +155,7 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
     assert "without re-showing the\n   up-front plan" in resume
     assert "Do **not**\n   re-render the U.0 table" in resume
     assert "DA ServiceNow business-group availability" in runner
-    assert "It is the flat setup\n   checklist" in runner
+    assert "exactly four HR or three IT" in runner
     assert "Preflight, chooser, and instance confirmation" in runner
     assert "`renderBlock.text`" in runner
     assert "`transport.businessGroupAvailability.question`" in runner
@@ -247,17 +247,17 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert "must not persist or ask separate questions" in runner
     assert "`handoffMode: identity-requirement`" in runner
     assert "routing-only Maker question" in runner_normalized
-    assert "plain chat question with a typed answer, not a card" in (
-        runner_normalized
+    entry_normalized = " ".join(
+        (_CONNECT / "servicenow" / "entry.md").read_text(encoding="utf-8").split()
     )
-    assert "the answer is not `Completed`/`Not yet` admin evidence" in (
-        runner_normalized
+    assert "plain chat question with a typed answer, never a card" in (
+        entry_normalized
     )
-    assert "never render Email/UPN/Pay ID options" in runner_normalized
+    assert "never render Email/UPN/Pay ID options" in entry_normalized
     assert "`identityRequirementChoices`" in runner
     assert "never add `value`" in runner_normalized
     assert "`Not sure`) returns waiting, writes no receipt" in (
-        runner_normalized
+        entry_normalized
     )
     assert "must not set `actionApplied`" in runner_normalized
     assert "`resumeActionWhenIncomplete` is `true`" in runner

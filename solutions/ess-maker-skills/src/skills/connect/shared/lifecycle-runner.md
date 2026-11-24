@@ -73,17 +73,16 @@ adapter envelope; the active host currently has a known defect that exposes
 and accepts custom enum answers because its schema has no freeform-control
 field. Do not patch the host or invent a business reject/re-ask flow here.
 
-**STOP — render before acting.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant message — before any other tool call — must contain `renderBlock.text` verbatim (the setup checklist; it already ends with the current step line). `renderBlock.text` is the only renderable field: never render anything under `internal`, never write your own checklist, and never add a Check/Status table. Never summarize it or write "render the plan" instead. Every turn that shows a step update must include the latest `renderBlock.text` verbatim; it is returned every time and never deduplicated, so never skip it or reuse an older copy.
+**STOP — render before acting.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant message — before any other tool call — must contain `renderBlock.text` verbatim (the grouped phases view; it already ends with the current step line). `renderBlock.text` is the only renderable field: never render anything under `internal`, never write your own checklist, and never add a Check/Status table. Never summarize it or write "render the plan" instead.
 
-When the controller returns `renderBlock`, emit `renderBlock.text` verbatim as that assistant message; printing it from a terminal or tool call does not count. For ServiceNow, when the maker said the organization already uses ServiceNow Knowledge, single sign-on, or the Microsoft Graph connector, the first `resume-handoff` carries `--existing knowledge` (or `sso`, `graph`) so `renderBlock.text` starts with the fixed compatibility opening; never write it yourself and never skip the administrator handoffs. When one request names both ESS agents or all of them (for example "Check HR and IT in Prod"), the first action is `validation-notice --situation multi-agent`: send `chatMessage` verbatim, end the turn, and start no run or checklist. Run every command with the launcher resolved by `/setup` (`py -3`, `python3`, then `python`), never assuming bare `python`. When the contract sets `checkpointRecording: "provider-command-v1"`, never edit `lifecycle.json` by hand; use the controller commands.
+When the controller returns `renderBlock`, emit `renderBlock.text` verbatim as that assistant message; printing it from a terminal or tool call does not count. Run every command with the launcher resolved by `/setup` (`py -3`, `python3`, then `python`), never assuming bare `python`. When the contract sets `checkpointRecording: "provider-command-v1"`, never edit `lifecycle.json` by hand; use the controller commands.
 
 For DA ServiceNow, render the controller's
-`renderBlock.text` as an ordinary agent response. It is the flat setup checklist:
-a title, "Complete these tasks to finish setup.", and one checkbox line per
-setup task (checked when done, unchecked otherwise, a short note only when a
-task needs attention; no phases, roles, or legend). It already ends with the
-current step line where one applies. `renderBlock.text` is the only renderable
-field; the flat `progress.items` and everything under `internal` are data. Re-emit the
+`renderBlock.text` as an ordinary agent response. It is the grouped phases view:
+the automatic preflight plus the complete HR or IT collaboration groups, one
+responsible role per group, and nested internal-step statuses (it already
+ends with the current step line). `renderBlock.text` is the only renderable
+field; the flat items and everything under `internal` are data. Re-emit the
 freshly returned block on every phase completion/next-phase transition,
 waiting pause, blocked/error transition, and completion. A cached `done` phase
 displays **Rechecking** until this invocation adds its verified marker. An
@@ -102,13 +101,12 @@ instructions.
 Before Entra availability, honor a returned
 `status: shared-identity-reuse-required` and its `preActionHandoff`. This is a
 local zero-write pre-action for the current selected target provider and
-agent. Several sources are asked one Yes/No question at a time: after a **No**
-with `moreCandidates` true, the decline is recorded and `shared-reuse-handoff`
-is rerun for the next source. For
+agent. For `source-selection-required`, ask one label-only candidate question
+and rerun `shared-reuse-handoff --source-key <internal-source-key>`. For
 `question-required`, pass its canonical question through the active question
-adapter. Translate **Yes** to the existing target-scoped
-`record-shared-reuse ... --decision accept` and **No** to
-`--decision decline`. Do not render
+adapter. Translate **Reuse shared identity** to the existing target-scoped
+`record-shared-reuse ... --decision accept`, **Configure separately** to
+`--decision decline`, and **Not now** to no command plus waiting. Do not render
 or ask Entra availability in the same turn. After accept, rerun
 `resume-handoff`; current reused Entra/OIDC handoffs skip their corresponding
 availability gates and proceed to owning checks. After decline, the next
@@ -234,11 +232,12 @@ DA ServiceNow uses the provider controller's
 `servicenow.lifecycle-transport.v2` result instead of the generic confirmation
 below.
 
-1. Show `renderBlock.text` as an ordinary agent response. It is the flat setup
-   checklist: a title, one line saying to complete these tasks to finish
-   setup, then one checkbox line per task with finished tasks checked.
-2. Preflight, chooser, and instance confirmation run before the setup
-   checklist. When
+1. Show `renderBlock.text` as an ordinary agent response. It has
+   one automatic preflight line, then exactly four HR or three IT
+   **Collaboration groups**. Each group has one responsible role and its
+   internal phase statuses.
+2. Preflight, chooser, and instance confirmation run before collaboration
+   groups. When
    `transport.businessGroupAvailability.gateRequired` is false, continue the
    returned lifecycle decision without asking availability.
 3. When the gate is true, ask only
@@ -259,15 +258,10 @@ below.
    runbook/location, expected non-secret evidence, and completion boundary.
    Availability is acknowledgement only. Continue only from the returned
    lifecycle decision and its separate action completion/evidence question.
-5. On **No**, or on any answer that is not a clear **Yes** (for example "I'm
-   waiting for the administrator" or "not yet"), rerun with the same group ID
-   and context hash plus `--roles-available no`. The controller returns the
-   waiting message in `chatMessage` with `endTurn: true` and no card. Send
-   `chatMessage` verbatim as plain chat and end the turn; do not reword it,
-   add your own explanation, or ask again. The controller writes no
-   acknowledgement and advances nothing; repeated answers are stable. When the
-   maker returns, rerun the same `resume-handoff` command without
-   `--roles-available` to ask the Yes/No question again.
+5. On **No**, rerun with the same group ID and context hash plus
+   `--roles-available no`. Show the exact returned `unavailableReply`, then
+   re-ask the exact same question. The controller writes no acknowledgement
+   and advances no phase or evidence; repeated **No** answers are stable.
 6. One acknowledgement unlocks every internal phase in that group. Entering
    the next group asks its own role even when its role label resembles an
    earlier group. A raw `done` phase in **Rechecking** still enters its group
@@ -339,11 +333,11 @@ confirmation question through the active ServiceNow question adapter:
 ```json
 [
   {
-    "header": "Ready to start?",
-    "question": "Nothing starts until you answer Yes.",
+    "header": "Start connection",
+    "question": "Ready to start?",
     "options": [
-      { "label": "Yes" },
-      { "label": "No" }
+      { "label": "Yes, let's go" },
+      { "label": "Not now" }
     ],
     "allowFreeformInput": false
   }
@@ -353,13 +347,13 @@ confirmation question through the active ServiceNow question adapter:
 Keep its options label-only, with no recommended, preselected, default, or
 automatic answer. The plan, roles, and progress belong only in the ordinary
 reply. This is the only plan confirmation question; initialize or continue
-only after the user explicitly selects **Yes**.
+only after the user explicitly selects **Yes, let's go**.
 
-**If "No":** Stop here. On a first run, do not write the state file. On a
+**If "Not now":** Stop here. On a first run, do not write the state file. On a
 contract-revision re-attestation, preserve the existing state unchanged,
 byte-for-byte. The next invocation should show this same plan again.
 
-**If "Yes" on a first run (`stateExists: false`):** If the contract has
+**If "Yes, let's go" on a first run (`stateExists: false`):** If the contract has
 `stateInitializationCommand`, replace `{contractRevision}` and `{agentSlug}`
 in that exact checked-in command and run it now. Require exit code `0` and a
 structured `status: "initialized"` success result. Then read the canonical
@@ -377,7 +371,7 @@ state now with `provider: PROVIDER`, `agentSlug: AGENT_SLUG`,
 `acceptedContractRevision: contractRevision`, `roleAttestations: {}`, and
 every phase at `status: "pending"` with empty checkpoint results.
 
-**If "Yes" after a contract revision changed:** update only
+**If "Yes, let's go" after a contract revision changed:** update only
 `attested`, `attestedAt`, and `acceptedContractRevision`, plus missing phases
 initialized in L.0. Do not reset or delete existing phase status, action
 receipts, evidence, transactions, role attestations, or provider-owned admin
@@ -603,18 +597,16 @@ for checklist items inside that phase. On resume, accept the one phase return,
 run the phase's complete verification set, and only then advance.
 
 The ServiceNow Entra action has one bounded pre-handoff exception when its
-producer returns `handoffMode: identity-requirement`: ask that routing-only
-Maker question before any administrator instructions are shown. It is a plain
-chat question with a typed answer, not a card, because the identifier types
-cannot be expressed as Yes/No; never render Email/UPN/Pay ID options. The
-question identifies only the intended user identifier type; the answer is not
-`Completed`/`Not yet` admin evidence. Use the separate
-`identityRequirementChoices` envelope mapping to translate the typed answer to
-the recorder's CLI choice; never add `value` or another unsupported option
-field. A specific answer may persist only the scoped routing intent, then
+producer returns `handoffMode: identity-requirement`: show that routing-only
+Maker question before any administrator instructions are shown. Its
+options identify only the intended user identifier type; they are not `Completed`/`Not yet` admin
+evidence. Pass the returned question to the question tool unchanged: its
+options are label-only. Use the separate `identityRequirementChoices`
+envelope mapping to translate the selected label to the recorder's CLI choice;
+never add `value` or another unsupported option field. A specific answer may
+persist only the scoped routing intent, then
 the caller reruns the producer and shows the normal admin instructions and
-completion question. An answer that names no identifier type (for example
-`Not sure`) returns waiting, writes no receipt, and
+completion question. `Not sure` returns waiting, writes no receipt, and
 shows no administrator instructions. This clarification must not set
 `actionApplied`, mark the phase done, confirm claim emission, or replace the later admin completion
 question. Once a valid scoped requirement receipt exists, do not ask the
@@ -627,7 +619,7 @@ pass the resulting single canonical object through `adapt-question`, and call
 the active `ask_user` tool with the generated arguments verbatim. Use the
 canonical `header`/`question`/`options`/`allowFreeformInput` shape exactly;
 `choices` is not a canonical ServiceNow question field. For DA ServiceNow,
-the setup checklist and current status have
+collaboration groups and current status have
 already been shown in an ordinary reply. ServiceNow action questions are
 question-only: never add the group plan, internal-step checklist, progress,
 future roles, checkpoint table, or a synthetic `Progress` input anywhere in
@@ -814,10 +806,7 @@ It validates ids, status, phase order and evidence, writes `status`,
 `lastVerifiedAt`, `checkpointResults` and `checkpointAcknowledgements`, and
 returns `outcome` (`done`, `in-progress` or `blocked`) plus `resumeArguments`.
 Pass `resumeArguments` to the next `resume-handoff`. The hand-write bullets
-below apply only to providers without this flag. The ServiceNow controller also
-puts the full command in `nextCommand`; run that command exactly. Never run a
-bare `resume-handoff` after an action or a record command, because the
-controller keeps no memory between calls and would select the same phase again.
+below apply only to providers without this flag.
 
 - **All checkpoints "count toward done"** (after any needed attestation for
   `Manual`/`Warning` results — ask the same style of yes/no confirmation
@@ -866,8 +855,10 @@ controller keeps no memory between calls and would select the same phase again.
   If this phase has `actionApplied: true` and `rollbackLabel`, resolve
   `{ROLLBACK_PUSH_GLOB}` from `phases.{id}.rollbackPushGlob` when
   `rollbackPushGlobFromAction: true`; otherwise use the contract's
-  `rollbackPushGlob`. Stop with manual attention if the required value is
-  missing. Restore and publish the exact pre-action state:
+  `rollbackPushGlob`. For either source, require one normalized relative path
+  beneath `topics/`, with no `..` segment or wildcard characters. If missing
+  or unsafe, stop for manual attention before any restore or push command.
+  Restore and publish the exact pre-action state only for that validated path:
 
   ```
   python scripts/checkpoint.py --revert-reason "{rollbackLabel}" --only "{ROLLBACK_PUSH_GLOB}"

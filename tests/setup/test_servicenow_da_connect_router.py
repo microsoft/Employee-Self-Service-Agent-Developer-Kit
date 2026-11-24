@@ -1384,7 +1384,7 @@ def test_servicenow_da_cards_offer_only_yes_no_choices() -> None:
             for path in (root / folder).rglob("*.md")
         )
     texts.append(
-        (root / "src/skills/connect/shared/lifecycle-runner.md").read_text(
+        (root / "src/skills/connect/servicenow/entry.md").read_text(
             encoding="utf-8"
         )
     )
@@ -1415,11 +1415,10 @@ def test_servicenow_da_cards_offer_only_yes_no_choices() -> None:
     assert {"Test", "Prod"}.isdisjoint(
         re.findall(r'"title":\s*"([^"]*)"', realms)
     )
-    gate = (
-        root / "src/skills/connect/shared/permission-gate.md"
-    ).read_text(encoding="utf-8")
-    assert "No / not sure" not in gate
-    assert set(re.findall(r'"label":\s*"([^"]*)"', gate)) <= {"Yes", "No"}
+    entry = (root / "src/skills/connect/servicenow/entry.md").read_text(
+        encoding="utf-8"
+    )
+    assert "role question is only a Yes/No card" in " ".join(entry.split())
 
 
 def test_plugin_not_active_reply_is_only_the_two_waiting_sentences() -> None:
@@ -1545,7 +1544,6 @@ def test_multi_agent_request_is_routed_before_any_command() -> None:
         "router": root / "servicenow-da" / "SKILL.md",
         "hrsd": root / "servicenow-da-hrsd" / "SKILL.md",
         "itsm": root / "servicenow-da-itsm" / "SKILL.md",
-        "runner": root / "shared" / "lifecycle-runner.md",
     }
     for name, path in docs.items():
         text = " ".join(path.read_text(encoding="utf-8").split())
@@ -1635,7 +1633,6 @@ def test_existing_identity_flag_is_routed_to_the_first_resume() -> None:
         "router": root / "servicenow-da" / "SKILL.md",
         "hrsd": root / "servicenow-da-hrsd" / "SKILL.md",
         "itsm": root / "servicenow-da-itsm" / "SKILL.md",
-        "runner": root / "shared" / "lifecycle-runner.md",
     }
     for name, path in docs.items():
         text = " ".join(path.read_text(encoding="utf-8").split())
