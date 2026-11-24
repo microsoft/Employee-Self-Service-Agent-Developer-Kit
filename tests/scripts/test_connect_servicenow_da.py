@@ -15927,6 +15927,112 @@ def test_agent_chooser_reports_unsupported_for_a_named_agent_outside_hr_and_it(
     }
 
 
+def _record_promoted_agent(
+    root: Path,
+    realm: str,
+    name: str,
+    agent_id: str,
+    slug: str = "employee-self-service-it",
+    provider: str = "servicenow-da-itsm",
+) -> None:
+    registry = snow.realms.load_registry(root, provider, slug)
+    registry["targets"][realm] = {
+        "identity": {
+            "environmentId": "00000000-0000-4000-8000-000000005555",
+            "agentId": agent_id,
+            "agentDisplayName": name,
+        }
+    }
+    snow.realms.save_registry(root, registry)
+
+
+def _rename_dev_agent(setup_path: Path, name: str) -> None:
+    state = json.loads(setup_path.read_text(encoding="utf-8"))
+    state["agents"][AGENT_ID]["agent"]["display_name"] = name
+    setup_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+PROD_AGENT_ID = "00000000-0000-4000-8000-000000004445"
+
+
+def test_agent_chooser_resolves_a_promoted_agent_with_a_different_name(
+    tmp_path: Path,
+) -> None:
+    setup_path, _ = _seed_it_setup(tmp_path)
+    _rename_dev_agent(setup_path, "Contoso Dev Helpdesk")
+    _record_promoted_agent(tmp_path, "prod", "Contoso Service Desk", PROD_AGENT_ID)
+
+    by_name = snow.agent_chooser_handoff(
+        tmp_path,
+        agent_name="the Contoso Service Desk agent",
+    )
+    assert by_name["status"] == "ready"
+    assert by_name["selectedAgent"]["id"] == AGENT_ID
+    assert by_name["resolvedBy"] == "promoted-name"
+    assert by_name["realmHint"] == "prod"
+    assert by_name["stateChanged"] is False
+
+    link = (
+        "https://copilotstudio.test.microsoft.com/environments/"
+        f"00000000-0000-4000-8000-000000005555/bots/{PROD_AGENT_ID}"
+    )
+    by_link = snow.agent_chooser_handoff(
+        tmp_path,
+        selection_key="another-agent",
+        agent_link=link,
+    )
+    assert by_link["status"] == "ready"
+    assert by_link["selectedAgent"]["id"] == AGENT_ID
+    assert by_link["resolvedBy"] == "promoted-link"
+    assert by_link["realmHint"] == "prod"
+
+
+def test_agent_chooser_resolves_a_bare_product_word_to_the_only_agent_of_that_kind(
+    tmp_path: Path,
+) -> None:
+    setup_path, _ = _seed_it_setup(tmp_path)
+    _rename_dev_agent(setup_path, "Contoso Dev Helpdesk")
+
+    ready = snow.agent_chooser_handoff(tmp_path, agent_name="the IT agent")
+    assert ready["status"] == "ready"
+    assert ready["selectedAgent"]["id"] == AGENT_ID
+    assert ready["resolvedBy"] == "product"
+    assert "realmHint" not in ready
+
+    other = snow.agent_chooser_handoff(tmp_path, agent_name="HR")
+    assert other["status"] == "choice-required"
+
+
+def test_agent_chooser_never_guesses_between_promoted_or_unknown_names(
+    tmp_path: Path,
+) -> None:
+    setup_path, _ = _seed_it_setup(tmp_path)
+    _rename_dev_agent(setup_path, "Contoso Dev Helpdesk")
+    _record_promoted_agent(tmp_path, "prod", "Contoso Service Desk", PROD_AGENT_ID)
+
+    unknown = snow.agent_chooser_handoff(
+        tmp_path,
+        agent_name="Fabrikam Service Desk",
+    )
+    assert unknown["status"] == "unsupported-agent"
+
+    records = snow._promoted_agent_records(
+        tmp_path,
+        snow._prepared_agent_choices(tmp_path)[1],
+    )
+    duplicate = {**records[0], "choice": {**records[0]["choice"], "id": "other"}}
+    assert (
+        snow._agent_name_result(
+            "Contoso Service Desk",
+            snow._prepared_agent_choices(tmp_path)[1],
+            [],
+            [],
+            [records[0], duplicate],
+        )
+        is None
+    )
+
+
 def test_agent_chooser_resolves_a_named_ess_agent_without_a_card(
     tmp_path: Path,
 ) -> None:

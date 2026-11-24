@@ -1512,6 +1512,15 @@ def test_validation_notice_is_routed_in_entry_docs() -> None:
     assert "Never infer it from a generic failure" in entry
 
 
+def test_agent_names_differing_across_environments_is_routed_in_docs() -> None:
+    root = _SOLUTION / "src" / "skills" / "connect" / "servicenow"
+    for name in ("entry.md", "realms.md"):
+        text = " ".join((root / name).read_text(encoding="utf-8").split())
+        assert "realmHint" in text, name
+    realms_doc = " ".join((root / "realms.md").read_text(encoding="utf-8").split())
+    assert "Agent names differ across environments" in realms_doc
+
+
 def test_existing_identity_handoff_is_routed_in_shared_docs() -> None:
     root = _SOLUTION / "src" / "skills" / "connect"
     entry = " ".join((root / "servicenow" / "entry.md").read_text(encoding="utf-8").split())

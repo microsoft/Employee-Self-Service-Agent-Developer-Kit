@@ -75,7 +75,9 @@ class FakeClient:
         agent_id: str = TEST_AGENT,
         realm: int = 1,
         missing: bool = False,
+        display_name: str | None = None,
     ) -> None:
+        self.display_name = display_name
         self.tenant_id = tenant_id
         self.route_realm = route_realm
         self.siblings = (
@@ -95,7 +97,10 @@ class FakeClient:
     def get_agent(self, agent_id: str) -> dict[str, Any]:
         if self.missing:
             raise AgentBuilderHTTPError("missing", status_code=404)
-        return {"botId": agent_id, "schemaName": self.schema}
+        agent = {"botId": agent_id, "schemaName": self.schema}
+        if self.display_name:
+            agent["displayName"] = self.display_name
+        return agent
 
     def get_realm_configuration(self, agent_id: str, realm: int) -> dict[str, Any]:
         return {
@@ -125,7 +130,17 @@ def test_discovers_exact_promoted_sibling() -> None:
     assert identity["environmentId"] == TEST_ENV
     assert identity["almFamilyId"] == FAMILY
     assert identity["sourceAgentId"] == DEV_AGENT
+    assert "agentDisplayName" not in identity
 
+
+def test_discovery_records_the_promoted_agents_own_display_name() -> None:
+    identity = _discover(
+        FakeClient(),
+        FakeClient(display_name="  Contoso   Helpdesk \n"),
+    )
+    assert identity["agentDisplayName"] == "Contoso Helpdesk"
+    assert realms.agent_display_name({"fullBotName": "Contoso Prod"}) == "Contoso Prod"
+    assert realms.agent_display_name({"botId": DEV_AGENT}) is None
 
 @pytest.mark.parametrize(
     ("target", "message"),
@@ -1965,6 +1980,80 @@ def test_destination_replies_are_fixed_plain_text_and_record_nothing(
         p.name for p in (tmp_path / "workspace").rglob("*") if p.is_file()
     )
     assert before == after
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+@pytest.mark.parametrize("realm", ["test", "prod"])
+def test_destination_texts_use_the_promoted_agents_own_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: str, realm: str
+) -> None:
+    import connect_servicenow_da as snow
+
+    monkeypatch.setattr(snow, "ACTIVE_PROFILE", snow.PRODUCT_PROFILES[profile])
+    _prepare_controller(monkeypatch, dev_reference=DEV_RECORD)
+    destination_name = "Contoso Destination Helpdesk"
+
+    def discover(**kwargs: Any):
+        chosen = kwargs["realm"] or realm
+        agent = TEST_AGENT if chosen == "test" else PROD_AGENT
+        return chosen, {
+            **IDENTITY,
+            "agentId": agent,
+            "agentDisplayName": destination_name,
+        }
+
+    monkeypatch.setattr(realms, "discover_realm", discover)
+    context = _controller_context(tmp_path)
+    snow.run_realm_command(context, _args("discover-realm-target", realm=realm))
+    dev_name = snow._spec_agent_name()
+    assert dev_name != destination_name
+
+    pause = snow._with_agent_rules(
+        snow.realm_reply_notice(context, realm, "pause"), "realm-reply-notice"
+    )["chatMessage"]
+    assert f"**{destination_name} in {realm.title()}**" in pause
+    assert dev_name not in pause
+    checked = snow.run_realm_command(context, _args("check-realm", realm=realm))
+    assert destination_name in checked["renderBlock"]["text"]
+    assert dev_name not in checked["renderBlock"]["text"].split("\n", 1)[0]
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_destination_name_falls_back_to_the_dev_name_when_not_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: str
+) -> None:
+    import connect_servicenow_da as snow
+
+    monkeypatch.setattr(snow, "ACTIVE_PROFILE", snow.PRODUCT_PROFILES[profile])
+    _prepare_controller(monkeypatch, dev_reference=DEV_RECORD)
+    context = _controller_context(tmp_path)
+    snow.run_realm_command(context, _args("discover-realm-target", realm="test"))
+    pause = snow._with_agent_rules(
+        snow.realm_reply_notice(context, "test", "pause"), "realm-reply-notice"
+    )["chatMessage"]
+    assert f"**{snow._spec_agent_name()} in Test**" in pause
+
+
+@pytest.mark.parametrize(
+    ("word", "profile", "other"),
+    [("HR", "hrsd", "itsm"), ("IT", "itsm", "hrsd")],
+)
+def test_chooser_product_word_resolves_only_a_unique_agent_of_that_kind(
+    word: str, profile: str, other: str
+) -> None:
+    import connect_servicenow_da as snow
+
+    def choice(identifier: str, kind: str, name: str) -> dict[str, Any]:
+        return {"id": identifier, "slug": identifier, "name": name, "profile": kind}
+
+    mine = choice("a", profile, "Contoso Alpha")
+    others = choice("b", other, "Contoso Beta")
+    resolved = snow._agent_name_result(f"the {word} agent", [mine, others], [], [])
+    assert resolved is not None and resolved["selectedAgent"]["id"] == "a"
+    assert resolved["resolvedBy"] == "product"
+    twin = choice("c", profile, "Contoso Gamma")
+    assert snow._agent_name_result(word, [mine, twin], [], []) is None
+    assert snow._agent_name_result(word, [others], [], []) is None
 
 
 @pytest.mark.parametrize("profile", ["hrsd", "itsm"])

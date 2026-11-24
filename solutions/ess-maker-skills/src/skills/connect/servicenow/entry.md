@@ -82,7 +82,11 @@ selected, attached, or prepared. Reuse it silently, without asking:
   result without showing a card: `ready` continues, `setup-incomplete` is the
   Setup handoff, and `unsupported-agent` shows its `message` verbatim (see
   **Unsupported agent**). Never ask for a Copilot Studio link for a named agent
-  and never start Setup for an unsupported one.
+  and never start Setup for an unsupported one. When the maker also names a
+  destination (for example "test the IT agent in Prod"), pass only the agent
+  words. The result can resolve a promoted agent whose name differs from Dev;
+  use its `selectedAgent`, and its `realmHint` as the destination, without
+  asking again. See `realms.md` (**Agent names differ across environments**).
 - When the maker named no agent and wants a plain chat question instead of the
   card, get it from
   `python scripts/connect_servicenow_da.py --provider {PROVIDER} validation-notice --situation agent-chooser`

@@ -58,6 +58,7 @@ TARGET_IDENTITY_FIELDS = (
     "tenantId",
     "agentId",
     "agentSchemaName",
+    "agentDisplayName",
     "almFamilyId",
     "commitSha",
     "sourceAgentId",
@@ -391,7 +392,7 @@ def discover_realm_target(
             "The Dev and promoted target environments belong to different "
             "Microsoft Entra tenants."
         )
-    return {
+    identity = {
         "environmentId": _guid(environment_id, "Target environment ID"),
         "environmentUrl": _environment_url(environment_url),
         "tenantId": str(target_client.tenant_id),
@@ -401,6 +402,19 @@ def discover_realm_target(
         "commitSha": commit_sha,
         "sourceAgentId": source_id,
     }
+    display_name = agent_display_name(direct_target)
+    if display_name:
+        identity["agentDisplayName"] = display_name
+    return identity
+
+
+def agent_display_name(agent: Mapping[str, Any]) -> str | None:
+    """The agent's own display name as the target environment reports it."""
+    for key in ("displayName", "fullBotName", "name", "shortBotName"):
+        value = agent.get(key)
+        if isinstance(value, str) and value.strip():
+            return " ".join(value.split())
+    return None
 
 
 def discover_promoted_realm(
@@ -2064,6 +2078,10 @@ def realm_status(
                 key: recorded["identity"][key]
                 for key in ("environmentId", "agentId", "agentSchemaName")
             }
+            if recorded["identity"].get("agentDisplayName"):
+                targets[realm]["identity"]["agentDisplayName"] = recorded[
+                    "identity"
+                ]["agentDisplayName"]
             targets[realm]["expected"] = expected_summary(recorded["expected"])
             targets[realm]["adminCase"] = admin_case(recorded)
             if recorded.get("repairs"):

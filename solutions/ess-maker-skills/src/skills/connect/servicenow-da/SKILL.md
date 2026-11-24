@@ -30,7 +30,11 @@ show the chooser as usual. When the maker names an agent only by name (for
 example "my Benefits agent"), run
 `agent-chooser --agent-name "{NAME_AS_TYPED}"`: an agent that is not an ESS HR
 or IT agent returns `unsupported-agent`; show its `message` verbatim, never ask
-for a link, and do not start Setup for it.
+for a link, and do not start Setup for it. When the maker also names a
+destination (for example "test the IT agent in Prod"), the same command can
+resolve a promoted agent whose name differs from Dev: continue with
+`selectedAgent` and use `realmHint` as the destination without asking again.
+Never match an agent by display name yourself.
 
 When the maker answers **Yes**, rerun with the returned `prepared:{ID}`
 selection key. When the maker answers **No**, rerun with the returned

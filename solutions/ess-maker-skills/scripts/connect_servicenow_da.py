@@ -3404,8 +3404,20 @@ def _resolve_explicit_agent_link(
     prepared_choices: list[dict[str, Any]],
     incomplete_agents: list[dict[str, Any]],
     unsupported_agents: list[dict[str, Any]] | None = None,
+    promoted_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     target = _resolve_link_target(agent_link, "", "")
+    link_agent_id = str(target["agentId"]).casefold()
+    promoted_link = _promoted_agent_result(
+        [
+            record
+            for record in promoted_records or []
+            if record["agentId"].casefold() == link_agent_id
+        ],
+        "promoted-link",
+    )
+    if promoted_link is not None:
+        return promoted_link
     workspace_environment = str(environment.get("id") or "")
     if str(target["environmentId"]).casefold() != workspace_environment.casefold():
         return {
@@ -3536,11 +3548,65 @@ def _normalize_agent_name(name: str) -> str:
     return " ".join(word for word in words if word not in _AGENT_NAME_FILLER)
 
 
+_PRODUCT_WORD_PROFILE = {"hr": "hrsd", "it": "itsm"}
+
+
+def _promoted_agent_records(
+    root: Path,
+    prepared_choices: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """List promoted agents recorded for the prepared Dev agents.
+
+    Only identities verified by realm discovery are recorded, so they are the
+    sole source for recognizing a promoted agent whose name differs.
+    """
+    records: list[dict[str, Any]] = []
+    for choice in prepared_choices:
+        try:
+            registry = realms.load_registry(
+                root,
+                str(choice["provider"]),
+                str(choice["slug"]),
+            )
+        except realms.ServiceNowRealmError:
+            continue
+        for realm, target in (registry.get("targets") or {}).items():
+            identity = target.get("identity") if isinstance(target, dict) else None
+            if not isinstance(identity, dict):
+                continue
+            records.append(
+                {
+                    "choice": choice,
+                    "realm": str(realm),
+                    "agentId": str(identity.get("agentId") or ""),
+                    "name": str(identity.get("agentDisplayName") or ""),
+                }
+            )
+    return records
+
+
+def _promoted_agent_result(
+    matches: list[dict[str, Any]],
+    resolved_by: str,
+) -> dict[str, Any] | None:
+    """Return the owning Dev agent only when exactly one agent matches."""
+    owners = {str(match["choice"]["id"]) for match in matches}
+    if len(owners) != 1:
+        return None
+    result = _prepared_agent_result(matches[0]["choice"])
+    result["resolvedBy"] = resolved_by
+    realm_names = {match["realm"] for match in matches}
+    if len(realm_names) == 1:
+        result["realmHint"] = next(iter(realm_names))
+    return result
+
+
 def _agent_name_result(
     agent_name: str,
     prepared_choices: list[dict[str, Any]],
     incomplete_agents: list[dict[str, Any]],
     unsupported_agents: list[dict[str, Any]],
+    promoted_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Resolve an agent the maker named in chat; None means use the chooser."""
     wanted = _normalize_agent_name(agent_name)
@@ -3555,6 +3621,13 @@ def _agent_name_result(
         return _prepared_agent_result(prepared[0])
     if prepared:
         return None
+    promoted = [
+        record
+        for record in promoted_records or []
+        if record["name"] and _normalize_agent_name(record["name"]) == wanted
+    ]
+    if promoted:
+        return _promoted_agent_result(promoted, "promoted-name")
     unfinished = [
         agent
         for agent in incomplete_agents
@@ -3571,8 +3644,17 @@ def _agent_name_result(
     ]
     if unsupported:
         return _unsupported_agent_result(unsupported[0])
-    # A bare HR or IT may be an ESS agent that is not prepared here yet.
-    if wanted in {"hr", "it"}:
+    if wanted in _PRODUCT_WORD_PROFILE:
+        by_product = [
+            choice
+            for choice in prepared_choices
+            if choice["profile"] == _PRODUCT_WORD_PROFILE[wanted]
+        ]
+        if len(by_product) == 1:
+            result = _prepared_agent_result(by_product[0])
+            result["resolvedBy"] = "product"
+            return result
+        # Several or no prepared agents of that kind: ask, never guess.
         return None
     return _unsupported_agent_result({"id": None, "name": agent_name.strip()})
 
@@ -3606,6 +3688,7 @@ def agent_chooser_handoff(
             prepared_choices=prepared_choices,
             incomplete_agents=incomplete_agents,
             unsupported_agents=unsupported_agents,
+            promoted_records=_promoted_agent_records(root, prepared_choices),
         )
     if agent_name is not None:
         named = _agent_name_result(
@@ -3613,6 +3696,7 @@ def agent_chooser_handoff(
             prepared_choices,
             incomplete_agents,
             unsupported_agents,
+            _promoted_agent_records(root, prepared_choices),
         )
         if named is not None:
             return named
@@ -13139,11 +13223,38 @@ def _realm_target_context(
     target: dict[str, Any],
 ) -> dict[str, Any]:
     identity = target["identity"]
+    agent = {**context["agent"], "id": identity["agentId"]}
+    if identity.get("agentDisplayName"):
+        agent["display_name"] = identity["agentDisplayName"]
     return {
         **context,
         "environment": {**context["environment"], "id": identity["environmentId"]},
-        "agent": {**context["agent"], "id": identity["agentId"]},
+        "agent": agent,
     }
+
+
+def _realm_target_agent_name(
+    context: dict[str, Any],
+    target: dict[str, Any] | None,
+) -> str:
+    """The destination agent's own name; the Dev name when none is recorded."""
+    name = ((target or {}).get("identity") or {}).get("agentDisplayName")
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return _display_agent_name(context)
+
+
+def _realm_agent_name(context: dict[str, Any], realm: str) -> str:
+    try:
+        registry = realms.load_registry(
+            Path(context["root"]), ACTIVE_PROFILE.provider_key, _agent_slug(context)
+        )
+        target = registry["targets"].get(realm)
+    except (OSError, ValueError, KeyError, realms.ServiceNowRealmError):
+        target = None
+    return _realm_target_agent_name(
+        context, target if isinstance(target, dict) else None
+    )
 
 
 def _realm_run_checks(
@@ -13167,6 +13278,10 @@ def _realm_run_checks(
         api_version=environment.get("api_version", "2024-10-01"),
     )
     target_components = target_client.fetch_components(identity["agentId"])
+    bot = target_components.get("bot")
+    recorded_name = realms.agent_display_name(bot) if isinstance(bot, dict) else None
+    if recorded_name and identity.get("agentDisplayName") != recorded_name:
+        identity["agentDisplayName"] = recorded_name
     try:
         reference = summarize_components(target_components)["reference"]
     except ServiceNowConnectError:
@@ -13215,12 +13330,12 @@ REALM_COMPLETION_SCOPE = {
 REALM_COMPLETION_LIMIT = {"test": "Prod behavior", "prod": "release readiness"}
 
 
-def _realm_completion_message(realm: str) -> str:
+def _realm_completion_message(realm: str, agent: str | None = None) -> str:
     lookup, not_covered = REALM_COMPLETION_SCOPE[ACTIVE_PROFILE.key]
     label = realm.title()
     return (
         f"**Your {lookup} worked in {label}.** "
-        f"{_spec_agent_name()} "
+        f"{agent or _spec_agent_name()} "
         "returned the result you expected for your account. This confirms the "
         f"lookup for your tested account and this agent in {label}, not "
         f"{not_covered}, other employees' sign-in mapping, or "
@@ -13264,9 +13379,10 @@ def _realm_render_context(
         return None
     hr = ACTIVE_PROFILE.key == "hrsd"
     status = realms.target_status(registry, realm)
+    agent_name = _realm_target_agent_name(context, target)
     footer = None
     if status == "ready":
-        footer = _realm_completion_message(realm)
+        footer = _realm_completion_message(realm, agent_name)
     elif status == "untested":
         footer = _realm_untested_message(realm)
     else:
@@ -13277,7 +13393,7 @@ def _realm_render_context(
         ):
             footer = _realm_empty_result_message(realm)
     return {
-        "agent": _spec_agent_name(),
+        "agent": agent_name,
         "kind": "HR" if hr else "IT",
         "product": ACTIVE_PROFILE.product_name.removeprefix("ServiceNow "),
         "resume": resume,
@@ -13324,7 +13440,9 @@ def _realm_check_result(
     if target.get("instancePause"):
         result["message"] = realms.instance_pause_text()
     elif realms.target_status(registry, realm) == "ready":
-        result["message"] = _realm_completion_message(realm)
+        result["message"] = _realm_completion_message(
+            realm, _realm_target_agent_name(context, target)
+        )
     elif realms.target_status(registry, realm) == "untested":
         result["message"] = _realm_untested_message(realm)
     return result
@@ -15056,7 +15174,7 @@ def realm_reply_notice(
         raise ServiceNowConnectError("Realm must be a destination realm.")
     if situation not in REALM_REPLY_SITUATIONS:
         raise ServiceNowConnectError("Unsupported destination situation.")
-    agent = _display_agent_name(context)
+    agent = _realm_agent_name(context, realm)
     label = realm.title()
     agent_in = f"**{agent} in {label}**"
     after_reply = _REALM_REPLY_AFTER_PLAIN

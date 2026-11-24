@@ -92,6 +92,21 @@ maker names one agent, select it with `agent-chooser --agent-name` and continue
 only that agent for the destination they originally named; the other agent is a
 separate run later.
 
+**Agent names differ across environments.** The promoted agent can have a
+different display name in Test or Prod than in Dev. When the maker names an
+agent together with a destination (for example "test the IT agent in Prod"),
+pass only the agent words, as typed, to `agent-chooser --agent-name "{NAME_AS_TYPED}"`.
+The controller resolves it from stable evidence only: the Dev agent's name, a
+promoted agent that realm discovery already verified and recorded (its recorded
+name or its Copilot Studio link), or a single prepared agent of that kind (HR
+or IT). When the result is `ready`, continue with `selectedAgent` and use
+`realmHint`, when present, as the destination so the maker is not asked again.
+Never decide which agent a name belongs to yourself, never pick between
+candidates, and never infer the agent from a display name alone. When the
+result is a question, ask it as written; when it asks for the agent link, ask
+in chat and wait for a typed reply. Texts about the destination use the
+destination agent's recorded name.
+
 On every invocation, run the status first and use the controller's
 `activeTargetRealm` and `targets`. Never infer the realm from conversation
 text. A bare `/connect` after Dev is Ready does not activate Test or
