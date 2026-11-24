@@ -4915,10 +4915,86 @@ def test_resolve_credential_rejects_nonhealthy_or_nonexact_candidates(
     result = snow.resolve_credential_completion(_context())
 
     assert result["status"] == "not-ready"
-    assert "Connected" in result["remediation"]
     assert "Copilot Studio" in result["remediation"]
+    assert result["connectionsSeen"] == 1
     state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
     assert "credential" not in state["evidence"]
+
+
+@pytest.mark.parametrize(
+    ("record", "differences", "phrase"),
+    [
+        (
+            _connection_record(
+                resource_uri="00000000-0000-4000-8000-000000009999"
+            ),
+            ["resourceUri"],
+            "its Resource URI isn't the one in the card",
+        ),
+        (
+            _connection_record(instance_name="dev456"),
+            ["instance"],
+            "its Instance Name isn't the one in the card",
+        ),
+        (
+            _connection_record(auth_mode="oauth2"),
+            ["signIn"],
+            "its sign-in type isn't Microsoft Entra ID User Login",
+        ),
+        (
+            _connection_record(status="Disconnected"),
+            None,
+            "doesn't show Connected",
+        ),
+    ],
+)
+def test_resolve_credential_names_the_field_that_did_not_match(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    record: dict,
+    differences: list[str] | None,
+    phrase: str,
+) -> None:
+    class FakeConnectivity:
+        def list_connections(self) -> list[dict]:
+            return [record]
+
+    monkeypatch.chdir(tmp_path)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.setattr(
+        snow, "_connectivity_client", lambda _context: FakeConnectivity()
+    )
+
+    result = snow.resolve_credential_completion(_context())
+
+    assert result["status"] == "not-ready"
+    assert phrase in result["remediation"]
+    if differences is not None:
+        assert result["closestDifferences"] == differences
+        assert "We can see 1 ServiceNow connection" in result["remediation"]
+        assert ("Entra administrator" in result["remediation"]) == (
+            "resourceUri" in differences
+        )
+
+
+def test_resolve_credential_says_when_no_connection_exists(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FakeConnectivity:
+        def list_connections(self) -> list[dict]:
+            return []
+
+    monkeypatch.chdir(tmp_path)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.setattr(
+        snow, "_connectivity_client", lambda _context: FakeConnectivity()
+    )
+
+    result = snow.resolve_credential_completion(_context())
+
+    assert result["connectionsSeen"] == 0
+    assert "can't see any ServiceNow connection" in result["remediation"]
 
 
 def test_resolve_credential_read_failure_is_explicit_nonzero(

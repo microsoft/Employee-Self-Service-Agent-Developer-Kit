@@ -6251,6 +6251,100 @@ def _connection_matches_expected_credential(
         return False
 
 
+_CONNECTION_DIFFERENCE_TEXT = {
+    "signIn": "its sign-in type isn't Microsoft Entra ID User Login",
+    "instance": "its Instance Name isn't the one in the card",
+    "resourceUri": "its Resource URI isn't the one in the card",
+}
+
+
+def _connection_differences(
+    connection: dict[str, Any],
+    *,
+    expected_instance: str | None,
+    expected_client_id: str | None,
+) -> list[str]:
+    """Which required settings a listed connection does not match."""
+    differences: list[str] = []
+    if connection.get("authMode") != AUTH_MODE:
+        differences.append("signIn")
+    values = connection.get("parameterValues")
+    values = values if isinstance(values, dict) else {}
+    try:
+        instance_ok = bool(expected_instance) and normalize_instance_name(
+            str(values.get("token:InstanceName") or values.get("instance"))
+        ) == expected_instance
+    except ServiceNowConnectError:
+        instance_ok = False
+    try:
+        resource_ok = bool(expected_client_id) and normalize_client_id(
+            str(values.get("token:ResourceUri"))
+        ) == expected_client_id
+    except ServiceNowConnectError:
+        resource_ok = False
+    if not instance_ok:
+        differences.append("instance")
+    if not resource_ok:
+        differences.append("resourceUri")
+    return differences
+
+
+def _no_matching_connection_message(
+    connections: list[dict[str, Any]],
+    *,
+    expected_instance: str | None,
+    expected_client_id: str | None,
+) -> tuple[str, dict[str, Any]]:
+    """Plain-language reason no listed connection matches, with details."""
+    create_steps = (
+        "In Copilot Studio, open Settings > Connection Settings > "
+        "ServiceNow > Connect > Create new connection, and enter exactly "
+        "the values in the card."
+    )
+    if not connections:
+        return (
+            "We can't see any ServiceNow connection in this environment "
+            f"yet. {create_steps} Then tell me again.",
+            {"connectionsSeen": 0, "closestDifferences": []},
+        )
+    closest = min(
+        (
+            _connection_differences(
+                connection,
+                expected_instance=expected_instance,
+                expected_client_id=expected_client_id,
+            )
+            for connection in connections
+        ),
+        key=len,
+    )
+    count = len(connections)
+    seen = (
+        "We can see 1 ServiceNow connection in this environment, but it "
+        "doesn't match this setup"
+        if count == 1
+        else f"We can see {count} ServiceNow connections in this "
+        "environment, but none matches this setup"
+    )
+    reasons = [_CONNECTION_DIFFERENCE_TEXT[item] for item in closest]
+    lead = "The closest one differs because " if count > 1 else "It differs because "
+    reason_text = f"{lead}{' and '.join(reasons)}. " if reasons else ""
+    resource_hint = (
+        "If the Resource URI in the card isn't the Client ID your Entra "
+        "administrator gave you, send us the correct Client ID from them and "
+        "we'll update this agent's setup. "
+        if "resourceUri" in closest
+        else ""
+    )
+    return (
+        f"{seen}. {reason_text}{create_steps} If you chose an existing "
+        "connection instead, its Resource URI, Instance Name, and sign-in "
+        f"type must be the same as in the card. {resource_hint}Then tell me "
+        "again.",
+        {"connectionsSeen": count, "closestDifferences": closest},
+    )
+
+
 def _credential_candidate_questions(
     candidates: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -7737,10 +7831,17 @@ def resolve_credential_completion(
             ),
         }
     unhealthy_exact = int(resolution.get("unhealthyExactCount") or 0)
+    no_match_message, no_match_details = _no_matching_connection_message(
+        connections,
+        expected_instance=resolution["expected"]["instanceName"],
+        expected_client_id=resolution["expected"]["resourceUri"],
+    )
     return {
         "status": "not-ready",
         "expected": resolution["expected"],
         "unhealthyExactCount": resolution["unhealthyExactCount"],
+        "connectionsSeen": no_match_details["connectionsSeen"],
+        "closestDifferences": no_match_details["closestDifferences"],
         "remediation": (
             (
                 "A ServiceNow connection with these settings exists, but it "
@@ -7749,15 +7850,7 @@ def resolve_credential_completion(
                 "Connected, and save the agent settings. Then tell me again."
             )
             if unhealthy_exact
-            else (
-                "I couldn't find a Connected ServiceNow connection that "
-                "matches this setup (Microsoft Entra ID User Login, the "
-                "instance name, and the Resource URI shown in the card) in "
-                "this environment. Finish creating it in Copilot Studio "
-                "(Settings > Connection Settings > ServiceNow > Connect > "
-                "Create new connection), or check that you used the same "
-                "values and environment. Then tell me again."
-            )
+            else no_match_message
         ),
     }
 

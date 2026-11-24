@@ -137,8 +137,10 @@ draft connection reference:
   draft uses it, and the step is recorded; return `ACTION_RESULT = "applied"`.
 - `choice-required`: more than one healthy exact connection exists. Use the
   selector below; do not create a duplicate and do not expose connection IDs.
-- `not-ready`: show its explicit remediation, keep the step incomplete, and
-  return `ACTION_RESULT = "waiting"`. Do not record arbitrary fallback state.
+- `not-ready`: show its remediation verbatim (it names which setting did not
+  match, such as the Resource URI, Instance Name, or sign-in type), keep the
+  step incomplete, and return `ACTION_RESULT = "waiting"`. Do not paraphrase
+  it into a generic "not found" and do not record arbitrary fallback state.
 - A blocking issue (error with `details.blockingIssue`) means the connection
   is fine but the agent does not use it yet. Show the error text verbatim,
   keep the step incomplete, and return `ACTION_RESULT = "waiting"`:
