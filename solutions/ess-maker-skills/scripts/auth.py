@@ -36,6 +36,7 @@ except ImportError:
     sys.exit(1)
 
 from http_errors import APIError, raise_api_error  # noqa: E402
+from auth_telemetry import observe_auth, record_auth_result  # noqa: E402
 
 
 # Microsoft public client ID for Power Platform CLI / Dataverse delegated access.
@@ -196,6 +197,7 @@ def _dataverse_accepts_token(env_url, token):
     return resp.status_code != 401
 
 
+@observe_auth("dataverse")
 def authenticate(
     env_url,
     preferred_username=None,
@@ -236,7 +238,9 @@ def authenticate(
     result = None
     authenticated_account = None
     if selected_account:
+        record_auth_result(None, "silent", tenant_id=tenant)
         result = app.acquire_token_silent([scope], account=selected_account)
+        record_auth_result(result, "silent", tenant_id=tenant)
         if result and "access_token" in result:
             authenticated_account = selected_account
 
@@ -266,7 +270,9 @@ def authenticate(
             if preferred_username
             else {"prompt": "select_account"}
         )
+        record_auth_result(None, "interactive", tenant_id=tenant)
         result = app.acquire_token_interactive([scope], **interactive_options)
+        record_auth_result(result, "interactive", tenant_id=tenant)
         authenticated_account = None
 
     if "access_token" not in result:
@@ -397,6 +403,7 @@ def clear_token_cache(env_url=None, *, cache=None, app=None, account=None):
     _persist_token_cache(cache, cache_path)
 
 
+@observe_auth("flow")
 def get_flow_token(env_url):
     """Get a Flow Management API access token via MSAL interactive browser auth.
 
@@ -428,14 +435,18 @@ def get_flow_token(env_url):
     accounts = app.get_accounts()
     result = None
     if accounts:
+        record_auth_result(None, "silent", tenant_id=tenant)
         result = app.acquire_token_silent([FLOW_API_SCOPE], account=accounts[0])
+        record_auth_result(result, "silent", tenant_id=tenant)
 
     if not result or "access_token" not in result:
         print(f"Opening browser for sign-in (tenant: {tenant})...")
         print("Please select the account that has access to the flows.")
+        record_auth_result(None, "interactive", tenant_id=tenant)
         result = app.acquire_token_interactive(
             [FLOW_API_SCOPE], prompt="select_account"
         )
+        record_auth_result(result, "interactive", tenant_id=tenant)
 
     if "access_token" not in result:
         # Don't echo error_description - it can include tenant IDs (CWE-209).

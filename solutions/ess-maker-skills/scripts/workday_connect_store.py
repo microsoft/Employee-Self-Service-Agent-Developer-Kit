@@ -254,6 +254,31 @@ def _append_lifecycle_event(
         "resumeCount": lifecycle["resumeCount"],
         "timestamp": timestamp,
     }
+    attempts = lifecycle.setdefault("stepAttempts", {})
+    if phase:
+        if phase not in attempts:
+            complete_history = (
+                not journal
+                or journal[0]["sequence"] == 1
+                or any(
+                    item["correlationId"] == lifecycle["correlationId"]
+                    and item["event"] == "invoked"
+                    for item in journal
+                )
+            )
+            attempts[phase] = (
+                sum(
+                    item["phase"] == phase
+                    and item["correlationId"] == lifecycle["correlationId"]
+                    and item["event"] in {"phase-started", "phase-resumed"}
+                    for item in journal
+                )
+                if complete_history else None
+            )
+        if event in {"phase-started", "phase-resumed"}:
+            if attempts[phase] is not None:
+                attempts[phase] += 1
+    record["stepAttempt"] = int(attempts.get(phase) or 0)
     if phase:
         active_starts = lifecycle["activePhaseStartedAt"]
         phase_durations = lifecycle["phaseDurationsMs"]
@@ -340,6 +365,7 @@ def _rotate_lifecycle(state: dict[str, Any]) -> None:
     lifecycle["startedAt"] = utc_now()
     lifecycle["retryCount"] = 0
     lifecycle["resumeCount"] = 0
+    lifecycle["stepAttempts"] = {phase_id: 0 for phase_id in PHASE_BY_ID}
     lifecycle["phaseDurationsMs"] = {
         phase_id: 0 for phase_id in PHASE_BY_ID
     }

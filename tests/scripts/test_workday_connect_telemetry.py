@@ -50,6 +50,17 @@ def test_workday_projection_uses_only_safe_bounded_event_fields(monkeypatch):
         "remediation_id": "WD-E2E-003",
         "correlation_id": "9c7f8f9c-1234-4abc-9def-0123456789ab",
         "agent_id": "",
+        "environment_id": "",
+        "validation_realm": "",
+        "target_ring": "",
+        "step_id": "runtime",
+        "step_index": 5,
+        "step_attempt": 0,
+        "flow_version": 1,
+        "event_sequence": 0,
+        "event_timestamp": "",
+        "journey_started_at": "",
+        "tenant_id": "",
     }
 
 

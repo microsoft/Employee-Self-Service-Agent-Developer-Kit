@@ -21,6 +21,7 @@ import msal
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from auth_telemetry import observe_auth, record_auth_result
 
 
 CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
@@ -584,6 +585,7 @@ def tenant_id_from_access_token(token: str) -> str:
         ) from exc
 
 
+@observe_auth("agentbuilder")
 def _acquire_token(
     *,
     authority: str,
@@ -609,11 +611,14 @@ def _acquire_token(
         if force_account_selection
         else _select_cached_account(app.get_accounts(), account_hint)
     )
+    record_auth_result(None, "silent" if selected_account is not None else "")
     result = (
         app.acquire_token_silent(requested_scopes, account=selected_account)
         if selected_account is not None
         else None
     )
+    if selected_account is not None:
+        record_auth_result(result, "silent")
     selected_identifiers = _account_identifiers(selected_account)
     if selected_identifiers and emit_account_identity:
         print(
@@ -622,12 +627,14 @@ def _acquire_token(
             file=sys.stderr,
         )
     if not result or "access_token" not in result:
+        record_auth_result(None, "interactive")
         result = _interactive_token(
             app,
             requested_scopes,
             account_hint,
             force_account_selection,
         )
+        record_auth_result(result, "interactive")
         # The successful interactive account is not necessarily the cached
         # account whose silent acquisition failed. Never let that stale cached
         # identity satisfy preferred-account verification.

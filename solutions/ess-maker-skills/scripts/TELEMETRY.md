@@ -62,6 +62,42 @@ Column casing differs by table family:
 
 Time column on every table: `EventInfo_Time` (UTC).
 
+## Connect journey and authentication evidence (schema 1.9)
+
+`adk_connect_lifecycle` retains its existing events and adds prospective fields:
+
+| Fields | Meaning |
+|---|---|
+| `correlation_id`, `event_id`, `event_sequence`, `event_timestamp`, `journey_started_at` | Durable journey identity, repeat-delivery identity and source chronology, independent of the 30-minute CLI session |
+| `step_id`, `step_index`, `step_attempt`, `flow_version`, `journey_schema_version` | Original connector step and comparable flow revision; a zero attempt/index/version is unknown, not a measured zero |
+| `environment_id`, `validation_realm`, `target_ring` | Selected environment, dev/test/prod validation target and test/preprod/prod API ring, when available |
+| `duration_kind` | Phase pause/completion durations are unpaused elapsed time, not measured human effort |
+
+Workday persists per-phase attempts across reloads and resets them for a new journey.
+ServiceNow retains original contract steps rather than only their coarse legacy phase
+aliases. Truncated legacy histories and migrated journeys do not invent attempt baselines.
+Source timestamps and sequences, not upload order, determine transition order.
+The validation target/API ring is **not the runtime platform realm**. Historical
+events are not backfilled, and target changes do not retroactively label old events.
+An `abandoned` transition can record target rotation; it is not proof of an explicit
+user exit or an inactivity-based abandonment threshold.
+
+`adk_auth_attempt` records one terminal outcome for a complete shared AgentBuilder,
+Dataverse or Flow token acquisition. A silent-cache miss followed by interactive
+success counts once. Fields are `auth_attempt_id`, `auth_service`, `auth_method`,
+`outcome`, `error_category` and `duration_ms`, plus common dimensions. Categories
+and services are bounded; credentials, user identity and raw error text are not
+collected. A failed acquisition must not inherit another tenant's cached identity.
+Emission is fail-open and does not change sign-in return values or exceptions.
+
+This first pass supports observed usage, step progress, cohort completion-to-date,
+retries and bounded blockers/sign-in outcomes. It does not instrument every Graph,
+ARM, PAC, provider or manual sign-in, nor attribute shared sign-ins to Connect steps.
+Explicit prompt/wait/exit attribution, full restart linkage, first-ever customer
+classification, inactivity/return thresholds, feedback/exit-reason collection,
+post-setup runtime use and platform realm enrichment remain follow-up work.
+No new maker prompts, approved thresholds or Aria chart changes are introduced.
+
 ## Internal test-tenant attribution
 
 FlightCheck and ADK platform events share the explicit tenant-ID allow-list in
