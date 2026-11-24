@@ -63,13 +63,23 @@ This gate applies to `/agent-basics` and natural-language name/logo edits,
 including edits requested through `/landing-page`. Follow
 `src/skills/agent-basics/SKILL.md` only after canonical setup is ready.
 
-After completed setup, for ESS-agent name/logo requests, treat
-agent name, display name and displayName as the same rename intent.
-Use `src/skills/agent-basics/SKILL.md` for Dev, Test and Prod renames.
-For "Rename the test quality gate agent", retain Test and ask only for the
-missing display name. A new chat reuses saved setup, not the prior chat's
-unsupplied proposal. Do not substitute a generic help response or ask the
-maker to choose the operation again.
+After completed setup, for ESS-agent name/logo requests, use
+`src/skills/agent-basics/SKILL.md` for both current-value reads and edits.
+"Show my agent name and logo", "What is my agent's name?" and "Show my agent
+logo" are read-only Agent Basics requests, not landing-page MCP lookups.
+Run `python scripts/agent_basics.py view` for name/logo views or `view --name-only`
+for a name-only view. Read current values again for each request; setup labels
+and earlier permission failures are not current-state evidence.
+Do not say a name is current because it was "verified during setup", or claim
+separate logo permission without a fresh service denial on the requested path.
+For requested edits, treat agent name, display name and displayName as the same rename intent.
+Name and logo authoring is Dev-only.
+For "Rename the test quality gate agent", retain Test and decline the direct
+edit without collecting a replacement name. Offer separately reviewed Dev
+selection through the existing setup flow; never silently switch targets.
+A new chat reuses saved setup, not the prior chat's unsupplied proposal.
+For supported Dev requests, ask only for missing input. Do not substitute a
+generic help response or ask the maker to choose the operation again.
 
 DA setup is ready only when `.local/setup/config.json` has `schema_version`
 equal to `4` and its `agents` entry matching `.local/config.json`'s
@@ -506,8 +516,8 @@ pushed. Run the push pipeline when the maker asks to push local changes.
 | Debug Workday ISU errors                                                                                | `src/skills/troubleshoot/SKILL.md`                                                            |
 | Back up or save hybrid Workday HCM template configs                                                     | `src/skills/backup-template-configs/SKILL.md`                                                 |
 | Restore or re-apply hybrid Workday HCM template configs                                                 | `src/skills/restore-template-configs/SKILL.md`                                                |
-| Rename an ESS agent or change its name, icon or logo                                                    | `src/skills/agent-basics/SKILL.md`                                                            |
-| Configure ESS landing-page branding/content or read its name/icon fields                               | `src/skills/landing-page-config/SKILL.md`                                                     |
+| View an ESS agent's current name/icon/logo, rename it, or change its logo                               | `src/skills/agent-basics/SKILL.md`                                                            |
+| Configure other ESS landing-page branding/content or inspect landing-page-service metadata             | `src/skills/landing-page-config/SKILL.md`                                                     |
 | Invoke any tool from the `ess-landing-page-config` MCP server                                           | `src/skills/landing-page-config/SKILL.md`                                                     |
 
 **Trigger phrases for connect:** "connect Workday", "set up Workday".
@@ -526,8 +536,9 @@ JSON format", "something went wrong with Workday".
 `ess-landing-page-config` MCP server, read and follow
 `src/skills/landing-page-config/SKILL.md`. This applies to configuring the whole
 landing page, branding, accent colors, quick links, starter prompts, Stay Up to
-Date, Quick Access, reading its name/icon fields, or explaining its settings.
-After the shared completed-setup gate, name/logo edits instead follow
+Date, Quick Access, inspecting explicitly requested landing-page-service
+metadata, or explaining its settings.
+After the shared completed-setup gate, current agent name/logo reads and edits instead follow
 `src/skills/agent-basics/SKILL.md`, without requiring landing-page `titleId`
 or MCP checks. Do not call an AgentConfiguration MCP tool from a generic flow.
 

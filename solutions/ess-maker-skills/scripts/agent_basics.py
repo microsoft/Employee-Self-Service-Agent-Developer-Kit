@@ -17,11 +17,13 @@ import re
 import sys
 import time
 import warnings
+import zipfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import requests
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from adk_telemetry import emit_capability_use
 from agentbuilder import (
@@ -33,10 +35,12 @@ from agentbuilder import (
     authenticate,
 )
 from auth import EXPECTED_CONFIG_VERSION
+from alm_enrollment import _redact_text
 from da_product_registry import DAProductRegistryError, resolve_product_setup
 from publish import _is_native_config, _native_context
 from setup_existing_da import (
     ExistingDASetupError,
+    STUDIO_RING_BY_HOST,
     _confirm_direct_native_authoring_identity,
     _confirm_dev,
     _normalize_guid,
@@ -49,11 +53,32 @@ READ_TIMEOUT_SECONDS = 120
 SAVE_TIMEOUT_SECONDS = 180
 PROGRESS_INTERVAL_SECONDS = 15
 PREVIEW_DIRECTORY = Path(".local/agent-basics-preview")
+LOGO_PREVIEW_SIZE = (192, 192)
 WRITE_STOP_FILE = Path(".local/agent-basics-writes.disabled")
 WRITE_PENDING_FILE = Path(".local/agent-basics-write.pending")
 _REVIEW_ID = re.compile(r"[0-9a-f]{64}")
 _SERVER_FIELDS = {"version", "auditInfo"}
-_PREVIEW_FILE = re.compile(r"[0-9a-f]{64}-(color|outline)\.png")
+_PREVIEW_LABELS = (
+    "color",
+    "outline",
+    "previous-color",
+    "saved-color",
+    "proposed-color",
+    "observed-color",
+)
+_PREVIEW_FILE = re.compile(r"[0-9a-f]{64}-(" + "|".join(_PREVIEW_LABELS) + r")\.png")
+_INDEPENDENT_ICON_LIMITATION = (
+    "Independent outline and color32x32 customization cannot be completed through "
+    "the inspected native ESS platform: publication regenerates color and outline "
+    "from iconBase64, and the package model has no color32x32 field. "
+    "Use validate-icons for local validation only. Native customization requires "
+    "platform support. No write was attempted, including other supplied changes."
+)
+_DEV_ONLY = (
+    "Agent Basics authors names and logos in Dev only. No write was attempted. "
+    "Select Dev through the existing setup target-selection flow and review "
+    "a separate proposal; the target was not switched."
+)
 
 
 class AgentBasicsError(RuntimeError):
@@ -170,51 +195,76 @@ def selected_target(root: Path) -> dict[str, str]:
     return context
 
 
-def validate_name(value: str) -> str:
-    if not isinstance(value, str) or not value.strip() or len(value) > 30:
+def _agent_studio_url(target: dict[str, str]) -> str:
+    hosts = [
+        host
+        for host, ring in STUDIO_RING_BY_HOST.items()
+        if ring == target["ring"] and ".preview." not in host
+    ]
+    if (
+        len(hosts) != 1
+        or not target.get("environment_id")
+        or not target.get("agent_id")
+    ):
         raise AgentBasicsError(
-            "Supply a nonblank displayName of at most 30 Unicode characters, "
-            "as required by the selected manifest profile. ADK does not trim "
-            "or truncate it."
+            "The selected agent has no verified Copilot Studio link; check setup."
+        )
+    return (
+        f"https://{hosts[0]}/environments/{quote(target['environment_id'], safe='')}"
+        f"/bots/{quote(target['agent_id'], safe='')}/overview"
+    )
+
+
+def validate_name(value: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise AgentBasicsError(
+            "Supply a nonblank displayName so the intended name is clear. "
+            "This is an ADK input check, not a platform length limit. "
+            "ADK does not trim or truncate it."
         )
     try:
         value.encode("utf-8")
     except UnicodeEncodeError as exc:
         raise AgentBasicsError("The displayName must be valid Unicode.") from exc
+    if len(value) > 30:
+        raise AgentBasicsError(
+            "Agent name must not exceed 30 characters. "
+            f"You entered {len(value)} characters. Enter a shorter name."
+        )
     return value
 
 
-def _png(data: bytes, *, size: int | None = None) -> bytes:
+def _image(data: bytes, *, size: int | None = None, png_only: bool = False) -> bytes:
     if not data:
-        raise AgentBasicsError("Supply a nonempty PNG.")
+        raise AgentBasicsError("Supply a nonempty image.")
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(io.BytesIO(data)) as image:
-                if image.format != "PNG":
-                    raise AgentBasicsError("Supply a PNG.")
+                if png_only and image.format != "PNG":
+                    raise AgentBasicsError(
+                        f"Supply a PNG; the supplied file is {image.format}."
+                    )
                 if size is not None and image.size != (size, size):
                     raise AgentBasicsError(
-                        f"PNG dimensions must be exactly {size}x{size}."
-                    )
-                if image.width > 192 or image.height > 192:
-                    raise AgentBasicsError(
-                        "The current icon exceeds the supported preview dimensions."
+                        f"PNG dimensions must be exactly {size}x{size}; "
+                        f"the supplied image is {image.width}x{image.height}."
                     )
                 image.verify()
             with Image.open(io.BytesIO(data)) as image:
-                if image.n_frames > 1:
+                frames = getattr(image, "n_frames", 1)
+                if frames > 1:
                     fingerprint = hashlib.sha256()
                     fingerprint.update(
                         _digest(
                             {
-                                "frames": image.n_frames,
+                                "frames": frames,
                                 "loop": image.info.get("loop"),
                                 "defaultImage": image.info.get("default_image", False),
                             }
                         ).encode("ascii")
                     )
-                    for index in range(image.n_frames):
+                    for index in range(frames):
                         image.seek(index)
                         image.load()
                         fingerprint.update(
@@ -244,18 +294,72 @@ def _png(data: bytes, *, size: int | None = None) -> bytes:
         Image.DecompressionBombWarning,
     ) as exc:
         raise AgentBasicsError(
-            "The PNG cannot be fully decoded; no write is allowed."
+            "The image cannot be fully decoded for a safe preview; no write is "
+            "allowed. Provide a readable image. This is a local preview check, "
+            "not a statement of the service's supported formats."
         ) from exc
 
 
-def _image_file(path: str, *, size: int) -> tuple[str, bytes]:
+def _png(data: bytes, *, size: int | None = None) -> bytes:
+    return _image(data, size=size, png_only=True)
+
+
+def _image_file(path: str, *, size: int | None = None) -> tuple[str, bytes]:
     source = Path(path).expanduser().resolve()
     try:
         data = source.read_bytes()
     except OSError as exc:
-        raise AgentBasicsError("The selected local PNG cannot be read.") from exc
-    _png(data, size=size)
+        raise AgentBasicsError("The selected local image cannot be read.") from exc
+    if size is None:
+        _image(data)
+    else:
+        _png(data, size=size)
     return str(source), data
+
+
+def _preview_image(data: bytes, root: Path, review_id: str, suffix: str) -> Path:
+    directory = root / PREVIEW_DIRECTORY
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{review_id}-{suffix}.png"
+    with Image.open(io.BytesIO(data)) as image:
+        if image.format == "PNG" and image.size == LOGO_PREVIEW_SIZE:
+            path.write_bytes(data)
+        else:
+            ImageOps.pad(
+                image.convert("RGBA"),
+                LOGO_PREVIEW_SIZE,
+                method=Image.Resampling.LANCZOS,
+                color=(0, 0, 0, 0),
+            ).save(path, format="PNG")
+    return path.resolve()
+
+
+def _manifest_png(data: bytes, kind: str) -> bytes:
+    pixels = _png(data, size=192 if kind == "color" else 32)
+    if kind == "color":
+        return pixels
+    with Image.open(io.BytesIO(data)) as image:
+        for frame in range(image.n_frames):
+            image.seek(frame)
+            rgba = image.convert("RGBA").tobytes()
+            colors = list(zip(rgba[0::4], rgba[1::4], rgba[2::4], rgba[3::4]))
+            if not any(alpha == 0 for _, _, _, alpha in colors):
+                raise AgentBasicsError(
+                    f"The {kind} icon needs a transparent background."
+                )
+            if kind == "outline":
+                visible = [(r, g, b) for r, g, b, alpha in colors if alpha]
+                if not visible or any(pixel != (255, 255, 255) for pixel in visible):
+                    raise AgentBasicsError(
+                        "The outline icon must be white on a transparent background."
+                    )
+    return pixels
+
+
+def _icon_file(path: str, kind: str) -> tuple[str, bytes]:
+    source, data = _image_file(path, size=192 if kind == "color" else 32)
+    _manifest_png(data, kind)
+    return source, data
 
 
 def _decode(value: Any) -> bytes:
@@ -276,7 +380,7 @@ def _logo(bot: dict[str, Any]) -> bytes:
         )
     color = _decode(bot["iconBase64"])
     if color:
-        _png(color)
+        _image(color)
     return color
 
 
@@ -289,7 +393,9 @@ def _promoted_target(
     _progress("checking_quality_gate", qualityGate=quality_gate)
     realms = client.get_realms(target["agent_id"])
     if not isinstance(realms, dict) or _realm_name(realms.get("routeRealm")) != "dev":
-        raise AgentBasicsError("Quality-gate discovery did not identify the Dev source.")
+        raise AgentBasicsError(
+            "Quality-gate discovery did not identify the Dev source."
+        )
     siblings = realms.get("siblingRealms")
     if not isinstance(siblings, list):
         raise AgentBasicsError("Quality-gate discovery did not return sibling agents.")
@@ -313,8 +419,12 @@ def _promoted_target(
         raise AgentBasicsError("The quality-gate agent identity is unreadable.")
     enrolled, realm = _confirm_direct_native_authoring_identity(agent_id, card)
     if not enrolled or realm != quality_gate:
-        raise AgentBasicsError("The discovered agent does not match the requested gate.")
-    configuration = client.get_realm_configuration(agent_id, QUALITY_GATES[quality_gate])
+        raise AgentBasicsError(
+            "The discovered agent does not match the requested gate."
+        )
+    configuration = client.get_realm_configuration(
+        agent_id, QUALITY_GATES[quality_gate]
+    )
     if not isinstance(configuration, dict):
         raise AgentBasicsError("The quality-gate configuration is unreadable.")
     if _realm_name(configuration.get("realm")) != quality_gate:
@@ -323,7 +433,9 @@ def _promoted_target(
         str(configuration.get("cdsBotId") or ""), "Configured quality-gate agent ID"
     )
     if configured_id.casefold() != agent_id.casefold():
-        raise AgentBasicsError("The quality-gate configuration identifies another agent.")
+        raise AgentBasicsError(
+            "The quality-gate configuration identifies another agent."
+        )
     configured_family = str(configuration.get("grsRepositoryId") or "").strip()
     if configured_family.casefold() != family_id.casefold():
         raise AgentBasicsError("The quality-gate agent belongs to another ALM family.")
@@ -332,7 +444,9 @@ def _promoted_target(
     ).strip()
     source_schema = target["schema_name"].casefold()
     if schema.casefold() not in {source_schema, f"{source_schema}_{quality_gate}"}:
-        raise AgentBasicsError("The quality-gate schema does not match the selected ESS agent.")
+        raise AgentBasicsError(
+            "The quality-gate schema does not match the selected ESS agent."
+        )
     values = configuration.get("values")
     if not isinstance(values, dict) or not all(
         isinstance(key, str) and (value is None or isinstance(value, str))
@@ -419,6 +533,11 @@ def read_state(
     }
 
 
+def _require_dev_edit(quality_gate: str) -> None:
+    if quality_gate != "dev":
+        raise AgentBasicsError(_DEV_ONLY)
+
+
 def _gpt_component(state: dict[str, Any]) -> dict[str, Any]:
     components = [
         change["component"]
@@ -439,16 +558,60 @@ def _gpt_component(state: dict[str, Any]) -> dict[str, Any]:
     ):
         raise AgentBasicsError("The GPT component schema is unreadable.")
     if not isinstance(component.get("displayName"), str):
-        raise AgentBasicsError("The current chat name is unreadable; rename is unavailable.")
-    configuration = state.get("_realmConfiguration")
-    if configuration is not None:
-        values = configuration["values"]
-        binding = "gptDisplayName" if "gptDisplayName" in values else "botName"
-        if values[binding] != component["displayName"]:
-            raise AgentBasicsError(
-                "The chat name and ALM name binding disagree; refresh before renaming."
-            )
+        raise AgentBasicsError(
+            "The current chat name is unreadable; rename is unavailable."
+        )
     return component
+
+
+def validate_package(path: Path) -> dict[str, Any]:
+    """Inspect an existing app package without extracting or publishing it."""
+    try:
+        with zipfile.ZipFile(path) as package:
+            if len(package.namelist()) != len(set(package.namelist())):
+                raise AgentBasicsError("The app package contains duplicate file paths.")
+            manifest = json.loads(package.read("manifest.json").decode("utf-8-sig"))
+            icons = manifest.get("icons") if isinstance(manifest, dict) else None
+            if (
+                not isinstance(icons, dict)
+                or not {"outline", "color"}.issubset(icons)
+                or set(icons) - {"outline", "color", "color32x32"}
+            ):
+                raise AgentBasicsError(
+                    "The app manifest must reference outline and color icons, "
+                    "with only color32x32 optional."
+                )
+            for kind, asset_path in icons.items():
+                if (
+                    not isinstance(asset_path, str)
+                    or not asset_path
+                    or len(asset_path) > 2048
+                    or "\\" in asset_path
+                    or ":" in asset_path
+                    or asset_path.startswith("/")
+                    or any(part in ("", ".", "..") for part in asset_path.split("/"))
+                ):
+                    raise AgentBasicsError(
+                        f"The {kind} icon needs a package-relative path of at most "
+                        "2,048 characters without traversal."
+                    )
+                data = package.read(asset_path)
+                _manifest_png(data, kind)
+    except AgentBasicsError:
+        raise
+    except (OSError, zipfile.BadZipFile, KeyError, ValueError, RuntimeError) as exc:
+        raise AgentBasicsError(
+            "The app package is unreadable, malformed, encrypted, or missing "
+            "manifest.json or a referenced icon."
+        ) from exc
+    return {
+        "status": "validated",
+        "scope": "provided_app_package_icons_only",
+        "icons": sorted(icons),
+        "targetAssociation": "unverified",
+        "publication": "Not performed.",
+        "employeeVisibility": "unverified",
+    }
 
 
 def prepare(
@@ -457,38 +620,66 @@ def prepare(
     *,
     name: str | None = None,
     logo: str | None = None,
+    color: str | None = None,
+    outline: str | None = None,
+    color32x32: str | None = None,
     quality_gate: str = "dev",
+    name_only: bool = False,
 ) -> dict[str, Any]:
-    if logo is not None and quality_gate != "dev":
-        raise AgentBasicsError(
-            "Logo changes are Dev-only. Request a separate name-only change for Test or Prod."
-        )
+    if outline is not None or color32x32 is not None:
+        raise AgentBasicsError(_INDEPENDENT_ICON_LIMITATION)
+    if color is not None:
+        if logo is not None:
+            raise AgentBasicsError(
+                "--color and --logo name the same source; use only one."
+            )
+        logo = color
+    if name_only and any(value is not None for value in (name, logo, color, outline)):
+        raise AgentBasicsError("A name-only view cannot include proposed changes.")
+    if any(value is not None for value in (name, logo, color, outline)):
+        _require_dev_edit(quality_gate)
     source: dict[str, str] = {}
     desired: dict[str, Any] = {}
     if name is not None:
         desired["displayName"] = validate_name(name)
     supplied = None
     if logo is not None:
-        source["color"], color = _image_file(logo, size=192)
-        supplied = color
+        _progress("validating_logo")
+        source["color"], supplied = _image_file(logo)
     state, resolved_target = read_state(client, target, quality_gate=quality_gate)
     bot = state["bot"]
     readable_name = isinstance(bot.get("displayName"), str)
+    if readable_name:
+        _progress("current_property_loaded", property="name", value=bot["displayName"])
+    else:
+        _progress("current_property_unavailable", property="name")
     current_logo = None
     logo_error = None
-    if name is None or supplied is not None:
+    inspect_logo = not name_only and (name is None or supplied is not None)
+    if inspect_logo:
+        _progress("reading_current_logo")
         try:
             current_logo = _logo(bot)
         except AgentBasicsError as exc:
             logo_error = str(exc)
+            _progress(
+                "current_property_unavailable", property="logo", reason=logo_error
+            )
+        else:
+            _progress(
+                "current_property_loaded",
+                property="logo",
+                value="confirmed" if current_logo else "none",
+            )
     if "displayName" in desired and not readable_name:
         raise AgentBasicsError(
             "The current name is unreadable; name editing is unavailable."
         )
+    if supplied is not None and current_logo is None:
+        raise AgentBasicsError(logo_error)
     gpt = _gpt_component(state) if name is not None else None
     if (
         gpt is not None
-        and quality_gate == "dev"
         and gpt["displayName"] != desired["displayName"]
         and (
             not isinstance(state.get("changeToken"), str)
@@ -498,8 +689,6 @@ def prepare(
         raise AgentBasicsError(
             "A component change token is required for a protected chat-name update."
         )
-    if supplied is not None and current_logo is None:
-        raise AgentBasicsError(logo_error)
     if supplied is not None:
         desired["logo"] = base64.b64encode(supplied).decode("ascii")
     changes = {}
@@ -510,14 +699,16 @@ def prepare(
         changes["name"] = desired["displayName"]
     if "logo" in desired:
         desired_logo = _decode(desired["logo"])
-        if _png(desired_logo) != (_png(current_logo) if current_logo else b""):
+        if _image(desired_logo) != (_image(current_logo) if current_logo else b""):
             changes["logo"] = desired["logo"]
+    agent_studio_url = _agent_studio_url(resolved_target)
     review_id = _digest(
         {
             "target": resolved_target,
             "state": state,
             "desired": desired,
             "sources": source,
+            "nameOnly": name_only,
         }
     )
     return {
@@ -525,11 +716,13 @@ def prepare(
         "selection": dict(target),
         "requestedQualityGate": quality_gate,
         "target": resolved_target,
+        "agentStudioUrl": agent_studio_url,
         "state": state,
         "desired": desired,
         "changes": changes,
         "sources": source,
         "currentLogo": current_logo,
+        "logoInspected": inspect_logo,
         "logoError": logo_error,
     }
 
@@ -541,7 +734,12 @@ def review_output(plan: dict[str, Any], root: Path) -> dict[str, Any]:
         if isinstance(bot.get("displayName"), str)
         else None,
     }
-    if "displayName" not in plan["desired"] or plan["sources"]:
+    if current["name"] is None:
+        current["nameIssue"] = (
+            "The current name was not returned as readable text; "
+            "name editing is unavailable."
+        )
+    if plan["logoInspected"]:
         current["logo"] = (
             "unavailable"
             if plan["currentLogo"] is None
@@ -551,39 +749,100 @@ def review_output(plan: dict[str, Any], root: Path) -> dict[str, Any]:
         )
         current["logoIssue"] = plan["logoError"]
     if plan["currentLogo"]:
-        directory = root / PREVIEW_DIRECTORY
-        directory.mkdir(parents=True, exist_ok=True)
-        path = directory / f"{plan['reviewId']}-color.png"
-        path.write_bytes(plan["currentLogo"])
-        current["colorPreview"] = str(path.resolve())
+        path = _preview_image(plan["currentLogo"], root, plan["reviewId"], "color")
+        current["colorPreview"] = str(path)
+        current["colorPreviewUri"] = path.as_uri()
+        current["colorPreviewMarkdown"] = (
+            f"![Current agent logo]({current['colorPreviewUri']})"
+        )
     promoted = plan["requestedQualityGate"] != "dev"
+    readable = {
+        "name": current["name"] is not None,
+        **({"logo": current["logo"] != "unavailable"} if "logo" in current else {}),
+    }
+    if readable["name"] and not promoted:
+        try:
+            _gpt_component(plan["state"])
+        except (AgentBasicsError, ExistingDASetupError) as exc:
+            readable["name"] = False
+            current["nameIssue"] = f"Name editing is unavailable: {exc}"
+    proposed: dict[str, Any] = {
+        "name": plan["desired"].get("displayName"),
+        "logoSources": plan["sources"],
+    }
+    if "logo" in plan["desired"]:
+        data = _decode(plan["desired"]["logo"])
+        path = _preview_image(data, root, plan["reviewId"], "proposed-color")
+        with Image.open(io.BytesIO(data)) as image:
+            proposed["logoDetails"] = {
+                "format": image.format,
+                "width": image.width,
+                "height": image.height,
+                "frames": getattr(image, "n_frames", 1),
+            }
+        proposed["logoPreviewMarkdown"] = f"![Proposed agent logo]({path.as_uri()})"
+        proposed["logoProcessing"] = (
+            "Original file bytes will be submitted unchanged. The service may "
+            "resize or otherwise process the image; read-back must be checked "
+            "against this review. A static preview does not show all animation frames."
+        )
     return {
         "status": "review" if plan["changes"] else "no_change",
         "reviewId": plan["reviewId"],
         "target": plan["target"],
+        "agentStudioUrl": plan["agentStudioUrl"],
         "current": current,
-        "proposed": {
-            "name": plan["desired"].get("displayName"),
-            "logoSources": plan["sources"],
-        },
+        "proposed": proposed,
         "changedProperties": list(plan["changes"]),
-        "retained": "Instructions, unrequested non-image settings, schema, product and workspace identity.",
+        "editableProperties": [
+            field for field, available in readable.items() if available and not promoted
+        ],
         "localArtifacts": "No agent files or setup display labels changed.",
         "publication": "Not performed; approval and employee visibility are unverified.",
         "concurrencyProtection": (
-            "ALM configuration is refreshed before writing and verified afterwards; "
-            "the API does not accept a client revision precondition."
+            "Read-only; Agent Basics does not author Test/Prod."
             if promoted
             else "Revision checks protect the save."
         ),
+        "authoringLimitations": [_DEV_ONLY] if promoted else [],
     }
 
 
 def cleanup(root: Path, review_id: str) -> None:
     if not _REVIEW_ID.fullmatch(review_id):
         raise AgentBasicsError("Invalid review identifier.")
-    for label in ("color", "outline"):
+    for label in _PREVIEW_LABELS:
         (root / PREVIEW_DIRECTORY / f"{review_id}-{label}.png").unlink(missing_ok=True)
+
+
+def _saved_comparison(
+    plan: dict[str, Any], results: dict[str, str], root: Path
+) -> dict[str, Any]:
+    comparison: dict[str, Any] = {}
+    if results.get("name") == "saved":
+        comparison["name"] = {
+            "previous": plan["state"]["bot"]["displayName"],
+            "current": plan["changes"]["name"],
+        }
+    if results.get("logo") == "saved":
+        comparison["logo"] = {}
+        for column, label, data in (
+            ("previous", "Previous agent logo", plan["currentLogo"]),
+            ("current", "Saved DEV agent logo", _decode(plan["changes"]["logo"])),
+        ):
+            if not data:
+                comparison["logo"][column] = {"logo": "none"}
+                continue
+            suffix = "previous-color" if column == "previous" else "saved-color"
+            path = _preview_image(data, root, plan["reviewId"], suffix)
+            uri = path.as_uri()
+            comparison["logo"][column] = {
+                "logo": "confirmed",
+                "preview": str(path.resolve()),
+                "previewUri": uri,
+                "previewMarkdown": f"![{label}]({uri})",
+            }
+    return comparison
 
 
 def cleanup_expired(root: Path) -> None:
@@ -599,59 +858,46 @@ def cleanup_expired(root: Path) -> None:
                 path.unlink()
 
 
+def _preservation_snapshot(
+    state: dict[str, Any], changes: dict[str, Any]
+) -> dict[str, Any]:
+    bot = copy.deepcopy(state["bot"])
+    for field in _SERVER_FIELDS:
+        bot.pop(field, None)
+    if "name" in changes:
+        bot.pop("displayName", None)
+    if "name" in changes or "logo" in changes:
+        # The platform owns source-icon normalization and derived icon fields.
+        bot.pop("iconBase64", None)
+        application = bot.get("teamsAppInformation")
+        if isinstance(application, dict):
+            teams = application.get("teams")
+            if isinstance(teams, dict):
+                teams.pop("outlineIcon", None)
+                teams.pop("colorIcon", None)
+            if application.get("teams") in ({}, None):
+                application.pop("teams", None)
+            if not application:
+                bot.pop("teamsAppInformation")
+        elif application is None:
+            bot.pop("teamsAppInformation", None)
+    components = copy.deepcopy(state["botComponentChanges"])
+    if "name" in changes:
+        gpt = _gpt_component({**state, "botComponentChanges": components})
+        for field in ("displayName", *_SERVER_FIELDS):
+            gpt.pop(field, None)
+    return {
+        "bot": bot,
+        "botComponentChanges": components,
+        "_realmConfiguration": state.get("_realmConfiguration"),
+    }
+
+
 def _preserved(
     before: dict[str, Any], after: dict[str, Any], changes: dict[str, Any]
 ) -> bool:
-    previous = copy.deepcopy(before["bot"])
-    current = copy.deepcopy(after["bot"])
-    for item in (previous, current):
-        for field in _SERVER_FIELDS:
-            item.pop(field, None)
-        if "name" in changes:
-            item.pop("displayName", None)
-        if "name" in changes or "logo" in changes:
-            # The platform owns source-icon normalization and derived icon fields.
-            item.pop("iconBase64", None)
-            application = item.get("teamsAppInformation")
-            if isinstance(application, dict):
-                teams = application.get("teams")
-                if isinstance(teams, dict):
-                    teams.pop("outlineIcon", None)
-                    teams.pop("colorIcon", None)
-                if application.get("teams") in ({}, None):
-                    application.pop("teams", None)
-                if not application:
-                    item.pop("teamsAppInformation")
-            elif application is None:
-                item.pop("teamsAppInformation", None)
-    previous_components = copy.deepcopy(before["botComponentChanges"])
-    current_components = copy.deepcopy(after["botComponentChanges"])
-    if "name" in changes:
-        for state, components in (
-            (before, previous_components),
-            (after, current_components),
-        ):
-            gpt = _gpt_component({**state, "botComponentChanges": components})
-            for field in ("displayName", *_SERVER_FIELDS):
-                gpt.pop(field, None)
-            if state.get("_realmConfiguration") is not None:
-                # Configure rematerializes every component, bumping server revisions.
-                for change in components:
-                    component = change.get("component") if isinstance(change, dict) else None
-                    if isinstance(component, dict):
-                        for field in _SERVER_FIELDS:
-                            component.pop(field, None)
-    previous_config = copy.deepcopy(before.get("_realmConfiguration"))
-    current_config = copy.deepcopy(after.get("_realmConfiguration"))
-    if previous_config is not None and current_config is not None and "name" in changes:
-        previous_config["values"].pop("botName", None)
-        current_config["values"].pop("botName", None)
-        previous_config["values"].pop("gptDisplayName", None)
-        current_config["values"].pop("gptDisplayName", None)
-    return (
-        previous == current
-        and previous_components == current_components
-        and previous_config == current_config
+    return _preservation_snapshot(before, changes) == _preservation_snapshot(
+        after, changes
     )
 
 
@@ -691,6 +937,273 @@ def _release_pending_write(root: Path) -> str | None:
     return None
 
 
+def _record_logo_confirmation(
+    root: Path, plan: dict[str, Any], observed: dict[str, Any]
+) -> dict[str, Any]:
+    record = {
+        "kind": "logo_confirmation",
+        "workspace": _digest(str(root.resolve())),
+        "selection": _digest(plan["selection"]),
+        "target": _digest(plan["target"]),
+        "baseline": _digest(_preservation_snapshot(observed, {"logo": True})),
+        "approvedLogo": hashlib.sha256(
+            _image(_decode(plan["changes"]["logo"]))
+        ).hexdigest(),
+        "minimumRevision": observed["bot"]["version"],
+        "requestedProperties": [
+            *(["name"] if "displayName" in plan["desired"] else []),
+            "logo",
+        ],
+    }
+    # Store only fingerprints after a completed, preservation-checked request.
+    with (root / WRITE_PENDING_FILE).open("r+", encoding="utf-8") as stream:
+        stream.seek(0)
+        json.dump(record, stream)
+        stream.truncate()
+    return record
+
+
+def logo_confirmation_review(plan: dict[str, Any], root: Path) -> dict[str, Any] | None:
+    path = root / WRITE_PENDING_FILE
+    if (
+        (root / WRITE_STOP_FILE).exists()
+        or not path.exists()
+        or plan["requestedQualityGate"] != "dev"
+        or plan["desired"]
+    ):
+        return None
+    text = path.read_text(encoding="utf-8")
+    if not text.lstrip().startswith("{"):
+        # Legacy/interrupted markers do not establish logo-only uncertainty.
+        return None
+    try:
+        record = json.loads(text)
+    except ValueError as exc:
+        raise AgentBasicsError(
+            "The previous logo confirmation evidence is unreadable; saves remain paused."
+        ) from exc
+    if (
+        not isinstance(record, dict)
+        or record.get("kind") != "logo_confirmation"
+        or not all(
+            isinstance(record.get(key), str) and _REVIEW_ID.fullmatch(record[key])
+            for key in ("workspace", "selection", "target", "baseline", "approvedLogo")
+        )
+        or type(record.get("minimumRevision")) is not int
+    ):
+        raise AgentBasicsError(
+            "The previous logo confirmation evidence is invalid; saves remain paused."
+        )
+    requested = record.get("requestedProperties", ["logo"])
+    if requested not in (["logo"], ["name", "logo"]):
+        raise AgentBasicsError(
+            "The saved confirmation scope is invalid; saves remain paused."
+        )
+    if (
+        record["workspace"] != _digest(str(root.resolve()))
+        or record["selection"] != _digest(plan["selection"])
+        or record["target"] != _digest(plan["target"])
+        or record["baseline"]
+        != _digest(_preservation_snapshot(plan["state"], {"logo": True}))
+        or plan["state"]["bot"]["version"] < record["minimumRevision"]
+    ):
+        return {
+            "status": "blocked",
+            "reason": "The target, preserved settings or readable logo could not be confirmed; keep saves paused.",
+        }
+    if not plan["logoInspected"]:
+        return {
+            "status": "available",
+            "requestedProperties": requested,
+            "writeAttempted": False,
+        }
+    if not plan["currentLogo"]:
+        return {
+            "status": "blocked",
+            "reason": "The previous logo could not be read; keep saves paused.",
+        }
+    matches = (
+        hashlib.sha256(_image(plan["currentLogo"])).hexdigest()
+        == record["approvedLogo"]
+    )
+    review: dict[str, Any] = {
+        "status": "verified" if matches else "confirmation_required",
+        "reviewId": _digest(
+            {
+                "view": plan["reviewId"],
+                "pending": record,
+                "confirmationMode": "copilot_studio",
+                "agentStudioUrl": plan["agentStudioUrl"],
+                "requestedProperties": requested,
+            }
+        ),
+        "requestedProperties": requested,
+        "writeAttempted": False,
+    }
+    if not matches:
+        setting = "name and logo" if "name" in requested else "logo"
+        review["dialog"] = {
+            "title": "Confirm update",
+            "question": f"Did the {setting} update as intended?",
+            "description": (
+                "Open your DEV agent in Microsoft Copilot Studio "
+                f"and check the {setting}.\n{plan['agentStudioUrl']}"
+            ),
+            "choices": {
+                "yes": "Yes, updated as intended",
+                "no": "No, it needs correction",
+                "cancel": "Cancel",
+            },
+        }
+    return review
+
+
+def confirm_logo(
+    plan: dict[str, Any],
+    root: Path,
+    *,
+    approval: str | None = None,
+    decision: str | None = None,
+) -> dict[str, Any]:
+    review = logo_confirmation_review(plan, root)
+    if not review or review["status"] not in ("verified", "confirmation_required"):
+        raise AgentBasicsError(
+            "This pause cannot be resolved by logo confirmation; no write was attempted."
+        )
+    verified = review["status"] == "verified"
+    if not verified and (
+        approval != review["reviewId"] or decision not in ("yes", "no")
+    ):
+        return {
+            "status": "review_again",
+            "reason": "The logo confirmation changed; show a fresh current-logo review.",
+            "writesDisabled": _writes_disabled(root),
+            "writeAttempted": False,
+        }
+    write_stop_issue = _release_pending_write(root)
+    return {
+        "status": "logo_verified"
+        if verified
+        else "logo_confirmed"
+        if decision == "yes"
+        else "logo_not_confirmed",
+        "properties": {
+            "logo": "saved"
+            if verified
+            else "confirmed_by_user"
+            if decision == "yes"
+            else "not_confirmed"
+        },
+        "verificationMethod": "api_exact_match"
+        if verified
+        else "user_studio_confirmation",
+        "target": plan["target"],
+        "agentStudioUrl": plan["agentStudioUrl"],
+        "requestedProperties": review["requestedProperties"],
+        "writesDisabled": _writes_disabled(root),
+        "writeStopIssue": write_stop_issue,
+        "writeAttempted": False,
+        "publication": "Not performed.",
+        "replacementRequested": decision == "no",
+        "nextAction": (
+            "Ask which requested setting needs correction, then use the normal preview and save-approval flow; do not retry automatically."
+            if "name" in review["requestedProperties"]
+            else "Offer a replacement through the normal preview and save-approval flow; do not retry automatically."
+        )
+        if decision == "no"
+        else "Keep the confirmed logo; do not repeat the previous upload.",
+    }
+
+
+def _verified_properties(
+    plan: dict[str, Any], after: dict[str, Any], status_code: int | None
+) -> tuple[dict[str, str], bool, dict[str, dict[str, str]]]:
+    changes = plan["changes"]
+    results = {field: "unverified" for field in changes}
+    property_issues: dict[str, dict[str, str]] = {}
+    observed = after["bot"]
+    # A cached pre-save read does not prove that an uncertain write failed.
+    later_revision = observed["version"] > plan["state"]["bot"]["version"]
+    if "name" in changes:
+        gpt = _gpt_component(plan["state"])
+        try:
+            observed_gpt = _gpt_component(after)
+            if not isinstance(observed.get("displayName"), str):
+                raise AgentBasicsError("The saved display name is unreadable.")
+        except (AgentBasicsError, ExistingDASetupError) as exc:
+            property_issues["name"] = {
+                "errorType": type(exc).__name__,
+                "reason": str(exc),
+            }
+        else:
+            if (
+                later_revision
+                and observed["displayName"] == changes["name"]
+                and observed_gpt["displayName"] == changes["name"]
+            ):
+                results["name"] = "saved"
+            elif (
+                status_code is not None
+                and 400 <= status_code < 500
+                and observed["displayName"] == plan["state"]["bot"]["displayName"]
+                and observed_gpt["displayName"] == gpt["displayName"]
+            ):
+                results["name"] = "failed"
+    if "logo" in changes:
+        try:
+            actual_logo = _logo(observed)
+            actual_pixels = _image(actual_logo) if actual_logo else b""
+            original_logo = plan["currentLogo"]
+            original_pixels = _image(original_logo) if original_logo else b""
+            expected_pixels = _image(_decode(changes["logo"]))
+        except AgentBasicsError as exc:
+            property_issues["logo"] = {
+                "errorType": type(exc).__name__,
+                "reason": str(exc),
+            }
+        else:
+            if later_revision and actual_pixels == expected_pixels:
+                results["logo"] = "saved"
+            elif (
+                status_code is not None
+                and 400 <= status_code < 500
+                and actual_pixels == original_pixels
+            ):
+                results["logo"] = "failed"
+    try:
+        preserved = _preserved(plan["state"], after, changes)
+    except (AgentBasicsError, ExistingDASetupError):
+        preserved = False
+    return results, preserved, property_issues
+
+
+def _service_error(response: requests.Response) -> dict[str, Any]:
+    result: dict[str, Any] = {"httpStatus": response.status_code}
+    try:
+        body = response.json()
+    except ValueError:
+        return result
+    if not isinstance(body, dict):
+        return result
+    error = body.get("error") or body.get("Error") or body
+    if not isinstance(error, dict):
+        return result
+    code = error.get("code") or error.get("Code")
+    if isinstance(code, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", code):
+        result["code"] = code
+    # Only structured validation messages, never response bodies or inner errors.
+    message = error.get("message") or error.get("Message")
+    if response.status_code in (400, 413, 415, 422) and isinstance(message, str):
+        message = _redact_text(message)
+        message = re.sub(r"https?://\S+|[\w.+-]+@[\w.-]+", "[REDACTED]", message)
+        message = re.sub(r"[A-Za-z]:\\[^\r\n;]+", "[REDACTED]", message)
+        message = re.sub(r"[A-Za-z0-9+/=_-]{80,}", "[REDACTED]", message)
+        message = " ".join(message.split())[:1000]
+        if message and "<" not in message and ">" not in message:
+            result["message"] = message
+    return result
+
+
 def save(
     client: AgentBuilderClient,
     plan: dict[str, Any],
@@ -700,6 +1213,7 @@ def save(
     root: Path,
 ) -> dict[str, Any]:
     """Save a freshly prepared plan; the CLI always prepares again after approval."""
+    _require_dev_edit(plan["requestedQualityGate"])
     if approval != plan["reviewId"] or current_target != plan["selection"]:
         return {
             "status": "review_again",
@@ -708,9 +1222,15 @@ def save(
     changes = plan["changes"]
     if not changes:
         return {"status": "no_change", "properties": {}, "writeAttempted": False}
-    if "logo" in changes and plan["requestedQualityGate"] != "dev":
-        raise AgentBasicsError("Logo changes are Dev-only; no write was attempted.")
     _require_writes_enabled(root)
+    _progress("refreshing_reviewed_state")
+    refreshed, refreshed_target = read_state(client, current_target)
+    if refreshed != plan["state"] or refreshed_target != plan["target"]:
+        return {
+            "status": "review_again",
+            "reason": "Reviewed state changed; refresh and review again.",
+            "writeAttempted": False,
+        }
     bot = copy.deepcopy(plan["state"]["bot"])
     gpt = None
     if "name" in changes:
@@ -719,23 +1239,10 @@ def save(
     if "logo" in changes:
         bot["iconBase64"] = changes["logo"]
 
-    promoted = plan["requestedQualityGate"] != "dev"
-    if promoted:
-        _progress("refreshing_quality_gate_configuration")
-        refreshed, refreshed_target = read_state(
-            client, current_target, quality_gate=plan["requestedQualityGate"]
-        )
-        if refreshed != plan["state"] or refreshed_target != plan["target"]:
-            return {
-                "status": "review_again",
-                "reason": "Quality-gate configuration changed; refresh and review again.",
-                "writeAttempted": False,
-            }
-    # Dev uses the fetched entity revision. Promoted realms require Configure,
-    # whose full-replacement values map has no caller-supplied revision field.
     status_code = None
     request_id = None
     transport_issue = False
+    service_error = None
     try:
         disable_writes(root, pending=True)
     except FileExistsError as exc:
@@ -743,25 +1250,8 @@ def save(
             "Another save or validation stop disabled writes; no write was attempted."
         ) from exc
     try:
-        _progress("saving_approved_changes")
-        if promoted:
-            values = copy.deepcopy(plan["state"]["_realmConfiguration"]["values"])
-            values["botName"] = changes["name"]
-            if "gptDisplayName" in values:
-                values["gptDisplayName"] = changes["name"]
-            response = client.session.request(
-                "POST",
-                f"{client.host}/copilotstudio/minimalBots/alm/{plan['target']['agent_id']}/configure",
-                params={"api-version": client.api_version},
-                headers={**client.headers, "Content-Type": "application/json"},
-                json={
-                    "realm": REALM_NAMES[QUALITY_GATES[plan["requestedQualityGate"]]],
-                    "values": values,
-                },
-                timeout=SAVE_TIMEOUT_SECONDS,
-                allow_redirects=False,
-            )
-        elif gpt is not None and gpt["displayName"] != changes["name"]:
+        _progress("saving_approved_changes", properties=list(changes))
+        if gpt is not None and gpt["displayName"] != changes["name"]:
             updated_gpt = copy.deepcopy(gpt)
             updated_gpt["displayName"] = changes["name"]
             response = client.session.request(
@@ -782,6 +1272,8 @@ def save(
         else:
             response = client.update_bot_entity(plan["target"]["agent_id"], bot)
         status_code = response.status_code
+        if status_code >= 400:
+            service_error = _service_error(response)
         request_id = next(
             (
                 response.headers.get(key)
@@ -803,68 +1295,75 @@ def save(
             "writeStopIssue": write_stop_issue,
         }
     results = {field: "unverified" for field in changes}
-    try:
-        _progress("verifying_saved_changes")
-        after, observed_target = read_state(
-            client, current_target, quality_gate=plan["requestedQualityGate"]
+    preserved = False
+    read_back_issue: dict[str, Any] | None = None
+    last_revision: int | None = None
+    observed_state = None
+    for attempt in range(2):
+        _progress(
+            "rechecking_saved_changes" if attempt else "verifying_saved_changes",
+            properties=list(changes),
         )
-        if observed_target != plan["target"]:
-            raise AgentBasicsError("The quality-gate target changed during save verification.")
-        observed_gpt = _gpt_component(after) if "name" in changes else None
-    except (
-        AgentBuilderError,
-        AgentBasicsError,
-        ExistingDASetupError,
-        DAProductRegistryError,
-        requests.RequestException,
-    ) as exc:
-        issue: dict[str, Any] = {"errorType": type(exc).__name__}
-        if isinstance(exc, AgentBuilderHTTPError):
-            issue.update(httpStatus=exc.status_code, requestId=exc.request_id)
-        return {
-            "status": "unverified",
-            "properties": results,
-            "preservation": "unverified",
-            "httpStatus": status_code,
-            "requestId": request_id,
-            "transportIssue": transport_issue,
-            "writesDisabled": True,
-            "readBackIssue": issue,
-            "nextAction": "Writes remain disabled. Establish actual saved/publication state and complete reviewed recovery before considering a retry. No rollback or blind retry.",
-        }
-    observed = after["bot"]
-    # A cached pre-save read does not prove that an uncertain write failed.
-    # Confirm completion only from a later persisted entity revision.
-    later_revision = observed["version"] > plan["state"]["bot"]["version"]
-    if gpt is not None and observed_gpt is not None:
-        if (
-            later_revision
-            and observed.get("displayName") == changes["name"]
-            and observed_gpt["displayName"] == changes["name"]
-        ):
-            results["name"] = "saved"
-        elif (
-            status_code is not None
-            and 400 <= status_code < 500
-            and observed.get("displayName") == plan["state"]["bot"].get("displayName")
-            and observed_gpt["displayName"] == gpt["displayName"]
-        ):
-            results["name"] = "failed"
-    if "logo" in changes:
         try:
-            actual_logo = _logo(observed)
-            expected_logo = _decode(changes["logo"])
-            same = (_png(actual_logo) if actual_logo else b"") == _png(expected_logo)
-        except AgentBasicsError:
-            same = False
-        if later_revision and same:
-            results["logo"] = "saved"
-        elif status_code is not None and 400 <= status_code < 500:
-            results["logo"] = "failed"
-    try:
-        preserved = _preserved(plan["state"], after, changes)
-    except AgentBasicsError:
-        preserved = False
+            after, observed_target = read_state(
+                client, current_target, quality_gate=plan["requestedQualityGate"]
+            )
+            if observed_target != plan["target"]:
+                raise AgentBasicsError(
+                    "The quality-gate target changed during save verification."
+                )
+            if last_revision is not None and after["bot"]["version"] < last_revision:
+                raise AgentBasicsError(
+                    "Save recheck returned an older revision than the first read."
+                )
+            checked_results, preserved, property_issues = _verified_properties(
+                plan, after, status_code
+            )
+            observed_state = after
+        except (
+            AgentBuilderError,
+            AgentBasicsError,
+            ExistingDASetupError,
+            DAProductRegistryError,
+            requests.RequestException,
+        ) as exc:
+            preserved = False
+            read_back_issue = {"errorType": type(exc).__name__}
+            if isinstance(exc, AgentBasicsError):
+                read_back_issue["reason"] = str(exc)
+            if isinstance(exc, AgentBuilderHTTPError):
+                read_back_issue.update(
+                    httpStatus=exc.status_code, requestId=exc.request_id
+                )
+            if not attempt and isinstance(
+                exc, (AgentBuilderError, requests.RequestException)
+            ):
+                continue
+            break
+        read_back_issue = (
+            {"errorType": "PropertyReadBackError", "properties": property_issues}
+            if property_issues
+            else None
+        )
+        for field in property_issues:
+            if results[field] == "saved":
+                checked_results[field] = "saved"
+        changed_after_verification = [
+            field
+            for field, value in results.items()
+            if value == "saved" and checked_results[field] != "saved"
+        ]
+        results = checked_results
+        if changed_after_verification:
+            preserved = False
+            read_back_issue = {
+                "errorType": "StateChangedDuringRecheck",
+                "previouslyVerifiedProperties": changed_after_verification,
+            }
+            break
+        if not preserved or "unverified" not in results.values():
+            break
+        last_revision = after["bot"]["version"]
     writes_disabled = not (
         preserved and all(value in {"saved", "failed"} for value in results.values())
     )
@@ -872,11 +1371,14 @@ def save(
     if not writes_disabled:
         write_stop_issue = _release_pending_write(root)
     writes_disabled = _writes_disabled(root)
-    return {
-        "status": "saved"
+    result = {
+        "status": "unverified"
+        if read_back_issue
+        else "saved"
         if preserved and all(value == "saved" for value in results.values())
         else "unfinished",
         "target": plan["target"],
+        "agentStudioUrl": plan["agentStudioUrl"],
         "properties": results,
         "preservation": "confirmed" if preserved else "unverified",
         "httpStatus": status_code,
@@ -884,19 +1386,121 @@ def save(
         "requestId": request_id,
         "writesDisabled": writes_disabled,
         "writeStopIssue": write_stop_issue,
+        **({"serviceError": service_error} if service_error else {}),
+        **({"readBackIssue": read_back_issue} if read_back_issue else {}),
         "localArtifacts": "Unchanged; schema, folders and setup identity are not renamed.",
         "publication": "Not performed for this change.",
         "approval": "Unverified for this change.",
         "employeeVisibility": "Unverified for this change.",
+        "packageIcons": "Not checked; validate the applicable service-generated app package separately.",
+        "releaseHandoff": {
+            "workflow": "Manage ESS releases from ADK",
+            "status": "not_started",
+            "almFamilyId": plan["target"].get("alm_family_id") or "unverified",
+            "publicationRequired": "unverified",
+            "destination": "unverified",
+            "requiredRole": "unverified",
+        },
         "nextAction": (
-            "Writes remain disabled. Establish actual saved/publication state, "
+            "Writes remain disabled. Establish actual Dev draft state, "
             "resolve any preservation issue and complete reviewed recovery. "
-            "Keep confirmed saves; no rollback or automatic retry."
+            "Keep confirmed saves; no rollback or automatic retry. "
+            "Publication and employee visibility are separate and do not "
+            "block recovery of this authoring operation."
             if writes_disabled
+            else "Dev draft saved and verified. Publication and employee visibility "
+            "are separate; no publication, promotion or deployment was performed."
+            if all(value == "saved" for value in results.values())
             else "Keep confirmed saves. Recheck failed properties and prepare a new "
             "review only for unapplied changes. No rollback or automatic retry."
         ),
     }
+    comparison_results = results
+    if read_back_issue:
+        comparison_results = (
+            {
+                field: value
+                for field, value in results.items()
+                if field not in read_back_issue["properties"]
+            }
+            if "properties" in read_back_issue
+            else {}
+        )
+    if results.get("name") == "unverified" and observed_state:
+        observed_name = observed_state["bot"].get("displayName")
+        if isinstance(observed_name, str):
+            result["observedName"] = {
+                "value": observed_name,
+                "verification": (
+                    "Latest readable display name, not confirmed as matching the "
+                    "approved rename. Do not truncate locally or repeat the write."
+                ),
+            }
+    try:
+        result["comparison"] = _saved_comparison(plan, comparison_results, root)
+        if "logo" in changes and results["logo"] == "unverified" and observed_state:
+            observed_logo = _logo(observed_state["bot"])
+            if observed_logo:
+                source_matches = _image(observed_logo) == _image(
+                    _decode(changes["logo"])
+                )
+                path = _preview_image(
+                    observed_logo, root, plan["reviewId"], "observed-color"
+                )
+                result["observedLogo"] = {
+                    "previewMarkdown": f"![Read-back agent logo]({path.as_uri()})",
+                    "preview": str(path),
+                    "revision": observed_state["bot"]["version"],
+                    "sourceComparison": "matching" if source_matches else "different",
+                    "verification": (
+                        "A DEV logo was read back for review. Its decoded image matches "
+                        "the approved source, but save verification is not complete. "
+                        "Do not repeat the write."
+                        if source_matches
+                        else "A DEV logo was read back for review. Its decoded image "
+                        "differs from the original upload. Image processing can explain "
+                        "a difference, but the cause is not confirmed. This difference "
+                        "alone does not mean the upload failed. Do not repeat the write."
+                    ),
+                }
+    except (OSError, AgentBasicsError) as exc:
+        result["presentationIssue"] = (
+            f"Could not prepare the saved-logo comparison images: {exc}. "
+            "The reported service outcome is unchanged."
+        )
+    if result.get("comparison", {}).get("logo") or result.get("observedLogo"):
+        result["reviewId"] = plan["reviewId"]
+        result["completionPreviewRetained"] = True
+    if (
+        results.get("logo") == "unverified"
+        and all(value == "saved" for field, value in results.items() if field != "logo")
+        and preserved
+        and read_back_issue is None
+        and status_code in (200, 201, 204)
+        and not transport_issue
+        and observed_state
+        and observed_state["bot"]["version"] > plan["state"]["bot"]["version"]
+        and result.get("observedLogo")
+        and not (root / WRITE_STOP_FILE).exists()
+    ):
+        try:
+            record = _record_logo_confirmation(root, plan, observed_state)
+        except OSError:
+            result["confirmationIssue"] = (
+                "ADK could not retain safe logo-confirmation evidence; saves remain paused."
+            )
+        else:
+            result["logoConfirmation"] = {
+                "status": "available",
+                "requestedProperties": record["requestedProperties"],
+            }
+            result["nextAction"] = (
+                "Finish verification now in this update flow. If verified, ask nothing; "
+                "otherwise use the returned confirmation dialog to ask the maker to "
+                "check the requested settings in Copilot Studio using agentStudioUrl. "
+                "Do not show read-back-image confirmation or a maintainer/resume dialog."
+            )
+    return result
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -910,51 +1514,148 @@ def main(argv: list[str] | None = None) -> int:
             "cleanup",
             "disable-writes",
             "resume-writes",
+            "confirm-logo",
+            "validate-package",
+            "validate-icons",
         ),
     )
     parser.add_argument("--name")
-    parser.add_argument("--logo", help="Local 192x192 color PNG.")
+    parser.add_argument(
+        "--logo",
+        help="Readable local source image; the service validates authoring input.",
+    )
+    parser.add_argument(
+        "--color",
+        help="Same source-logo edit as --logo; validate-icons requires a 192x192 PNG.",
+    )
+    parser.add_argument(
+        "--color32x32",
+        help="Local transparent 32x32 color PNG; validate-icons only, not native saving.",
+    )
+    parser.add_argument(
+        "--name-only",
+        action="store_true",
+        help="View only the current name, without inspecting or previewing images.",
+    )
+    parser.add_argument("--package", help="Existing service-generated app-package ZIP.")
     parser.add_argument(
         "--quality-gate",
         type=str.casefold,
         choices=tuple(QUALITY_GATES),
         default="dev",
-        help="Gate to view or rename; logo changes are Dev-only. Default: dev.",
+        help="Gate to view. All edits are Dev-only. Default: dev.",
     )
     parser.add_argument(
         "--outline",
-        help="Unsupported: the platform derives outlines from the --logo source.",
+        help="Local white-on-transparent 32x32 PNG; validate-icons only, not native saving.",
     )
     parser.add_argument(
         "--approval", help="Exact reviewId explicitly approved by the maker."
+    )
+    parser.add_argument(
+        "--decision",
+        choices=("yes", "no"),
+        help="Submitted visual answer about the previous logo; confirm-logo only.",
     )
     parser.add_argument("--account")
     parser.add_argument("--select-account", action="store_true")
     args = parser.parse_args(argv)
     root = Path.cwd()
-    if args.logo is not None and args.quality_gate != "dev":
+    if args.action != "validate-icons" and (
+        args.outline is not None or args.color32x32 is not None
+    ):
+        parser.error(_INDEPENDENT_ICON_LIMITATION)
+    if args.color is not None and args.logo is not None:
+        parser.error("--color and --logo name the same source; use only one")
+    if (
+        args.action in ("preview", "save", "confirm-logo")
+        and args.quality_gate != "dev"
+    ):
+        parser.error(_DEV_ONLY)
+    if (args.action == "confirm-logo") != (args.decision is not None):
         parser.error(
-            "Logo changes are Dev-only. Test and Prod accept name-only changes. "
-            "No write was attempted."
+            "confirm-logo requires --decision yes|no; other actions do not accept it"
         )
-    if args.outline is not None:
-        parser.error(
-            "Independent outline customization is not supported. Use --logo "
-            "for the source image; the platform derives its outline. "
-            "No write was attempted."
-        )
+    if args.name_only and args.action != "view":
+        parser.error("--name-only is supported only by view")
+    if args.action == "validate-package":
+        if not args.package:
+            parser.error("validate-package requires --package PATH")
+        if any(
+            value is not None
+            for value in (
+                args.name,
+                args.logo,
+                args.color,
+                args.outline,
+                args.color32x32,
+                args.approval,
+                args.account,
+            )
+        ) or (args.select_account or args.quality_gate != "dev"):
+            parser.error("validate-package accepts only --package PATH")
+    elif args.package is not None:
+        parser.error("--package is only supported by validate-package")
+    if args.action == "validate-icons":
+        if not any(
+            value is not None for value in (args.color, args.outline, args.color32x32)
+        ):
+            parser.error("validate-icons requires --color, --outline or --color32x32")
+        if any(
+            value is not None
+            for value in (args.name, args.logo, args.approval, args.account)
+        ) or (args.select_account or args.name_only or args.quality_gate != "dev"):
+            parser.error(
+                "validate-icons accepts only --color, --outline and --color32x32"
+            )
     if args.action == "cleanup" and not args.approval:
         parser.error("cleanup requires --approval REVIEW_ID")
-    if args.action in ("view", "resume-writes", "disable-writes") and any(
-        value is not None for value in (args.name, args.logo, args.outline)
+    if args.action in (
+        "view",
+        "resume-writes",
+        "disable-writes",
+        "confirm-logo",
+    ) and any(
+        value is not None for value in (args.name, args.logo, args.color, args.outline)
     ):
         parser.error(f"{args.action} does not accept proposed changes")
-    if args.action in ("save", "resume-writes") and not args.approval:
+    if args.action in ("save", "resume-writes", "confirm-logo") and not args.approval:
         parser.error(f"{args.action} requires the explicitly approved reviewId")
     plan = None
     result: dict[str, Any] = {}
     prefix = "AGENT_BASICS_RESULT_JSON:"
     try:
+        if args.action == "validate-icons":
+            sources = {}
+            for kind, path in (
+                ("color", args.color),
+                ("outline", args.outline),
+                ("color32x32", args.color32x32),
+            ):
+                if path is not None:
+                    sources[kind], _ = _icon_file(path, kind)
+            print(
+                prefix
+                + json.dumps(
+                    {
+                        "status": "validated",
+                        "scope": "provided_local_icon_files_only",
+                        "sources": sources,
+                        "writeAttempted": False,
+                        "publication": "Not performed.",
+                        "nativeSaveUnsupported": [
+                            kind
+                            for kind in ("outline", "color32x32")
+                            if kind in sources
+                        ],
+                    }
+                )
+            )
+            return 0
+        if args.action == "validate-package":
+            result = validate_package(Path(args.package))
+            print(prefix + json.dumps(result))
+            return 0
         cleanup_expired(root)
         if args.action == "cleanup":
             cleanup(root, args.approval)
@@ -994,7 +1695,9 @@ def main(argv: list[str] | None = None) -> int:
             target,
             name=args.name,
             logo=args.logo,
+            color=args.color,
             quality_gate=args.quality_gate,
+            name_only=args.name_only,
         )
         if args.action == "save":
             result = save(
@@ -1004,6 +1707,28 @@ def main(argv: list[str] | None = None) -> int:
                 current_target=selected_target(root),
                 root=root,
             )
+        elif args.action == "confirm-logo":
+            if selected_target(root) != target:
+                raise AgentBasicsError(
+                    "The selected target changed; saves remain paused."
+                )
+            result = confirm_logo(
+                plan, root, approval=args.approval, decision=args.decision
+            )
+            if result["status"] != "review_again":
+                try:
+                    view = review_output(plan, root)
+                except OSError:
+                    result["presentationIssue"] = (
+                        "Could not redisplay the confirmed DEV logo. "
+                        "The reported confirmation outcome is unchanged."
+                    )
+                else:
+                    result.update(
+                        current=view["current"],
+                        reviewId=plan["reviewId"],
+                        completionPreviewRetained=True,
+                    )
         elif args.action == "resume-writes":
             if args.approval != plan["reviewId"] or selected_target(root) != target:
                 result = {
@@ -1021,6 +1746,23 @@ def main(argv: list[str] | None = None) -> int:
                 }
         else:
             result = review_output(plan, root)
+            if args.action == "view":
+                confirmation = logo_confirmation_review(plan, root)
+                if confirmation:
+                    if selected_target(root) != target:
+                        confirmation = {
+                            "status": "blocked",
+                            "reason": "The selected target changed; saves remain paused.",
+                        }
+                    result["logoConfirmation"] = (
+                        confirm_logo(plan, root)
+                        if confirmation["status"] == "verified"
+                        else confirmation
+                    )
+                    if result["logoConfirmation"].get("writeStopIssue"):
+                        result["writeStopIssue"] = result["logoConfirmation"][
+                            "writeStopIssue"
+                        ]
             result["writesDisabled"] = _writes_disabled(root)
         emit_capability_use("agent_basics")
     except (
@@ -1041,6 +1783,15 @@ def main(argv: list[str] | None = None) -> int:
         }
         if isinstance(exc, AgentBuilderHTTPError):
             result.update(httpStatus=exc.status_code, requestId=exc.request_id)
+            if exc.response is not None:
+                result["serviceError"] = _service_error(exc.response)
+            if exc.status_code == 403:
+                result["message"] = (
+                    "The service denied access to the selected agent. Confirm the "
+                    "selected account and use the verified agent/environment "
+                    "access path. Recheck access and current values before a "
+                    "fresh review; no completion is claimed."
+                )
         result["writesDisabled"] = _writes_disabled(root)
         prefix = "AGENT_BASICS_ERROR_JSON:"
     finally:
@@ -1051,7 +1802,11 @@ def main(argv: list[str] | None = None) -> int:
                 plan["reviewId"] if plan and result.get("status") == "blocked" else None
             )
         )
-        if review_id and _REVIEW_ID.fullmatch(review_id):
+        if (
+            review_id
+            and _REVIEW_ID.fullmatch(review_id)
+            and not result.get("completionPreviewRetained")
+        ):
             try:
                 cleanup(root, review_id)
             except OSError:
@@ -1062,7 +1817,16 @@ def main(argv: list[str] | None = None) -> int:
     print(prefix + json.dumps(result, ensure_ascii=True), flush=True)
     return (
         0
-        if result["status"] in ("review", "saved", "no_change", "writes_resumed")
+        if result["status"]
+        in (
+            "review",
+            "saved",
+            "no_change",
+            "writes_resumed",
+            "logo_verified",
+            "logo_confirmed",
+            "logo_not_confirmed",
+        )
         and not result.get("cleanupIssue")
         and not result.get("writeStopIssue")
         else 2
@@ -1123,7 +1887,11 @@ def run_cli(argv: list[str] | None = None) -> int:
         result["preservation"] = "unverified"
         result["properties"] = {
             field: "unverified"
-            for field, option in (("name", "--name"), ("logo", "--logo"))
+            for field, option in (
+                ("name", "--name"),
+                ("logo", "--logo"),
+                ("logo", "--color"),
+            )
             if any(arg == option or arg.startswith(option + "=") for arg in arguments)
         }
     else:

@@ -17,6 +17,7 @@ import multiprocessing
 import os
 import time
 import zlib
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -75,7 +76,7 @@ def encoded(data: bytes) -> str:
 
 
 class Client:
-    def __init__(self, agent_id=AGENT_ID, *, realm=0, schema=SCHEMA):
+    def __init__(self, agent_id=AGENT_ID, *, realm=None, schema=SCHEMA):
         self.agent_id = agent_id
         self.state = {
             "bot": {
@@ -112,7 +113,9 @@ class Client:
             ],
             "changeToken": "current-component-token",
         }
-        self.card = {"botId": agent_id, "realm": realm}
+        self.card = {"botId": agent_id}
+        if realm is not None:
+            self.card["realm"] = realm
         self.configuration = {
             "cdsBotId": agent_id,
             "schemaName": schema,
@@ -129,7 +132,7 @@ class Client:
         self.host = TARGET["host"]
         self.api_version = TARGET["api_version"]
         self.headers = {"Accept": "application/json"}
-        self.session = SimpleNamespace(request=self.update_components)
+        self.session = SimpleNamespace(request=self.request)
         self.component_writes = []
 
     def get_agent(self, agent_id):
@@ -149,35 +152,40 @@ class Client:
     def update_bot_entity(self, agent_id, bot):
         return self._update(agent_id, bot)
 
-    def update_components(self, method, url, **kwargs):
+    def request(self, method, url, **kwargs):
         assert method == "PUT"
-        assert url == f"{self.host}/copilotstudio/minimalBots/api/{self.agent_id}/components"
+        assert url == (
+            f"{self.host}/copilotstudio/minimalBots/api/{self.agent_id}/components"
+        )
         assert kwargs["params"] == {"api-version": basics.NATIVE_ALM_API_VERSION}
         assert kwargs["allow_redirects"] is False
-        body = kwargs["json"]
-        assert len(body["botComponentChanges"]) == 1
-        update = body["botComponentChanges"][0]
-        assert update["$kind"] == "BotComponentUpdate"
-        self.component_writes.append(copy.deepcopy(body))
+        assert kwargs["timeout"] == basics.SAVE_TIMEOUT_SECONDS
+        payload = copy.deepcopy(kwargs["json"])
+        self.component_writes.append(payload)
+        if payload["changeToken"] != self.state["changeToken"]:
+            self.status = 409
         return self._update(
-            self.agent_id, body["bot"], update["component"], body["changeToken"]
+            self.agent_id, payload["bot"], components=payload["botComponentChanges"]
         )
 
-    def _update(self, agent_id, bot, component=None, change_token=None):
+    def _update(self, agent_id, bot, *, components=None):
         assert agent_id == self.agent_id
         self.writes.append(copy.deepcopy(bot))
         if self.apply and self.status == 200:
             # Mirrors CreateBotEntityTransaction's version precondition/increment.
-            if bot["version"] != self.state["bot"]["version"] or (
-                change_token is not None and change_token != self.state["changeToken"]
-            ):
+            if bot["version"] != self.state["bot"]["version"]:
                 self.status = 409
             else:
                 self.state["bot"] = copy.deepcopy(bot)
                 self.state["bot"]["version"] += 1
-                if component is not None:
-                    assert component["id"] == self.state["botComponentChanges"][0]["component"]["id"]
-                    self.state["botComponentChanges"][0]["component"] = copy.deepcopy(component)
+                if components is not None:
+                    assert len(components) == 1
+                    component = components[0]["component"]
+                    assert component["$kind"] == "GptComponent"
+                    current = self.state["botComponentChanges"][0]
+                    assert current["component"]["id"] == component["id"]
+                    current["component"] = copy.deepcopy(component)
+                    self.state["changeToken"] = "next-component-token"
         if self.mutate:
             self.mutate(self.state)
         if self.fail_after_write:
@@ -255,29 +263,10 @@ class QualityClient:
         return self.agents[agent_id].update_bot_entity(agent_id, bot)
 
     def request(self, method, url, **kwargs):
-        if method == "PUT":
-            return self.gates["dev"].update_components(method, url, **kwargs)
-        return self.configure(method, url, **kwargs)
-
-    def configure(self, method, url, **kwargs):
-        self.configuration_requests.append((method, url, copy.deepcopy(kwargs)))
-        assert method == "POST"
-        assert kwargs["allow_redirects"] is False
-        assert kwargs["params"] == {"api-version": self.api_version}
-        assert kwargs["timeout"] == basics.SAVE_TIMEOUT_SECONDS
-        body = kwargs["json"]
-        assert set(body) == {"realm", "values"}
-        gate = body["realm"].casefold()
-        assert gate in {"test", "prod"}
-        agent = self.gates[gate]
-        assert url == f"{self.host}/copilotstudio/minimalBots/alm/{agent.agent_id}/configure"
-        bot = copy.deepcopy(agent.state["bot"])
-        bot["displayName"] = body["values"]["botName"]
-        component = copy.deepcopy(agent.state["botComponentChanges"][0]["component"])
-        component["displayName"] = body["values"].get("gptDisplayName", body["values"]["botName"])
-        if agent.apply and agent.status == 200:
-            agent.configuration["values"] = copy.deepcopy(body["values"])
-        return agent._update(agent.agent_id, bot, component)
+        assert url == (
+            f"{self.host}/copilotstudio/minimalBots/api/{AGENT_ID}/components"
+        ), "Only native Dev authoring is permitted, never promoted Configure writes."
+        return self.gates["dev"].request(method, url, **kwargs)
 
 
 @pytest.fixture
@@ -293,17 +282,38 @@ def logos(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "value",
-    ["", " ", "a" * 31, "\ud800", "\U0001f600" * 31],
+    ("value", "reason"),
+    [
+        ("", "Supply a nonblank"),
+        (" ", "Supply a nonblank"),
+        ("\ud800", "must be valid Unicode"),
+        ("a" * 31, "must not exceed 30 characters"),
+        ("a" * 100, "must not exceed 30 characters"),
+        ("a" * 101, "must not exceed 30 characters"),
+        ("\U0001f600" * 31, "must not exceed 30 characters"),
+        (" " + "a" * 29 + " ", "must not exceed 30 characters"),
+    ],
 )
-def test_invalid_short_names(value):
-    with pytest.raises(basics.AgentBasicsError):
+def test_unusable_name_inputs_are_rejected(value, reason):
+    with pytest.raises(basics.AgentBasicsError, match=reason):
         basics.validate_name(value)
 
 
 @pytest.mark.parametrize(
     "value",
-    ["a" * 30, "People & Support", "\U0001f600" * 30, "Support\u200dDesk", " padded "],
+    [
+        "a" * 29,
+        "a" * 30,
+        "People & Support",
+        "\U0001f600" * 30,
+        "\u754c" * 30,
+        "Support\u200dDesk",
+        " padded ",
+        "Dev",
+        "Test",
+        "Prod",
+        "dev1",
+    ],
 )
 def test_valid_names_are_not_transformed(value):
     assert basics.validate_name(value) == value
@@ -319,18 +329,841 @@ def test_valid_names_are_not_transformed(value):
     ],
     ids=["not-png", "dimensions", "bmp", "truncated"],
 )
-def test_color_png_content_validation(data):
+def test_manifest_color_png_content_validation(data):
     with pytest.raises(basics.AgentBasicsError):
         basics._png(data, size=192)
+
+
+@pytest.mark.parametrize(
+    ("data", "observed"),
+    [(png(64), "64x64"), (png(192, format="BMP"), "BMP")],
+    ids=["wrong-dimensions", "wrong-format"],
+)
+def test_invalid_manifest_icon_explains_the_observed_problem(data, observed):
+    with pytest.raises(basics.AgentBasicsError) as error:
+        basics._png(data, size=192)
+
+    assert observed in str(error.value)
+    assert "192x192" in str(error.value) or "Supply a PNG" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("size", "visible_bounds"),
+    [
+        ((32, 32), (0, 0, 192, 192)),
+        ((256, 128), (0, 48, 192, 144)),
+        ((128, 256), (48, 0, 144, 192)),
+    ],
+)
+def test_logo_review_previews_share_a_canvas_without_distorting_source(
+    tmp_path, client, size, visible_bounds
+):
+    source = tmp_path / "source.png"
+    stream = io.BytesIO()
+    Image.new("RGBA", size, "red").save(stream, format="PNG")
+    data = stream.getvalue()
+    source.write_bytes(data)
+
+    plan = basics.prepare(client, TARGET, logo=str(source))
+    review = basics.review_output(plan, tmp_path)
+    proposed = (
+        tmp_path / basics.PREVIEW_DIRECTORY / f"{review['reviewId']}-proposed-color.png"
+    )
+    with Image.open(review["current"]["colorPreview"]) as current:
+        with Image.open(proposed) as preview:
+            assert current.size == preview.size == (192, 192)
+            assert preview.getchannel("A").getbbox() == visible_bounds
+    details = review["proposed"]["logoDetails"]
+    assert (details["width"], details["height"]) == size
+    assert plan["desired"]["logo"] == encoded(data)
+    assert source.read_bytes() == data
+    assert not client.writes
+
+
+@pytest.mark.parametrize(
+    ("format", "size"),
+    [
+        ("PNG", (32, 32)),
+        ("PNG", (198, 198)),
+        ("PNG", (256, 128)),
+        ("JPEG", (256, 128)),
+        ("BMP", (64, 64)),
+        ("GIF", (192, 192)),
+        ("TIFF", (128, 256)),
+        ("WEBP", (256, 256)),
+    ],
+)
+@pytest.mark.parametrize("combined", [False, True])
+def test_cli_e2e_authoring_defers_logo_dimensions_and_formats_to_service(
+    cli, client, capsys, format, size, combined
+):
+    """The fake service echoes source bytes; this is not format certification."""
+    stream = io.BytesIO()
+    Image.new("RGB" if format == "JPEG" else "RGBA", size, "red").save(
+        stream, format=format
+    )
+    source = stream.getvalue()
+    path = cli / "logo with misleading extension.bin"
+    path.write_bytes(source)
+    proposal = ["--logo", str(path)]
+    name = " Employee Support " + "\U0001f600" * 12
+    if combined:
+        proposal += ["--name", name]
+    assert basics.main(["preview", *proposal]) == 0
+    review = result_json(capsys)
+    assert review["status"] == "review"
+    details = review["proposed"]["logoDetails"]
+    assert (details["width"], details["height"]) == size
+    assert details["format"] == format
+    assert "Proposed agent logo" in review["proposed"]["logoPreviewMarkdown"]
+    assert not client.writes
+    assert basics.main(["save", *proposal, "--approval", review["reviewId"]]) == 0
+    saved = result_json(capsys)
+    assert saved["status"] == "saved"
+    assert client.writes[0]["iconBase64"] == encoded(source)
+    if combined:
+        assert saved["comparison"]["name"]["current"] == name
+        assert client.writes[0]["displayName"] == name
+    image = saved["comparison"]["logo"]["current"]
+    with Image.open(image["preview"]) as preview:
+        assert preview.format == "PNG"
+        assert preview.size == (192, 192)
+    assert path.read_bytes() == source
+    assert basics.main(["cleanup", "--approval", saved["reviewId"]]) == 0
+    assert result_json(capsys)["status"] == "cleaned"
+    assert not Path(image["preview"]).exists()
+    assert path.read_bytes() == source
+
+
+@pytest.mark.parametrize("property", ["name", "logo"])
+def test_cli_e2e_server_transformation_is_not_an_exact_match_or_automatic_retry(
+    cli, client, logos, capsys, property
+):
+    if property == "logo":
+        Path(logos["logo"]).write_bytes(png(198, color="red"))
+        proposal = ["--logo", logos["logo"], "--name", "People Support"]
+        client.mutate = lambda state: state["bot"].update(
+            iconBase64=encoded(png(192, color="red"))
+        )
+    else:
+        proposal = ["--name", "x" * 30]
+
+        def shorten(state):
+            state["bot"]["displayName"] = "x" * 29
+            state["botComponentChanges"][0]["component"]["displayName"] = "x" * 29
+
+        client.mutate = shorten
+    assert basics.main(["preview", *proposal]) == 0
+    review = result_json(capsys)
+    assert basics.main(["save", *proposal, "--approval", review["reviewId"]]) == 2
+    saved = result_json(capsys)
+    assert saved["properties"][property] == "unverified"
+    assert saved["writesDisabled"] is True
+    assert property not in saved["comparison"]
+    if property == "logo":
+        assert saved["properties"]["name"] == "saved"
+        image = saved["observedLogo"]
+        assert Path(image["preview"]).read_bytes() == png(192, color="red")
+        assert image["sourceComparison"] == "different"
+        assert "does not mean the upload failed" in image["verification"]
+        assert "not confirmed" in image["verification"]
+        assert saved["completionPreviewRetained"] is True
+    else:
+        assert saved["observedName"]["value"] == "x" * 29
+    assert basics.main(["save", *proposal, "--approval", review["reviewId"]]) == 2
+    assert result_json(capsys)["writesDisabled"] is True
+    assert len(client.writes) == 1
+
+
+def test_matching_logo_with_unconfirmed_revision_is_not_presented_as_different(
+    client, logos, tmp_path
+):
+    original_revision = client.state["bot"]["version"]
+    client.mutate = lambda state: state["bot"].update(version=original_revision)
+    plan = basics.prepare(client, TARGET, **logos)
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["httpStatus"] == 200
+    assert result["properties"] == {"logo": "unverified"}
+    image = result["observedLogo"]
+    assert image["sourceComparison"] == "matching"
+    assert "matches the approved source" in image["verification"]
+    assert "differs" not in image["verification"]
+    assert "logo" not in result["comparison"]
+    assert result["writesDisabled"] is True
+    assert len(client.writes) == 1
+
+
+@pytest.mark.parametrize("status", [200, 422])
+def test_logo_comparison_does_not_replace_request_outcome(
+    client, logos, tmp_path, status
+):
+    client.status = status
+    client.mutate = lambda state: state["bot"].update(
+        iconBase64=encoded(png(191, color="green"))
+    )
+    plan = basics.prepare(client, TARGET, **logos)
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["httpStatus"] == status
+    assert result["properties"] == {"logo": "unverified"}
+    assert result["observedLogo"]["sourceComparison"] == "different"
+    assert "not confirmed" in result["observedLogo"]["verification"]
+    assert "logo" not in result["comparison"]
+    assert result["writesDisabled"] is True
+    assert len(client.writes) == 1
+
+
+@pytest.mark.parametrize(
+    "ring, origin",
+    [
+        ("prod", "https://copilotstudio.microsoft.com"),
+        ("preprod", "https://copilotstudio.preprod.microsoft.com"),
+        ("test", "https://copilotstudio.test.microsoft.com"),
+    ],
+)
+def test_agent_studio_link_uses_verified_selected_environment_agent_and_ring(
+    client, tmp_path, ring, origin
+):
+    plan = basics.prepare(client, {**TARGET, "ring": ring})
+    expected = (
+        f"{origin}/environments/{TARGET['environment_id']}/bots/{AGENT_ID}/overview"
+    )
+    assert plan["agentStudioUrl"] == expected
+    assert basics.review_output(plan, tmp_path)["agentStudioUrl"] == expected
+
+
+def test_agent_studio_link_does_not_guess_an_unknown_ring(client):
+    with pytest.raises(basics.AgentBasicsError, match="verified Copilot Studio link"):
+        basics.prepare(client, {**TARGET, "ring": "unknown"})
+    assert not client.writes
+
+
+def _save_processed_logo(cli, client, logos, capsys, *, combined=False):
+    Path(logos["logo"]).write_bytes(png(198, color="red"))
+    client.mutate = lambda state: state["bot"].update(
+        iconBase64=encoded(png(192, color="red"))
+    )
+    arguments = ["--logo", logos["logo"]]
+    if combined:
+        arguments += ["--name", "People Support"]
+    assert basics.main(["preview", *arguments]) == 0
+    preview = result_json(capsys)
+    assert basics.main(["save", *arguments, "--approval", preview["reviewId"]]) == 2
+    saved = result_json(capsys)
+    assert saved["logoConfirmation"]["status"] == "available"
+    return saved
+
+
+@pytest.mark.parametrize("decision", ["yes", "no"])
+@pytest.mark.parametrize("combined", [False, True])
+def test_cli_previous_logo_gets_one_confirmation_without_resume_or_repeat_upload(
+    cli, client, logos, capsys, decision, combined
+):
+    _save_processed_logo(cli, client, logos, capsys, combined=combined)
+    evidence = (cli / basics.WRITE_PENDING_FILE).read_text(encoding="utf-8")
+    assert "Preserve exact instructions" not in evidence
+    assert "Employee Support" not in evidence
+    assert encoded(png(192, color="red")) not in evidence
+    assert basics.main(["view"]) == 0
+    view = result_json(capsys)
+    confirmation = view["logoConfirmation"]
+    assert confirmation["status"] == "confirmation_required"
+    assert confirmation["requestedProperties"] == (
+        ["name", "logo"] if combined else ["logo"]
+    )
+    setting = "name and logo" if combined else "logo"
+    dialog = confirmation["dialog"]
+    assert dialog["question"] == f"Did the {setting} update as intended?"
+    assert dialog["description"] == (
+        f"Open your DEV agent in Microsoft Copilot Studio and check the {setting}.\n"
+        + view["agentStudioUrl"]
+    )
+    assert view["agentStudioUrl"].endswith(
+        f"/environments/{TARGET['environment_id']}/bots/{AGENT_ID}/overview"
+    )
+    assert confirmation["reviewId"] != view["reviewId"]
+    if not combined:
+        assert "name" not in dialog["question"]
+        assert "name" not in dialog["description"]
+    assert (
+        basics.main(
+            [
+                "confirm-logo",
+                "--decision",
+                decision,
+                "--approval",
+                confirmation["reviewId"],
+            ]
+        )
+        == 0
+    )
+    resolved = result_json(capsys)
+    assert resolved["status"] == (
+        "logo_confirmed" if decision == "yes" else "logo_not_confirmed"
+    )
+    assert resolved["properties"] == {
+        "logo": "confirmed_by_user" if decision == "yes" else "not_confirmed"
+    }
+    assert resolved["verificationMethod"] == "user_studio_confirmation"
+    assert resolved["agentStudioUrl"] == view["agentStudioUrl"]
+    assert resolved["writesDisabled"] is False
+    assert resolved["writeAttempted"] is False
+    assert len(client.writes) == 1
+    assert client.state["bot"]["iconBase64"] == encoded(png(192, color="red"))
+    if combined:
+        assert client.state["bot"]["displayName"] == "People Support"
+    assert basics.main(["view"]) == 0
+    assert "logoConfirmation" not in result_json(capsys)
+
+    client.mutate = None
+    Path(logos["logo"]).write_bytes(png(192, color="green"))
+    assert basics.main(["preview", "--logo", logos["logo"]]) == 0
+    replacement = result_json(capsys)
+    assert len(client.writes) == 1
+    assert (
+        basics.main(
+            ["save", "--logo", logos["logo"], "--approval", replacement["reviewId"]]
+        )
+        == 0
+    )
+    assert result_json(capsys)["properties"] == {"logo": "saved"}
+    assert len(client.writes) == 2
+    assert client.writes[-1]["iconBase64"] == encoded(png(192, color="green"))
+
+
+def test_cli_later_exact_logo_match_resolves_pause_without_user_confirmation(
+    cli, client, logos, capsys
+):
+    _save_processed_logo(cli, client, logos, capsys)
+    client.state["bot"].update(
+        iconBase64=encoded(png(198, color="red")),
+        version=client.state["bot"]["version"] + 1,
+    )
+    assert basics.main(["view"]) == 0
+    result = result_json(capsys)
+    assert result["logoConfirmation"]["status"] == "logo_verified"
+    assert result["logoConfirmation"]["properties"] == {"logo": "saved"}
+    assert result["logoConfirmation"]["verificationMethod"] == "api_exact_match"
+    assert "dialog" not in result["logoConfirmation"]
+    assert result["logoConfirmation"]["writeAttempted"] is False
+    assert result["writesDisabled"] is False
+    assert len(client.writes) == 1
+    assert basics.main(["view"]) == 0
+    assert "logoConfirmation" not in result_json(capsys)
+
+
+def test_cli_verified_logo_save_never_offers_another_confirmation(
+    cli, client, logos, capsys
+):
+    assert basics.main(["preview", "--logo", logos["logo"]]) == 0
+    preview = result_json(capsys)
+    assert (
+        basics.main(
+            ["save", "--logo", logos["logo"], "--approval", preview["reviewId"]]
+        )
+        == 0
+    )
+    saved = result_json(capsys)
+    assert saved["status"] == "saved"
+    assert "logoConfirmation" not in saved
+    assert basics.main(["view"]) == 0
+    assert "logoConfirmation" not in result_json(capsys)
+
+
+def test_cli_previous_logo_answer_is_invalidated_by_a_changed_review(
+    cli, client, logos, capsys
+):
+    _save_processed_logo(cli, client, logos, capsys)
+    assert basics.main(["view"]) == 0
+    confirmation = result_json(capsys)["logoConfirmation"]
+    client.state["bot"].update(
+        iconBase64=encoded(png(192, color="green")),
+        version=client.state["bot"]["version"] + 1,
+    )
+    assert (
+        basics.main(
+            [
+                "confirm-logo",
+                "--decision",
+                "yes",
+                "--approval",
+                confirmation["reviewId"],
+            ]
+        )
+        == 2
+    )
+    result = result_json(capsys)
+    assert result["status"] == "review_again"
+    assert result["writesDisabled"] is True
+    assert len(client.writes) == 1
+    assert basics.main(["view"]) == 0
+    refreshed = result_json(capsys)["logoConfirmation"]
+    assert refreshed["status"] == "confirmation_required"
+    assert refreshed["reviewId"] != confirmation["reviewId"]
+
+
+@pytest.mark.parametrize(
+    "issue",
+    [
+        "instructions",
+        "selection",
+        "unreadable",
+        "hard-stop",
+        "legacy",
+        "malformed",
+        "older",
+    ],
+)
+def test_cli_logo_confirmation_cannot_clear_unrelated_or_unproven_pauses(
+    cli, client, logos, capsys, monkeypatch, issue
+):
+    _save_processed_logo(cli, client, logos, capsys)
+    assert basics.main(["view"]) == 0
+    confirmation = result_json(capsys)["logoConfirmation"]
+    if issue == "instructions":
+        client.state["bot"]["configuration"]["instructions"] = "Unexpected"
+    elif issue == "selection":
+        selected = basics.selected_target(cli)
+        monkeypatch.setattr(
+            basics,
+            "selected_target",
+            lambda root: {**selected, "workspace_fingerprint": "another selection"},
+        )
+    elif issue == "unreadable":
+        client.state["bot"]["iconBase64"] = "invalid"
+    elif issue == "hard-stop":
+        basics.disable_writes(cli)
+    elif issue == "legacy":
+        (cli / basics.WRITE_PENDING_FILE).write_text(
+            "Agent Basics writes are stopped.", encoding="utf-8"
+        )
+    elif issue == "malformed":
+        (cli / basics.WRITE_PENDING_FILE).write_text('{"kind":', encoding="utf-8")
+    else:
+        client.state["bot"]["version"] -= 1
+    assert (
+        basics.main(
+            [
+                "confirm-logo",
+                "--decision",
+                "yes",
+                "--approval",
+                confirmation["reviewId"],
+            ]
+        )
+        == 2
+    )
+    result = result_json(capsys)
+    assert result["status"] == "blocked"
+    assert result["writesDisabled"] is True
+    assert basics._writes_disabled(cli)
+    assert len(client.writes) == 1
+
+
+@pytest.mark.parametrize(
+    "issue", ["rejection", "transport", "preservation", "revision"]
+)
+def test_logo_confirmation_is_not_offered_without_safe_completed_save_evidence(
+    client, logos, tmp_path, issue
+):
+    def mutate(state):
+        state["bot"]["iconBase64"] = encoded(png(191, color="green"))
+        if issue == "preservation":
+            state["bot"]["configuration"]["instructions"] = "Unexpected"
+        if issue == "revision":
+            state["bot"]["version"] -= 1
+
+    client.mutate = mutate
+    client.status = 422 if issue == "rejection" else 200
+    client.timeout = issue == "transport"
+    plan = basics.prepare(client, TARGET, **logos)
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert "logoConfirmation" not in result
+    assert result["writesDisabled"] is True
+    assert basics._writes_disabled(tmp_path)
+    assert len(client.writes) == 1
+
+
+def test_confirmation_evidence_failure_keeps_pause_and_reports_reason(
+    client, logos, tmp_path, monkeypatch
+):
+    client.mutate = lambda state: state["bot"].update(
+        iconBase64=encoded(png(191, color="green"))
+    )
+
+    def unavailable(*args):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(basics, "_record_logo_confirmation", unavailable)
+    plan = basics.prepare(client, TARGET, **logos)
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert "logoConfirmation" not in result
+    assert result["confirmationIssue"]
+    assert result["writesDisabled"] is True
+    assert len(client.writes) == 1
+
+
+def test_cli_automatic_logo_verification_reports_a_local_release_failure(
+    cli, client, logos, capsys, monkeypatch
+):
+    _save_processed_logo(cli, client, logos, capsys)
+    client.state["bot"]["iconBase64"] = encoded(png(198, color="red"))
+    unlink = Path.unlink
+
+    def locked(path, *args, **kwargs):
+        if path == cli / basics.WRITE_PENDING_FILE:
+            raise PermissionError("locked")
+        return unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", locked)
+    assert basics.main(["view"]) == 2
+    result = result_json(capsys)
+    assert result["logoConfirmation"]["status"] == "logo_verified"
+    assert result["writeStopIssue"]
+    assert result["writesDisabled"] is True
+    assert len(client.writes) == 1
+
+
+def test_automatic_logo_verification_cannot_clear_a_changed_workspace_selection(
+    cli, client, logos, capsys, monkeypatch
+):
+    _save_processed_logo(cli, client, logos, capsys)
+    client.state["bot"]["iconBase64"] = encoded(png(198, color="red"))
+    selected = basics.selected_target(cli)
+    selections = 0
+
+    def changes_after_read(root):
+        nonlocal selections
+        selections += 1
+        return (
+            selected
+            if selections == 1
+            else {**selected, "workspace_fingerprint": "changed during view"}
+        )
+
+    monkeypatch.setattr(basics, "selected_target", changes_after_read)
+    assert basics.main(["view"]) == 0
+    result = result_json(capsys)
+    assert result["logoConfirmation"]["status"] == "blocked"
+    assert result["writesDisabled"] is True
+    assert basics._writes_disabled(cli)
+    assert len(client.writes) == 1
+
+
+def test_failed_logo_recheck_does_not_offer_confirmation_of_an_earlier_read(
+    client, logos, tmp_path, monkeypatch
+):
+    client.mutate = lambda state: state["bot"].update(
+        iconBase64=encoded(png(191, color="green"))
+    )
+    plan = basics.prepare(client, TARGET, **logos)
+    read_state = basics.read_state
+    post_write_reads = 0
+
+    def fails_on_recheck(*args, **kwargs):
+        nonlocal post_write_reads
+        if client.writes:
+            post_write_reads += 1
+            if post_write_reads == 2:
+                raise AgentBuilderHTTPError("read", 403)
+        return read_state(*args, **kwargs)
+
+    monkeypatch.setattr(basics, "read_state", fails_on_recheck)
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["readBackIssue"]["httpStatus"] == 403
+    assert "observedLogo" in result
+    assert "logoConfirmation" not in result
+    assert result["writesDisabled"] is True
+    assert len(client.writes) == 1
+
+
+def test_later_logo_verification_does_not_discard_a_requested_replacement(
+    cli, client, logos, capsys
+):
+    _save_processed_logo(cli, client, logos, capsys)
+    assert basics.main(["view"]) == 0
+    confirmation = result_json(capsys)["logoConfirmation"]
+    client.state["bot"]["iconBase64"] = encoded(png(198, color="red"))
+    assert (
+        basics.main(
+            ["confirm-logo", "--decision", "no", "--approval", confirmation["reviewId"]]
+        )
+        == 0
+    )
+    result = result_json(capsys)
+    assert result["status"] == "logo_verified"
+    assert result["replacementRequested"] is True
+    assert "Offer a replacement" in result["nextAction"]
+    assert result["writesDisabled"] is False
+    assert len(client.writes) == 1
+
+
+def test_logo_confirmation_is_retained_when_redisplaying_fails(
+    cli, client, logos, capsys, monkeypatch
+):
+    _save_processed_logo(cli, client, logos, capsys)
+    assert basics.main(["view"]) == 0
+    confirmation = result_json(capsys)["logoConfirmation"]
+
+    def unavailable(*args):
+        raise PermissionError("preview storage locked")
+
+    monkeypatch.setattr(basics, "review_output", unavailable)
+    assert (
+        basics.main(
+            [
+                "confirm-logo",
+                "--decision",
+                "yes",
+                "--approval",
+                confirmation["reviewId"],
+            ]
+        )
+        == 0
+    )
+    result = result_json(capsys)
+    assert result["status"] == "logo_confirmed"
+    assert result["properties"] == {"logo": "confirmed_by_user"}
+    assert result["presentationIssue"]
+    assert result["writesDisabled"] is False
+    assert result["writeAttempted"] is False
+    assert len(client.writes) == 1
+
+
+def test_name_only_view_discovers_prior_logo_confirmation_without_image_work(
+    cli, client, logos, capsys, monkeypatch
+):
+    _save_processed_logo(cli, client, logos, capsys)
+
+    def no_images(*args, **kwargs):
+        raise AssertionError("A name-only read must not inspect previous logo images")
+
+    monkeypatch.setattr(basics, "_image", no_images)
+    monkeypatch.setattr(basics, "_preview_image", no_images)
+    assert basics.main(["view", "--name-only"]) == 0
+    result = result_json(capsys)
+    assert result["logoConfirmation"]["status"] == "available"
+    assert "logo" not in result["current"]
+    assert result["writesDisabled"] is True
+    assert len(client.writes) == 1
+
+
+def test_existing_logo_confirmation_record_gets_a_studio_link_without_guessing_scope(
+    cli, client, logos, capsys
+):
+    _save_processed_logo(cli, client, logos, capsys, combined=True)
+    path = cli / basics.WRITE_PENDING_FILE
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record.pop("requestedProperties")
+    path.write_text(json.dumps(record), encoding="utf-8")
+    assert basics.main(["view"]) == 0
+    result = result_json(capsys)
+    confirmation = result["logoConfirmation"]
+    assert confirmation["status"] == "confirmation_required"
+    assert confirmation["requestedProperties"] == ["logo"]
+    assert confirmation["dialog"]["question"] == "Did the logo update as intended?"
+    assert result["agentStudioUrl"] in confirmation["dialog"]["description"]
+    assert result["writesDisabled"] is True
+    assert len(client.writes) == 1
+
+
+@pytest.mark.parametrize("length", [31, 100, 101])
+@pytest.mark.parametrize("combined", [False, True])
+@pytest.mark.parametrize("action", ["preview", "save"])
+def test_cli_rejects_over_limit_names_before_reading_or_writing(
+    cli, client, logos, capsys, monkeypatch, length, combined, action
+):
+    def unexpected(*args, **kwargs):
+        pytest.fail("An over-limit proposal must be rejected before service reads")
+
+    monkeypatch.setattr(basics, "read_state", unexpected)
+    proposal = ["--name", "N" * length]
+    if combined:
+        proposal += ["--logo", logos["logo"]]
+    if action == "save":
+        proposal += ["--approval", "a" * 64]
+    assert basics.main([action, *proposal]) == 2
+    result = result_json(capsys)
+    assert result["status"] == "blocked"
+    assert result["message"] == (
+        "Agent name must not exceed 30 characters. "
+        f"You entered {length} characters. Enter a shorter name."
+    )
+    assert result["writesDisabled"] is False
+    assert not client.writes
+    assert not (cli / basics.WRITE_PENDING_FILE).exists()
+
+
+def test_existing_over_limit_name_remains_viewable_and_allows_logo_only_edits(
+    cli, client, logos, capsys
+):
+    name = "Existing " + "N" * 31
+    client.state["bot"]["displayName"] = name
+    client.state["botComponentChanges"][0]["component"]["displayName"] = name
+    assert basics.main(["view", "--name-only"]) == 0
+    assert result_json(capsys)["current"] == {"name": name}
+    assert basics.main(["preview", "--logo", logos["logo"]]) == 0
+    review = result_json(capsys)
+    assert (
+        basics.main(["save", "--logo", logos["logo"], "--approval", review["reviewId"]])
+        == 0
+    )
+    assert result_json(capsys)["properties"] == {"logo": "saved"}
+    assert client.state["bot"]["displayName"] == name
+    assert client.state["botComponentChanges"][0]["component"]["displayName"] == name
+
+
+def test_cli_e2e_name_at_limit_preserves_exact_text_without_image_work(
+    cli, client, capsys, monkeypatch
+):
+    name = "  People Support " + "\U0001f600" * 11 + "  "
+    client.state["bot"]["iconBase64"] = "unreadable image"
+
+    def no_images(*args, **kwargs):
+        raise AssertionError("A rename must not inspect or preview images")
+
+    monkeypatch.setattr(basics, "_image", no_images)
+    monkeypatch.setattr(basics, "_preview_image", no_images)
+    assert basics.main(["preview", "--name", name]) == 0
+    review = result_json(capsys)
+    assert basics.main(["save", "--name", name, "--approval", review["reviewId"]]) == 0
+    saved = result_json(capsys)
+    assert saved["properties"] == {"name": "saved"}
+    assert saved["comparison"]["name"]["current"] == name
+    assert client.writes[0]["displayName"] == name
+    assert "observedLogo" not in saved
+    assert not (cli / basics.PREVIEW_DIRECTORY).exists()
+
+
+@pytest.mark.parametrize("status", [413, 415, 422])
+def test_service_validation_error_preserves_reason_without_inner_details(status):
+    response = requests.Response()
+    response.status_code = status
+    response._content = json.dumps(
+        {
+            "error": {
+                "code": "InvalidImage",
+                "message": "The provided image is not supported by this service.",
+                "innererror": {"message": "private implementation detail"},
+            }
+        }
+    ).encode()
+    assert basics._service_error(response) == {
+        "httpStatus": status,
+        "code": "InvalidImage",
+        "message": "The provided image is not supported by this service.",
+    }
+
+
+@pytest.mark.parametrize("content", [b"<html>Internal server error</html>", b"[]"])
+def test_unstructured_service_errors_do_not_expose_raw_bodies(content):
+    response = requests.Response()
+    response.status_code = 400
+    response._content = content
+    assert basics._service_error(response) == {"httpStatus": 400}
+
+
+@pytest.mark.parametrize("operation", ["name", "logo", "both"])
+def test_cli_e2e_server_rejection_reports_safe_reason_and_preserves_settings(
+    cli, client, logos, capsys, operation, monkeypatch
+):
+    before = copy.deepcopy(client.state)
+    client.status = 400
+    client.apply = False
+    update = client._update
+
+    def rejected(*args, **kwargs):
+        response = update(*args, **kwargs)
+        response._content = json.dumps(
+            {
+                "error": {
+                    "code": "InvalidAuthoringValue",
+                    "message": (
+                        "The supplied value does not meet the service requirement. "
+                        "Authorization: Bearer private-token "
+                        "See https://service.example/?token=private "
+                        "contact@example.com"
+                    ),
+                    "innererror": {"stack": "MUST NOT BE RETURNED"},
+                }
+            }
+        ).encode()
+        return response
+
+    monkeypatch.setattr(client, "_update", rejected)
+    proposal = _branding_arguments(operation, logos)
+    assert basics.main(["preview", *proposal]) == 0
+    review = result_json(capsys)
+    assert basics.main(["save", *proposal, "--approval", review["reviewId"]]) == 2
+    saved = result_json(capsys)
+    assert set(saved["properties"].values()) == {"failed"}
+    error = saved["serviceError"]
+    assert error["code"] == "InvalidAuthoringValue"
+    assert "does not meet the service requirement" in error["message"]
+    rendered = json.dumps(error)
+    assert "private-token" not in rendered
+    assert "https://" not in rendered
+    assert "contact@example.com" not in rendered
+    assert "MUST NOT BE RETURNED" not in rendered
+    assert saved["requestId"] == "save-request"
+    assert saved["comparison"] == {}
+    assert client.state == before
+    assert len(client.writes) == 1
+
+
+@pytest.mark.parametrize(
+    ("icon", "stage", "value"),
+    [
+        (encoded(png(192)), "current_property_loaded", "confirmed"),
+        (None, "current_property_loaded", "none"),
+        ("not base64", "current_property_unavailable", None),
+    ],
+    ids=["loaded", "empty", "unreadable"],
+)
+def test_current_name_is_available_before_logo_inspection(
+    client, monkeypatch, icon, stage, value
+):
+    client.state["bot"]["iconBase64"] = icon
+    events = []
+    monkeypatch.setattr(
+        basics, "_progress", lambda stage, **details: events.append((stage, details))
+    )
+    inspect_logo = basics._logo
+
+    def inspect_after_name(bot):
+        assert (
+            "current_property_loaded",
+            {"property": "name", "value": "Employee Support"},
+        ) in events
+        assert events[-1] == ("reading_current_logo", {})
+        return inspect_logo(bot)
+
+    monkeypatch.setattr(basics, "_logo", inspect_after_name)
+    basics.prepare(client, TARGET)
+
+    assert events[-1][0] == stage
+    assert events[-1][1]["property"] == "logo"
+    if value is not None:
+        assert events[-1][1]["value"] == value
+    else:
+        assert "reason" in events[-1][1]
+    assert not client.writes
 
 
 def test_valid_png_over_one_mib_is_saved_without_conversion(client, tmp_path):
     metadata = PngImagePlugin.PngInfo()
     metadata.add_text("Description", "x" * (1024 * 1024))
     stream = io.BytesIO()
-    Image.new("RGBA", (192, 192), "red").save(
-        stream, format="PNG", pnginfo=metadata
-    )
+    Image.new("RGBA", (192, 192), "red").save(stream, format="PNG", pnginfo=metadata)
     data = stream.getvalue()
     assert len(data) > 1024 * 1024
     source = tmp_path / "large.png"
@@ -389,15 +1222,15 @@ def test_animation_changes_are_compared_and_verified(client, tmp_path, change):
 def test_corrupt_later_png_frame_is_rejected():
     data = animated_png()
     offset = data.index(b"fdAT")
-    length = int.from_bytes(data[offset - 4:offset], "big")
-    payload = data[offset + 4:offset + 8] + b"invalid compressed frame"
+    length = int.from_bytes(data[offset - 4 : offset], "big")
+    payload = data[offset + 4 : offset + 8] + b"invalid compressed frame"
     chunk = b"fdAT" + payload
     corrupted = (
-        data[:offset - 4]
+        data[: offset - 4]
         + len(payload).to_bytes(4, "big")
         + chunk
         + zlib.crc32(chunk).to_bytes(4, "big")
-        + data[offset + length + 8:]
+        + data[offset + length + 8 :]
     )
     with pytest.raises(basics.AgentBasicsError, match="fully decoded"):
         basics._png(corrupted, size=192)
@@ -426,8 +1259,12 @@ def test_save_preserves_full_entity_and_components(client, logos, properties, tm
     assert written["teamsAppInformation"]["teams"]["colorIcon"] == "retained"
     assert plan["state"] == before
     expected_components = copy.deepcopy(before["botComponentChanges"])
-    if "name" in kwargs:
+    if properties in ("name", "both"):
         expected_components[0]["component"]["displayName"] = kwargs["name"]
+        assert len(client.component_writes) == 1
+        assert client.component_writes[0]["changeToken"] == before["changeToken"]
+    else:
+        assert not client.component_writes
     assert client.state["botComponentChanges"] == expected_components
     assert result["publication"] == "Not performed for this change."
     assert result["employeeVisibility"] == "Unverified for this change."
@@ -477,10 +1314,19 @@ def test_review_drift_invalidates_approval(client, logos, tmp_path):
     assert changed_source["reviewId"] != refreshed["reviewId"]
 
 
-def test_save_point_version_conflict_does_not_retry(client, tmp_path):
+@pytest.mark.parametrize("component_update", [False, True])
+def test_save_point_version_conflict_does_not_retry(client, tmp_path, component_update):
+    if not component_update:
+        client.state["botComponentChanges"][0]["component"]["displayName"] = "New Name"
     plan = basics.prepare(client, TARGET, name="New Name")
-    client.state["bot"]["version"] += 1
-    client.state["bot"]["displayName"] = "Concurrent rename"
+    original_update = client._update
+
+    def race(agent_id, bot, **kwargs):
+        client.state["bot"]["version"] += 1
+        client.state["bot"]["displayName"] = "Concurrent rename"
+        return original_update(agent_id, bot, **kwargs)
+
+    client._update = race
     result = basics.save(
         client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
     )
@@ -504,6 +1350,38 @@ def test_rejected_saves_are_not_success_or_retried(client, status, tmp_path):
     assert len(client.writes) == 1
 
 
+@pytest.mark.parametrize("readback", ["unreadable", "changed", "unchanged_pixels"])
+def test_rejected_logo_save_requires_readable_unchanged_state_to_prove_failure(
+    client, logos, tmp_path, readback
+):
+    client.status = 403
+    before = basics._decode(client.state["bot"]["iconBase64"])
+    if readback == "unchanged_pixels":
+        stream = io.BytesIO()
+        with Image.open(io.BytesIO(before)) as image:
+            image.save(stream, format="PNG", compress_level=0)
+        value = encoded(stream.getvalue())
+        assert value != encoded(before)
+    else:
+        value = (
+            "invalid base64"
+            if readback == "unreadable"
+            else encoded(png(192, color="green"))
+        )
+    client.mutate = lambda state: state["bot"].update(iconBase64=value)
+    plan = basics.prepare(client, TARGET, **logos)
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    proven_failed = readback == "unchanged_pixels"
+    assert result["properties"] == {"logo": "failed" if proven_failed else "unverified"}
+    assert result["writesDisabled"] is not proven_failed
+    assert result["status"] != "saved"
+    assert len(client.writes) == 1
+    if readback == "unreadable":
+        assert "logo" in result["readBackIssue"]["properties"]
+
+
 @pytest.mark.parametrize("applied", [True, False])
 def test_timeout_readback_without_resending(client, applied, tmp_path):
     client.timeout = True
@@ -518,8 +1396,17 @@ def test_timeout_readback_without_resending(client, applied, tmp_path):
     assert basics._writes_disabled(tmp_path) is not applied
 
 
-def test_readback_denial_remains_unverified(client, tmp_path):
+def test_readback_denial_remains_unverified(client, tmp_path, monkeypatch):
     client.fail_after_write = True
+    reads = []
+    get_agent = client.get_agent
+
+    def count_readback(agent_id):
+        if client.writes:
+            reads.append(agent_id)
+        return get_agent(agent_id)
+
+    monkeypatch.setattr(client, "get_agent", count_readback)
     plan = basics.prepare(client, TARGET, name="New Name")
     result = basics.save(
         client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
@@ -532,6 +1419,99 @@ def test_readback_denial_remains_unverified(client, tmp_path):
     assert len(client.writes) == 1
     assert result["writesDisabled"] is True
     assert basics._writes_disabled(tmp_path)
+    assert reads == [AGENT_ID, AGENT_ID]
+    assert "Establish actual Dev draft state" in result["nextAction"]
+    assert "do not block recovery of this authoring operation" in result["nextAction"]
+
+
+@pytest.mark.parametrize("first_read", ["unavailable", "stale", "partial"])
+def test_uncertain_save_rechecks_read_only_before_completing(
+    client, logos, tmp_path, monkeypatch, capsys, first_read
+):
+    before = copy.deepcopy(client.state)
+    plan = basics.prepare(client, TARGET, name="New Name", **logos)
+    fetch = client.fetch_components
+    reads = []
+
+    def readback(agent_id):
+        state = fetch(agent_id)
+        if client.writes:
+            reads.append(agent_id)
+            if len(reads) == 1:
+                if first_read == "unavailable":
+                    raise AgentBuilderHTTPError(
+                        "read", 503, request_id="read-back-request"
+                    )
+                if first_read == "stale":
+                    return copy.deepcopy(before)
+                state["bot"]["iconBase64"] = before["bot"]["iconBase64"]
+        return state
+
+    monkeypatch.setattr(client, "fetch_components", readback)
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+
+    assert result["status"] == "saved"
+    assert result["properties"] == {"name": "saved", "logo": "saved"}
+    assert result["preservation"] == "confirmed"
+    assert "readBackIssue" not in result
+    assert reads == [AGENT_ID, AGENT_ID]
+    assert len(client.writes) == len(client.component_writes) == 1
+    assert not basics._writes_disabled(tmp_path)
+    assert '"stage": "rechecking_saved_changes"' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("second_read", ["unavailable", "stale", "changed_name"])
+def test_inconclusive_recheck_stops_without_repeating_or_undoing_saves(
+    client, logos, tmp_path, monkeypatch, second_read
+):
+    before = copy.deepcopy(client.state)
+    plan = basics.prepare(client, TARGET, name="New Name", **logos)
+    fetch = client.fetch_components
+    reads = []
+
+    def readback(agent_id):
+        state = fetch(agent_id)
+        if client.writes:
+            reads.append(agent_id)
+            if len(reads) == 1:
+                state["bot"]["iconBase64"] = before["bot"]["iconBase64"]
+            elif second_read == "unavailable":
+                raise AgentBuilderHTTPError("read", 403, request_id="recheck-request")
+            elif second_read == "stale":
+                return copy.deepcopy(before)
+            else:
+                state["bot"].update(displayName="Concurrent name", version=6)
+                state["botComponentChanges"][0]["component"]["displayName"] = (
+                    "Concurrent name"
+                )
+        return state
+
+    monkeypatch.setattr(client, "fetch_components", readback)
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+
+    assert result["status"] == "unverified"
+    assert result["preservation"] == "unverified"
+    assert reads == [AGENT_ID, AGENT_ID]
+    assert len(client.writes) == len(client.component_writes) == 1
+    assert result["writesDisabled"] is True
+    assert basics._writes_disabled(tmp_path)
+    if second_read == "changed_name":
+        assert result["properties"] == {"name": "unverified", "logo": "saved"}
+        assert result["readBackIssue"] == {
+            "errorType": "StateChangedDuringRecheck",
+            "previouslyVerifiedProperties": ["name"],
+        }
+    else:
+        assert result["properties"] == {"name": "saved", "logo": "unverified"}
+        if second_read == "unavailable":
+            assert result["readBackIssue"]["httpStatus"] == 403
+            assert result["readBackIssue"]["requestId"] == "recheck-request"
+        else:
+            assert "older revision" in result["readBackIssue"]["reason"]
 
 
 def test_readback_without_newer_revision_cannot_confirm_save(client, tmp_path):
@@ -555,17 +1535,92 @@ def test_malformed_readback_remains_unverified(client, tmp_path):
     assert len(client.writes) == 1
 
 
-def test_partial_success_retry_omits_confirmed_name(client, logos, tmp_path):
-    original_logo = client.state["bot"]["iconBase64"]
-    client.mutate = lambda state: state["bot"].update(iconBase64=original_logo)
+@pytest.mark.parametrize("unapplied", ["name", "logo"])
+def test_partial_success_retry_omits_confirmed_property(
+    client, logos, tmp_path, unapplied
+):
+    original = copy.deepcopy(client.state)
+
+    def restore_unapplied(state):
+        if unapplied == "logo":
+            state["bot"]["iconBase64"] = original["bot"]["iconBase64"]
+        else:
+            state["bot"]["displayName"] = original["bot"]["displayName"]
+            state["botComponentChanges"][0]["component"]["displayName"] = original[
+                "botComponentChanges"
+            ][0]["component"]["displayName"]
+
+    client.mutate = restore_unapplied
     plan = basics.prepare(client, TARGET, name="New Name", **logos)
     result = basics.save(
         client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
     )
     assert result["status"] == "unfinished"
-    assert result["properties"] == {"name": "saved", "logo": "unverified"}
+    assert result["properties"] == {
+        field: "unverified" if field == unapplied else "saved"
+        for field in ("name", "logo")
+    }
     recheck = basics.prepare(client, TARGET, name="New Name", **logos)
-    assert set(recheck["changes"]) == {"logo"}
+    assert set(recheck["changes"]) == {unapplied}
+    assert len(client.writes) == 1
+
+
+@pytest.mark.parametrize(
+    "fault", ["component", "component_id", "chat_name", "bot_name"]
+)
+def test_unreadable_name_does_not_hide_independently_verified_logo(
+    client, logos, tmp_path, fault
+):
+    def unreadable_name(state):
+        if fault == "component":
+            state["botComponentChanges"] = []
+        elif fault == "component_id":
+            state["botComponentChanges"][0]["component"]["id"] = "not-a-guid"
+        elif fault == "chat_name":
+            state["botComponentChanges"][0]["component"]["displayName"] = None
+        else:
+            del state["bot"]["displayName"]
+
+    client.mutate = unreadable_name
+    plan = basics.prepare(client, TARGET, name="New Name", **logos)
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["status"] == "unverified"
+    assert result["properties"] == {"name": "unverified", "logo": "saved"}
+    assert "name" in result["readBackIssue"]["properties"]
+    assert set(result["comparison"]) == {"logo"}
+    assert result["writesDisabled"] is True
+    assert len(client.writes) == 1
+
+
+def test_unreadable_name_on_recheck_retains_earlier_confirmation(
+    client, logos, tmp_path, monkeypatch
+):
+    original_logo = client.state["bot"]["iconBase64"]
+    fetch = client.fetch_components
+    reads = []
+
+    def readback(agent_id):
+        state = fetch(agent_id)
+        if client.writes:
+            reads.append(agent_id)
+            if len(reads) == 1:
+                state["bot"]["iconBase64"] = original_logo
+            else:
+                state["botComponentChanges"][0]["component"]["displayName"] = None
+        return state
+
+    monkeypatch.setattr(client, "fetch_components", readback)
+    plan = basics.prepare(client, TARGET, name="New Name", **logos)
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["status"] == "unverified"
+    assert result["properties"] == {"name": "saved", "logo": "saved"}
+    assert "name" in result["readBackIssue"]["properties"]
+    assert result["writesDisabled"] is True
+    assert reads == [AGENT_ID, AGENT_ID]
     assert len(client.writes) == 1
 
 
@@ -574,7 +1629,7 @@ def test_partial_success_retry_omits_confirmed_name(client, logos, tmp_path):
 )
 @pytest.mark.parametrize("operation", ["name", "logo"])
 def test_unrequested_mutation_is_not_reported_complete(
-    client, logos, field, tmp_path, operation
+    client, logos, field, tmp_path, operation, capsys
 ):
     def mutate(state):
         if field == "instructions":
@@ -592,12 +1647,15 @@ def test_unrequested_mutation_is_not_reported_complete(
     result = basics.save(
         client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
     )
-    missing_chat = operation == "name" and field == "components"
-    assert result["properties"][operation] == ("unverified" if missing_chat else "saved")
+    unreadable_name = operation == "name" and field == "components"
+    assert result["properties"][operation] == (
+        "unverified" if unreadable_name else "saved"
+    )
     assert result["preservation"] == "unverified"
-    assert result["status"] == ("unverified" if missing_chat else "unfinished")
+    assert result["status"] == ("unverified" if unreadable_name else "unfinished")
     assert result["writesDisabled"] is True
     assert basics._writes_disabled(tmp_path)
+    assert '"stage": "rechecking_saved_changes"' not in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -851,7 +1909,9 @@ def test_logo_readback_does_not_confirm_a_mismatched_source(
         client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
     )
     assert result["properties"] == {"logo": "unverified"}
-    assert result["status"] == "unfinished"
+    assert result["status"] == ("unverified" if observed == "invalid" else "unfinished")
+    if observed == "invalid":
+        assert "logo" in result["readBackIssue"]["properties"]
     assert result["writesDisabled"] is True
     assert len(client.writes) == 1
 
@@ -953,7 +2013,7 @@ def test_test_and_prod_cannot_be_edited(client, realm):
 
 
 def test_unenrolled_native_authoring_and_registry_identity(client):
-    client.card.pop("realm")
+    client.card.pop("realm", None)
     plan = basics.prepare(client, TARGET, name="New Name")
     assert plan["target"]["qualityGate"] == "unenrolled authoring"
     assert plan["target"]["product"] == "employee-self-service-hub"
@@ -992,6 +2052,7 @@ def test_unpublished_enrolled_dev_branding_does_not_require_published_config(
         raise AgentBuilderHTTPError("Dev realm configuration", 404)
 
     monkeypatch.setattr(client, "get_dev_configuration", unpublished)
+    client.card["realm"] = 0
     proposal = {}
     if operation in ("name", "both"):
         proposal["name"] = "People Support"
@@ -1011,7 +2072,7 @@ def test_unpublished_enrolled_dev_branding_does_not_require_published_config(
 
 @pytest.mark.parametrize("quality_gate", ["test", "prod"])
 @pytest.mark.parametrize("status", [403, 404])
-def test_promoted_rename_still_requires_readable_published_dev_config(
+def test_promoted_view_still_requires_readable_published_dev_config(
     monkeypatch, quality_gate, status
 ):
     family = QualityClient()
@@ -1021,7 +2082,7 @@ def test_promoted_rename_still_requires_readable_published_dev_config(
 
     monkeypatch.setattr(family, "get_dev_configuration", unavailable)
     with pytest.raises(AgentBuilderHTTPError) as exc:
-        basics.prepare(family, TARGET, name="Support", quality_gate=quality_gate)
+        basics.prepare(family, TARGET, quality_gate=quality_gate)
     assert exc.value.status_code == status
     assert not family.configuration_requests
     assert not any(agent.writes for agent in family.gates.values())
@@ -1036,13 +2097,13 @@ def test_promoted_rename_still_requires_readable_published_dev_config(
         ("grsRepositoryId", ""),
     ],
 )
-def test_promoted_rename_still_validates_dev_configuration_identity(
+def test_promoted_view_still_validates_dev_configuration_identity(
     quality_gate, field, value
 ):
     family = QualityClient()
     family.gates["dev"].configuration[field] = value
     with pytest.raises((basics.AgentBasicsError, ExistingDASetupError)):
-        basics.prepare(family, TARGET, name="Support", quality_gate=quality_gate)
+        basics.prepare(family, TARGET, quality_gate=quality_gate)
     assert not family.configuration_requests
     assert not any(agent.writes for agent in family.gates.values())
 
@@ -1051,6 +2112,7 @@ def test_previews_and_cleanup_never_change_maker_sources(client, logos, tmp_path
     original_sources = {key: Path(path).read_bytes() for key, path in logos.items()}
     plan = basics.prepare(client, TARGET, **logos)
     review = basics.review_output(plan, tmp_path)
+    assert "retained" not in review
     assert Path(review["current"]["colorPreview"]).read_bytes() == png(192)
     assert review["proposed"]["logoSources"]["color"] == str(
         Path(logos["logo"]).resolve()
@@ -1189,106 +2251,333 @@ def result_json(capsys):
     return json.loads(output.split("_JSON:", 1)[1])
 
 
-@pytest.mark.parametrize("quality_gate", ["dev", "test", "prod"])
-def test_cli_name_changes_are_independent_per_quality_gate(
-    cli, monkeypatch, capsys, quality_gate
+def test_name_only_current_read_never_processes_images(
+    cli, client, monkeypatch, capsys
+):
+    client.state["bot"]["iconBase64"] = "unreadable image"
+    full_view = basics.prepare(client, TARGET)
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("A name-only current-state read must not process images")
+
+    monkeypatch.setattr(basics, "_logo", unexpected)
+    monkeypatch.setattr(basics, "_png", unexpected)
+    assert basics.main(["view", "--name-only"]) == 0
+    result = result_json(capsys)
+    assert result["current"] == {"name": "Employee Support"}
+    assert result["editableProperties"] == ["name"]
+    assert not client.writes
+    assert not (cli / basics.PREVIEW_DIRECTORY).exists()
+    assert result["reviewId"] != full_view["reviewId"]
+
+
+@pytest.mark.parametrize(
+    "action", ["preview", "save", "validate-package", "resume-writes"]
+)
+def test_name_only_read_option_cannot_change_write_or_recovery_scope(
+    monkeypatch, capsys, action
+):
+    def unexpected(*args, **kwargs):
+        pytest.fail("Invalid scope must fail before authentication")
+
+    monkeypatch.setattr(basics, "authenticate", unexpected)
+    with pytest.raises(SystemExit) as exc:
+        basics.main([action, "--name-only"])
+    assert exc.value.code == 2
+    assert "--name-only is supported only by view" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("quality_gate", ["test", "prod"])
+@pytest.mark.parametrize("action", ["preview", "save"])
+@pytest.mark.parametrize("operation", ["name", "logo", "both"])
+def test_promoted_edits_stop_before_authentication_or_target_reads(
+    cli, monkeypatch, capsys, quality_gate, action, operation, logos
+):
+    def unexpected(*args, **kwargs):
+        raise AssertionError(
+            "Unsupported edits must stop before authentication or reads"
+        )
+
+    monkeypatch.setattr(basics, "authenticate", unexpected)
+    options = ["--quality-gate", quality_gate]
+    if operation in ("name", "both"):
+        options += ["--name", "New Name"]
+    if operation in ("logo", "both"):
+        options += ["--logo", logos["logo"]]
+    with pytest.raises(SystemExit) as exc:
+        basics.main([action, *options])
+    assert exc.value.code == 2
+    assert "names and logos in Dev only" in capsys.readouterr().err
+    client = Client()
+    monkeypatch.setattr(client, "get_agent", unexpected)
+    with pytest.raises(basics.AgentBasicsError, match="target was not switched"):
+        basics.prepare(client, TARGET, name="New Name", quality_gate=quality_gate)
+    assert not client.writes
+
+
+@pytest.mark.parametrize("realm", [None, 0])
+def test_current_bot_name_still_updates_a_different_chat_name(realm, tmp_path):
+    client = Client(realm=realm)
+    client.state["botComponentChanges"][0]["component"]["displayName"] = "Distinct GPT"
+    before = copy.deepcopy(client.state)
+    plan = basics.prepare(client, TARGET, name=before["bot"]["displayName"])
+    assert plan["changes"] == {"name": before["bot"]["displayName"]}
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert result["status"] == "saved"
+    assert result["properties"] == {"name": "saved"}
+    expected = copy.deepcopy(before["botComponentChanges"])
+    expected[0]["component"]["displayName"] = before["bot"]["displayName"]
+    assert client.state["botComponentChanges"] == expected
+    assert len(client.component_writes) == 1
+
+
+@pytest.mark.parametrize("operation", ["name", "logo", "both"])
+def test_enrolled_native_dev_branding_leaves_test_and_prod_unchanged(
+    tmp_path, logos, operation
 ):
     family = QualityClient()
-    before = {gate: copy.deepcopy(agent.state) for gate, agent in family.gates.items()}
-    monkeypatch.setattr(basics, "AgentBuilderClient", lambda *args, **kwargs: family)
-    options = ["--name", f"Support {quality_gate}", "--quality-gate", quality_gate]
-
-    assert basics.main(["preview", *options]) == 0
-    preview = result_json(capsys)
-    assert preview["target"]["agent_id"] == QUALITY_IDS[quality_gate]
-    assert preview["target"]["qualityGate"] == quality_gate
-    assert preview["changedProperties"] == ["name"]
-    assert basics.main(["save", *options, "--approval", preview["reviewId"]]) == 0
-    assert result_json(capsys)["status"] == "saved"
-
-    for gate, agent in family.gates.items():
-        expected = before[gate]
-        if gate == quality_gate:
-            expected["bot"]["displayName"] = f"Support {quality_gate}"
-            expected["botComponentChanges"][0]["component"]["displayName"] = f"Support {quality_gate}"
-            expected["bot"]["version"] += 1
-        assert agent.state == expected
-        assert len(agent.writes) == (1 if gate == quality_gate else 0)
-    if quality_gate == "dev":
-        assert family.configuration_requests == []
-    else:
-        assert len(family.configuration_requests) == 1
-        assert family.configuration_requests[0][2]["json"]["values"] == {
-            "botName": f"Support {quality_gate}",
-            "region": "retained",
-            "optional": None,
-        }
-
-
-def test_each_quality_gate_keeps_its_own_name(tmp_path):
-    family = QualityClient()
-    names = {"dev": "Support Development", "test": "Support Validation", "prod": "Support"}
-    for gate, name in names.items():
-        plan = basics.prepare(family, TARGET, name=name, quality_gate=gate)
-        result = basics.save(
-            family, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
-        )
-        assert result["status"] == "saved"
-    assert {
-        gate: agent.state["bot"]["displayName"] for gate, agent in family.gates.items()
-    } == names
-
-
-@pytest.mark.parametrize("quality_gate", ["dev", "test", "prod"])
-def test_rename_repairs_chat_when_agent_name_already_matches(tmp_path, quality_gate):
-    family = QualityClient()
-    agent = family.gates[quality_gate]
-    name = "People Support"
-    agent.state["bot"]["displayName"] = name
-    agent.configuration["values"].update(
-        botName=name, gptDisplayName="Employee Support"
-    )
-    before = copy.deepcopy(agent.state)
-    plan = basics.prepare(family, TARGET, name=name, quality_gate=quality_gate)
-    assert plan["changes"] == {"name": name}
-    review = basics.review_output(plan, tmp_path)
-    assert review["current"] == {"name": name}
-    assert review["proposed"] == {"name": name, "logoSources": {}}
-    assert "GPT" not in review["concurrencyProtection"]
-    assert not any(other.writes for other in family.gates.values())
+    before = {
+        gate: (copy.deepcopy(agent.state), copy.deepcopy(agent.configuration))
+        for gate, agent in family.gates.items()
+    }
+    proposal = {
+        **({"name": "dev1"} if operation in ("name", "both") else {}),
+        **(logos if operation in ("logo", "both") else {}),
+    }
+    plan = basics.prepare(family, TARGET, **proposal)
     result = basics.save(
         family, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
     )
     assert result["status"] == "saved"
-    expected = copy.deepcopy(before["botComponentChanges"][0]["component"])
-    expected["displayName"] = name
-    assert agent.state["botComponentChanges"][0]["component"] == expected
-    assert agent.state["bot"]["displayName"] == name
-    assert agent.state["bot"]["iconBase64"] == before["bot"]["iconBase64"]
-    assert not basics._writes_disabled(tmp_path)
-    if quality_gate == "dev":
-        payload = agent.component_writes[0]
-        assert payload["changeToken"] == before["changeToken"]
-        assert payload["bot"]["version"] == before["bot"]["version"]
-        assert payload["botComponentChanges"] == [
-            {"$kind": "BotComponentUpdate", "component": expected}
-        ]
-    else:
-        values = family.configuration_requests[0][2]["json"]["values"]
-        assert values["botName"] == values["gptDisplayName"] == name
-        assert "gptDisplayName" not in family.get_realm_configuration(
-            agent.agent_id, basics.QUALITY_GATES[quality_gate]
-        )["values"]
-    assert not basics.prepare(
-        family, TARGET, name=name, quality_gate=quality_gate
-    )["changes"]
-    assert all(
-        not other.writes for gate, other in family.gates.items() if gate != quality_gate
+    assert result["releaseHandoff"]["status"] == "not_started"
+    for gate in ("test", "prod"):
+        agent = family.gates[gate]
+        assert (agent.state, agent.configuration) == before[gate]
+        assert not agent.writes
+        assert not agent.component_writes
+    assert len(family.gates["dev"].writes) == 1
+    assert len(family.gates["dev"].component_writes) == (
+        1 if operation in ("name", "both") else 0
     )
+    assert family.gates["dev"].configuration == before["dev"][1]
+    assert not basics._writes_disabled(tmp_path)
+    assert not family.configuration_requests
 
 
-def test_rename_keeps_already_correct_chat_name_without_component_write(client, tmp_path):
-    client.state["botComponentChanges"][0]["component"]["displayName"] = "People Support"
+@pytest.mark.parametrize(
+    ("fault", "editable"),
+    [
+        ("none", ["name", "logo"]),
+        ("empty-name", ["name", "logo"]),
+        ("missing-name", ["logo"]),
+        ("unreadable-logo", ["name"]),
+        ("empty-logo", ["name", "logo"]),
+        ("unreadable-both", []),
+        ("missing-gpt", ["logo"]),
+        ("invalid-gpt-id", ["logo"]),
+    ],
+)
+def test_current_settings_offer_only_independently_editable_properties(
+    client, tmp_path, fault, editable
+):
+    if fault in ("missing-name", "unreadable-both"):
+        client.state["bot"].pop("displayName")
+    if fault == "empty-name":
+        client.state["bot"]["displayName"] = ""
+    if fault in ("unreadable-logo", "unreadable-both"):
+        client.state["bot"]["iconBase64"] = "invalid image"
+    if fault == "empty-logo":
+        client.state["bot"]["iconBase64"] = ""
+    if fault == "missing-gpt":
+        client.state["botComponentChanges"] = []
+    if fault == "invalid-gpt-id":
+        client.state["botComponentChanges"][0]["component"]["id"] = "invalid"
+    plan = basics.prepare(client, TARGET)
+    result = basics.review_output(plan, tmp_path)
+    assert result["editableProperties"] == editable
+    if fault == "empty-name":
+        assert result["current"]["name"] == ""
+        assert "nameIssue" not in result["current"]
+    if fault == "empty-logo":
+        assert result["current"]["logo"] == "none"
+        assert result["current"]["logoIssue"] is None
+    if fault == "unreadable-both":
+        assert result["current"]["name"] is None
+        assert result["current"]["logo"] == "unavailable"
+        assert result["current"]["nameIssue"]
+        assert result["current"]["logoIssue"]
+        assert "colorPreview" not in result["current"]
+        assert result["changedProperties"] == []
+    if fault in ("missing-gpt", "invalid-gpt-id"):
+        assert result["current"]["name"] == "Employee Support"
+        assert "Name editing is unavailable" in result["current"]["nameIssue"]
+    basics.cleanup(tmp_path, plan["reviewId"])
+    assert not client.writes
+
+
+def write_app_package(tmp_path, icons, assets, *, manifest=None):
+    path = tmp_path / "generated-app.zip"
+    with zipfile.ZipFile(path, "w") as package:
+        package.writestr(
+            "manifest.json",
+            json.dumps({"icons": icons}) if manifest is None else manifest,
+        )
+        for name, data in assets.items():
+            package.writestr(name, data)
+    return path
+
+
+@pytest.fixture
+def package_icons():
+    return {"color": "assets/color.png", "outline": "assets/outline.png"}
+
+
+@pytest.fixture
+def package_assets(package_icons):
+    return {
+        package_icons["color"]: png(192),
+        package_icons["outline"]: png(32, outline=True),
+    }
+
+
+@pytest.mark.parametrize("optional", [False, True])
+def test_generated_package_validation_is_local_and_scoped(
+    tmp_path, monkeypatch, capsys, package_icons, package_assets, optional
+):
+    if optional:
+        package_icons["color32x32"] = "assets/small-color.png"
+        package_assets["assets/small-color.png"] = png(32, outline=True)
+    path = write_app_package(tmp_path, package_icons, package_assets)
+    before = path.read_bytes()
+    monkeypatch.chdir(tmp_path)
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Package validation must not authenticate or read setup")
+
+    monkeypatch.setattr(basics, "authenticate", unexpected)
+    monkeypatch.setattr(basics, "selected_target", unexpected)
+    assert basics.main(["validate-package", "--package", str(path)]) == 0
+    result = result_json(capsys)
+    assert result["status"] == "validated"
+    assert result["scope"] == "provided_app_package_icons_only"
+    assert result["targetAssociation"] == "unverified"
+    assert result["employeeVisibility"] == "unverified"
+    assert result["icons"] == sorted(package_icons)
+    assert path.read_bytes() == before
+    assert list(tmp_path.iterdir()) == [path]
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missing-outline",
+        "missing-color",
+        "extra-icon",
+        "missing-asset",
+        "color-size",
+        "outline-size",
+        "not-png",
+        "opaque-outline",
+        "colored-outline",
+        "optional-size",
+        "opaque-optional",
+        "malformed-manifest",
+    ],
+)
+def test_generated_package_rejects_noncompliant_icons(
+    tmp_path, package_icons, package_assets, fault
+):
+    if fault.startswith("missing-") and fault != "missing-asset":
+        package_icons.pop(fault.removeprefix("missing-"))
+    elif fault == "extra-icon":
+        package_icons["unexpected"] = "assets/color.png"
+    elif fault == "missing-asset":
+        package_assets.pop(package_icons["outline"])
+    elif fault == "color-size":
+        package_assets[package_icons["color"]] = png(32)
+    elif fault == "outline-size":
+        package_assets[package_icons["outline"]] = png(192, outline=True)
+    elif fault == "not-png":
+        package_assets[package_icons["color"]] = png(192, format="BMP")
+    elif fault == "opaque-outline":
+        package_assets[package_icons["outline"]] = png(32, color="white")
+    elif fault == "colored-outline":
+        image = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
+        image.putpixel((16, 16), (0, 0, 255, 255))
+        stream = io.BytesIO()
+        image.save(stream, format="PNG")
+        package_assets[package_icons["outline"]] = stream.getvalue()
+    elif fault in ("optional-size", "opaque-optional"):
+        package_icons["color32x32"] = "assets/small-color.png"
+        package_assets["assets/small-color.png"] = png(
+            192 if fault == "optional-size" else 32
+        )
+    path = write_app_package(
+        tmp_path,
+        package_icons,
+        package_assets,
+        manifest="not JSON" if fault == "malformed-manifest" else None,
+    )
+    with pytest.raises(basics.AgentBasicsError):
+        basics.validate_package(path)
+
+
+@pytest.mark.parametrize(
+    "asset_path",
+    [
+        "",
+        "/color.png",
+        "../color.png",
+        "assets/../color.png",
+        "C:\\color.png",
+        "https://example.test/color.png",
+        "a" * 2049,
+    ],
+)
+def test_generated_package_rejects_nonrelative_or_overlong_icon_paths(
+    tmp_path, package_icons, package_assets, asset_path
+):
+    package_icons["color"] = asset_path
+    path = write_app_package(tmp_path, package_icons, package_assets)
+    with pytest.raises(basics.AgentBasicsError, match="package-relative path"):
+        basics.validate_package(path)
+
+
+@pytest.mark.parametrize("filename", ["a" * 2037, "\u754c" * 1018])
+def test_generated_package_path_limit_counts_characters_not_bytes(
+    tmp_path, package_icons, package_assets, filename
+):
+    asset_path = "assets/" + filename + ".png"
+    package_assets[asset_path] = package_assets.pop(package_icons["color"])
+    package_icons["color"] = asset_path
+    path = write_app_package(tmp_path, package_icons, package_assets)
+    assert basics.validate_package(path)["status"] == "validated"
+
+
+def test_generated_package_missing_manifest_and_duplicate_asset_are_rejected(
+    tmp_path, package_icons, package_assets
+):
+    path = tmp_path / "native-alm.zip"
+    with zipfile.ZipFile(path, "w") as package:
+        package.writestr("app.config.dev.json", "{}")
+    with pytest.raises(basics.AgentBasicsError, match="manifest.json"):
+        basics.validate_package(path)
+    path = write_app_package(tmp_path, package_icons, package_assets)
+    with zipfile.ZipFile(path, "a") as package:
+        with pytest.warns(UserWarning, match="Duplicate name"):
+            package.writestr(package_icons["color"], png(192, color="red"))
+    with pytest.raises(basics.AgentBasicsError, match="duplicate file paths"):
+        basics.validate_package(path)
+
+
+def test_rename_keeps_already_correct_chat_name_without_component_write(
+    client, tmp_path
+):
+    client.state["botComponentChanges"][0]["component"]["displayName"] = (
+        "People Support"
+    )
     client.state.pop("changeToken")
     plan = basics.prepare(client, TARGET, name="People Support")
     result = basics.save(
@@ -1298,10 +2587,8 @@ def test_rename_keeps_already_correct_chat_name_without_component_write(client, 
     assert not client.component_writes
 
 
-@pytest.mark.parametrize(
-    "fault", ["missing", "ambiguous", "name", "id", "schema"]
-)
-def test_rename_requires_verified_chat_component(client, fault):
+@pytest.mark.parametrize("fault", ["missing", "ambiguous", "name", "id", "schema"])
+def test_rename_requires_an_identifiable_readable_chat_component(client, fault):
     component = client.state["botComponentChanges"][0]["component"]
     if fault == "missing":
         client.state["botComponentChanges"] = []
@@ -1318,14 +2605,16 @@ def test_rename_requires_verified_chat_component(client, fault):
     with pytest.raises((basics.AgentBasicsError, ExistingDASetupError)):
         basics.prepare(client, TARGET, name="People Support")
     assert not client.writes
+    assert not client.component_writes
 
 
 @pytest.mark.parametrize("token", [None, "", " ", {}, True])
-def test_chat_rename_requires_component_concurrency_token(client, token):
+def test_chat_rename_requires_a_real_component_token(client, token):
     client.state["changeToken"] = token
     with pytest.raises(basics.AgentBasicsError, match="component change token"):
         basics.prepare(client, TARGET, name="People Support")
     assert not client.writes
+    assert not client.component_writes
 
 
 def test_chat_component_write_conflict_requires_new_review(client, tmp_path):
@@ -1335,43 +2624,31 @@ def test_chat_component_write_conflict_requires_new_review(client, tmp_path):
         client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
     )
     assert result["status"] == "review_again"
-    assert len(client.component_writes) == 1
+    assert not client.component_writes
+    assert not client.writes
     assert client.state["bot"]["displayName"] == "Employee Support"
     assert not basics._writes_disabled(tmp_path)
 
 
-@pytest.mark.parametrize("binding", [None, "Unrelated chat"])
-def test_promoted_rename_blocks_missing_or_inconsistent_chat_binding(tmp_path, binding):
-    family = QualityClient()
-    agent = family.gates["test"]
-    agent.state["botComponentChanges"][0]["component"]["displayName"] = "Stale chat"
-    if binding is not None:
-        agent.configuration["values"]["gptDisplayName"] = binding
-    with pytest.raises(basics.AgentBasicsError, match="ALM name binding disagree"):
-        basics.prepare(family, TARGET, name="People Support", quality_gate="test")
-    assert not agent.writes
-    assert not family.configuration_requests
+def test_component_token_race_after_refresh_requires_new_review(
+    client, tmp_path, monkeypatch
+):
+    request = client.session.request
 
+    def race(*args, **kwargs):
+        client.state["changeToken"] = "changed-after-refresh"
+        return request(*args, **kwargs)
 
-@pytest.mark.parametrize("unchanged", ["agent", "chat"])
-def test_rename_cannot_report_saved_when_only_one_name_matches(client, tmp_path, unchanged):
-    old_name = client.state["bot"]["displayName"]
-
-    def partial(state):
-        target = (
-            state["bot"] if unchanged == "agent"
-            else state["botComponentChanges"][0]["component"]
-        )
-        target["displayName"] = old_name
-
-    client.mutate = partial
+    monkeypatch.setattr(client.session, "request", race)
     plan = basics.prepare(client, TARGET, name="People Support")
     result = basics.save(
         client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
     )
-    assert result["properties"]["name"] == "unverified"
-    assert result["status"] == "unfinished"
-    assert result["writesDisabled"] is True
+    assert result["status"] == "review_again"
+    assert result["httpStatus"] == 409
+    assert len(client.component_writes) == 1
+    assert client.state["bot"]["displayName"] == "Employee Support"
+    assert not basics._writes_disabled(tmp_path)
 
 
 @pytest.mark.parametrize("field", ["instructions", "description", "schemaName", "id"])
@@ -1396,7 +2673,7 @@ def test_chat_rename_preserves_every_unrequested_gpt_field(client, tmp_path, fie
     assert result["writesDisabled"] is True
 
 
-def test_chat_rename_accepts_server_owned_gpt_revision_fields(client, tmp_path):
+def test_chat_name_save_accepts_server_owned_gpt_revision_changes(client, tmp_path):
     client.state["botComponentChanges"][0]["component"]["version"] = 2
     client.mutate = lambda state: state["botComponentChanges"][0]["component"].update(
         version=3, auditInfo={"modified": "server"}
@@ -1407,62 +2684,27 @@ def test_chat_rename_accepts_server_owned_gpt_revision_fields(client, tmp_path):
     )
     assert result["status"] == "saved"
     assert result["preservation"] == "confirmed"
+    assert result["writesDisabled"] is False
 
 
-@pytest.mark.parametrize("quality_gate", ["dev", "test", "prod"])
-@pytest.mark.parametrize("mutation", ["none", "description", "id", "added", "removed"])
-def test_configure_component_revisions_do_not_hide_content_changes(
-    tmp_path, quality_gate, mutation
-):
-    family = QualityClient()
-    agent = family.gates[quality_gate]
-    agent.state["botComponentChanges"][0]["component"]["version"] = 2
-    agent.state["botComponentChanges"].append({
-        "$kind": "BotComponentUpdate",
-        "component": {
-            "$kind": "DialogComponent",
-            "id": "00000000-0000-4000-8000-000000008888",
-            "schemaName": f"{SCHEMA}.RetainedTopic",
-            "displayName": "Retained topic",
-            "description": "Retained topic content",
-            "version": 4,
-            "auditInfo": {"modified": "before"},
-        },
-    })
-
-    def materialize(state):
-        # Configure emits updates for every component, not only the name.
-        for change in state["botComponentChanges"]:
-            component = change["component"]
-            component["version"] += 1
-            component["auditInfo"] = {"modified": "server"}
-        other = state["botComponentChanges"][1]["component"]
-        if mutation == "description":
-            other["description"] = "Unexpected content"
-        elif mutation == "id":
-            other["id"] = "00000000-0000-4000-8000-000000009999"
-        elif mutation == "added":
-            added = copy.deepcopy(state["botComponentChanges"][1])
-            added["component"]["id"] = "00000000-0000-4000-8000-000000009999"
-            added["component"]["schemaName"] = f"{SCHEMA}.UnexpectedTopic"
-            state["botComponentChanges"].append(added)
-        elif mutation == "removed":
-            state["botComponentChanges"].pop()
-
-    agent.mutate = materialize
-    plan = basics.prepare(family, TARGET, name="People Support", quality_gate=quality_gate)
-    result = basics.save(
-        family, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+def test_rename_is_unverified_when_the_chat_name_is_not_saved(client, tmp_path):
+    client.mutate = lambda state: state["botComponentChanges"][0]["component"].update(
+        displayName="Employee Support"
     )
-    preserved = quality_gate != "dev" and mutation == "none"
-    assert result["properties"]["name"] == "saved"
-    assert result["preservation"] == ("confirmed" if preserved else "unverified")
-    assert result["status"] == ("saved" if preserved else "unfinished")
-    assert result["writesDisabled"] is not preserved
-    assert basics._writes_disabled(tmp_path) is not preserved
+    plan = basics.prepare(client, TARGET, name="People Support")
+    result = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert client.state["bot"]["displayName"] == "People Support"
+    assert result["status"] == "unfinished"
+    assert result["properties"]["name"] == "unverified"
+    assert result["preservation"] == "confirmed"
+    assert result["writesDisabled"] is True
 
 
-def test_logo_only_never_changes_or_requires_a_readable_chat_name(client, logos, tmp_path):
+def test_logo_only_never_changes_or_requires_a_readable_chat_name(
+    client, logos, tmp_path
+):
     client.state["botComponentChanges"][0]["component"]["displayName"] = None
     before = copy.deepcopy(client.state["botComponentChanges"])
     plan = basics.prepare(client, TARGET, **logos)
@@ -1481,15 +2723,16 @@ def test_promoted_view_is_read_only(cli, monkeypatch, capsys, quality_gate):
     assert basics.main(["view", "--quality-gate", quality_gate]) == 0
     result = result_json(capsys)
     assert result["target"]["agent_id"] == QUALITY_IDS[quality_gate]
+    assert result["editableProperties"] == []
     assert not family.configuration_requests
     assert not any(agent.writes for agent in family.gates.values())
 
 
 @pytest.mark.parametrize("quality_gate", ["test", "prod"])
 def test_unenrolled_source_cannot_guess_promoted_target(client, quality_gate):
-    client.card.pop("realm")
+    client.card.pop("realm", None)
     with pytest.raises(basics.AgentBasicsError, match="ALM-enrolled Dev source"):
-        basics.prepare(client, TARGET, name="Support", quality_gate=quality_gate)
+        basics.prepare(client, TARGET, quality_gate=quality_gate)
     assert not client.writes
 
 
@@ -1510,8 +2753,8 @@ def test_non_dev_logo_requests_are_blocked_before_signin(
     with pytest.raises(SystemExit) as exc:
         basics.main(["preview", *options])
     assert exc.value.code == 2
-    assert "Logo changes are Dev-only" in capsys.readouterr().err
-    with pytest.raises(basics.AgentBasicsError, match="Logo changes are Dev-only"):
+    assert "names and logos in Dev only" in capsys.readouterr().err
+    with pytest.raises(basics.AgentBasicsError, match="names and logos in Dev only"):
         basics.prepare(
             family,
             TARGET,
@@ -1524,9 +2767,17 @@ def test_non_dev_logo_requests_are_blocked_before_signin(
 
 @pytest.mark.parametrize(
     "fault",
-    ["missing", "ambiguous", "card-realm", "config-realm", "agent-id", "family", "schema"],
+    [
+        "missing",
+        "ambiguous",
+        "card-realm",
+        "config-realm",
+        "agent-id",
+        "family",
+        "schema",
+    ],
 )
-def test_promoted_name_target_requires_verified_quality_identity(fault):
+def test_promoted_view_requires_verified_quality_identity(fault):
     family = QualityClient()
     promoted = family.gates["test"]
     if fault == "missing":
@@ -1547,60 +2798,22 @@ def test_promoted_name_target_requires_verified_quality_identity(fault):
         promoted.configuration["schemaName"] = "unrelated-agent"
 
     with pytest.raises((basics.AgentBasicsError, ExistingDASetupError)):
-        basics.prepare(family, TARGET, name="Test Support", quality_gate="test")
+        basics.prepare(family, TARGET, quality_gate="test")
     assert not any(agent.writes for agent in family.gates.values())
 
 
-@pytest.mark.parametrize("change", ["quality-gate", "alm-family"])
-def test_name_approval_cannot_cross_quality_gate_or_family(tmp_path, change):
+@pytest.mark.parametrize("property_name", ["name", "logo"])
+def test_read_only_plan_cannot_be_used_to_write_non_dev_properties(
+    tmp_path, logos, property_name
+):
     family = QualityClient()
-    reviewed = basics.prepare(
-        family, TARGET, name="Gate Support", quality_gate="test"
+    plan = basics.prepare(family, TARGET, quality_gate="test")
+    plan["changes"][property_name] = (
+        "Test Support"
+        if property_name == "name"
+        else encoded(Path(logos["logo"]).read_bytes())
     )
-    quality_gate = "test"
-    if change == "quality-gate":
-        quality_gate = "prod"
-    else:
-        for agent in family.gates.values():
-            agent.configuration["grsRepositoryId"] = "another-family"
-    current = basics.prepare(
-        family, TARGET, name="Gate Support", quality_gate=quality_gate
-    )
-    result = basics.save(
-        family, current, reviewed["reviewId"], current_target=TARGET, root=tmp_path
-    )
-    assert result["status"] == "review_again"
-    assert not any(agent.writes for agent in family.gates.values())
-
-
-def test_name_save_rechecks_quality_target_after_writing(tmp_path):
-    family = QualityClient()
-    plan = basics.prepare(
-        family, TARGET, name="Test Support", quality_gate="test"
-    )
-
-    def move_family(state):
-        for agent in family.gates.values():
-            agent.configuration["grsRepositoryId"] = "another-family"
-
-    family.gates["test"].mutate = move_family
-    result = basics.save(
-        family, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
-    )
-    assert result["status"] == "unverified"
-    assert result["writesDisabled"] is True
-    assert len(family.gates["test"].writes) == 1
-    assert not family.gates["dev"].writes
-    assert not family.gates["prod"].writes
-
-
-def test_name_only_plan_cannot_be_used_to_write_non_dev_logo(tmp_path, logos):
-    family = QualityClient()
-    plan = basics.prepare(
-        family, TARGET, name="Test Support", quality_gate="test"
-    )
-    plan["changes"]["logo"] = encoded(Path(logos["logo"]).read_bytes())
-    with pytest.raises(basics.AgentBasicsError, match="Logo changes are Dev-only"):
+    with pytest.raises(basics.AgentBasicsError, match="names and logos in Dev only"):
         basics.save(
             family, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
         )
@@ -1611,56 +2824,12 @@ def test_name_only_plan_cannot_be_used_to_write_non_dev_logo(tmp_path, logos):
     "values",
     [None, [], {"botName": 5}, {"other": "name"}, {"botName": "Inconsistent name"}],
 )
-def test_promoted_name_requires_readable_config_bindings(values):
+def test_promoted_view_requires_readable_config_bindings(values):
     family = QualityClient()
     family.gates["test"].configuration["values"] = values
     with pytest.raises(basics.AgentBasicsError):
-        basics.prepare(family, TARGET, name="Test Support", quality_gate="test")
+        basics.prepare(family, TARGET, quality_gate="test")
     assert not family.configuration_requests
-
-
-def test_promoted_name_refreshes_config_before_writing(tmp_path):
-    family = QualityClient()
-    plan = basics.prepare(family, TARGET, name="Test Support", quality_gate="test")
-    family.gates["test"].configuration["values"]["region"] = "concurrent edit"
-    result = basics.save(
-        family, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
-    )
-    assert result["status"] == "review_again"
-    assert result["writeAttempted"] is False
-    assert not family.configuration_requests
-    assert not basics._writes_disabled(tmp_path)
-
-
-def test_promoted_name_config_readback_must_preserve_other_bindings(tmp_path):
-    family = QualityClient()
-    plan = basics.prepare(family, TARGET, name="Test Support", quality_gate="test")
-    family.gates["test"].mutate = lambda state: family.gates["test"].configuration[
-        "values"
-    ].update(region="unexpected change")
-    result = basics.save(
-        family, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
-    )
-    assert result["properties"]["name"] == "saved"
-    assert result["preservation"] == "unverified"
-    assert result["writesDisabled"] is True
-    assert len(family.configuration_requests) == 1
-
-
-@pytest.mark.parametrize("status", [403, 409, 500])
-def test_promoted_name_surfaces_config_denials_and_conflicts(tmp_path, status):
-    family = QualityClient()
-    family.gates["test"].status = status
-    plan = basics.prepare(family, TARGET, name="Test Support", quality_gate="test")
-    result = basics.save(
-        family, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
-    )
-    assert result["httpStatus"] == status
-    assert result["requestId"] == "save-request"
-    assert result["status"] == ("review_again" if status == 409 else "unfinished")
-    assert len(family.configuration_requests) == 1
-    assert not family.gates["dev"].writes
-    assert not family.gates["prod"].writes
 
 
 @pytest.mark.parametrize(
@@ -1687,17 +2856,24 @@ def test_preview_and_save_reuse_setup_account_unless_explicitly_switched(
     monkeypatch.setattr(basics, "authenticate", authenticate)
     assert basics.main(["preview", "--name", "People Support", *options]) == 0
     review_id = result_json(capsys)["reviewId"]
-    assert basics.main(
-        ["save", "--name", "People Support", "--approval", review_id, *options]
-    ) == 0
+    assert (
+        basics.main(
+            ["save", "--name", "People Support", "--approval", review_id, *options]
+        )
+        == 0
+    )
     assert result_json(capsys)["status"] == "saved"
-    assert observed == [
-        {
-            "account_hint": expected_account,
-            "force_account_selection": force_selection,
-            "require_account_identity": bool(expected_account),
-        }
-    ] * 2
+    assert (
+        observed
+        == [
+            {
+                "account_hint": expected_account,
+                "force_account_selection": force_selection,
+                "require_account_identity": bool(expected_account),
+            }
+        ]
+        * 2
+    )
 
 
 def _stalled_command(argv):
@@ -1763,7 +2939,9 @@ def test_interrupted_save_stops_worker_and_retains_recovery(
         "get_context",
         lambda mode: SimpleNamespace(Process=lambda **kwargs: process),
     )
-    assert basics.run_cli(["save", "--name", "People Support", "--logo", "logo.png"]) == 2
+    assert (
+        basics.run_cli(["save", "--name", "People Support", "--logo", "logo.png"]) == 2
+    )
 
     result = result_json(capsys)
     assert process.terminated and process.closed
@@ -1944,26 +3122,207 @@ def test_cli_source_logo_save_without_outline_or_image_consent(
     assert saved["publication"] == "Not performed for this change."
     assert len(client.writes) == 1
     assert Path(logos["logo"]).read_bytes() == source
+    assert saved["completionPreviewRetained"] is True
+    assert saved["reviewId"] == review["reviewId"]
+    assert set(saved["comparison"]) == (
+        {"name", "logo"} if operation == "both" else {"logo"}
+    )
+    comparison = saved["comparison"]["logo"]
+    for column, expected in (("previous", png(192)), ("current", source)):
+        image = comparison[column]
+        assert Path(image["preview"]).read_bytes() == expected
+        assert image["previewUri"] == Path(image["preview"]).as_uri()
+        assert image["previewUri"] in image["previewMarkdown"]
+    basics.cleanup(cli, saved["reviewId"])
     assert not Path(review["current"]["colorPreview"]).exists()
+    assert all(not Path(value["preview"]).exists() for value in comparison.values())
+
+
+def test_saved_name_comparison_does_not_inspect_or_copy_logo(client, tmp_path):
+    client.state["bot"]["iconBase64"] = "unreadable-platform-logo"
+    previous = client.state["bot"]["displayName"]
+    plan = basics.prepare(client, TARGET, name="People Support")
+    saved = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert saved["status"] == "saved"
+    assert saved["comparison"] == {
+        "name": {"previous": previous, "current": "People Support"}
+    }
+    assert "completionPreviewRetained" not in saved
+    assert not (tmp_path / basics.PREVIEW_DIRECTORY).exists()
+
+
+def test_saved_logo_display_failure_preserves_service_result(
+    client, logos, tmp_path, monkeypatch
+):
+    plan = basics.prepare(client, TARGET, logo=logos["logo"])
+
+    def unavailable_preview(*args):
+        raise OSError("Preview directory is not writable")
+
+    monkeypatch.setattr(basics, "_saved_comparison", unavailable_preview)
+    saved = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert saved["status"] == "saved"
+    assert saved["properties"] == {"logo": "saved"}
+    assert "Preview directory is not writable" in saved["presentationIssue"]
+    assert "completionPreviewRetained" not in saved
+    assert len(client.writes) == 1
+
+
+def test_saved_logo_comparison_labels_absent_previous_logo(client, logos, tmp_path):
+    client.state["bot"]["iconBase64"] = None
+    plan = basics.prepare(client, TARGET, logo=logos["logo"])
+    saved = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert saved["status"] == "saved"
+    assert saved["comparison"]["logo"]["previous"] == {"logo": "none"}
+    image = saved["comparison"]["logo"]["current"]
+    assert Path(image["preview"]).read_bytes() == Path(logos["logo"]).read_bytes()
+    basics.cleanup(tmp_path, saved["reviewId"])
+    assert not Path(image["preview"]).exists()
 
 
 @pytest.mark.parametrize(
     "proposal", [[], ["--name", "People Support"], ["--logo", "color.png"]]
 )
-def test_cli_unsupported_outline_blocks_entire_request_before_service_access(
-    cli, client, capsys, monkeypatch, proposal
+@pytest.mark.parametrize("kind", ["outline", "color32x32"])
+def test_cli_independent_icons_block_entire_request_before_service_access(
+    cli, client, capsys, monkeypatch, proposal, kind
 ):
     def unexpected_auth(*args, **kwargs):
-        pytest.fail("Unsupported outline requests must stop before service access")
+        pytest.fail("Unsupported icon requests must stop before service access")
 
     monkeypatch.setattr(basics, "authenticate", unexpected_auth)
     with pytest.raises(SystemExit) as exc:
-        basics.main(["preview", *proposal, "--outline", "outline.png"])
+        basics.main(["preview", *proposal, f"--{kind}", "small.png"])
     assert exc.value.code == 2
-    assert (
-        "Independent outline customization is not supported" in capsys.readouterr().err
-    )
+    assert "publication regenerates color and outline" in capsys.readouterr().err
     assert not client.writes
+
+
+@pytest.fixture
+def manifest_icons(tmp_path):
+    color = tmp_path / "manifest-color.png"
+    color.write_bytes(png(192, color=(255, 0, 0, 100)))
+    outline = tmp_path / "outline.png"
+    image = Image.new("RGBA", (32, 32))
+    image.putpixel((8, 8), (255, 255, 255, 128))
+    image.save(outline)
+    return {"color": str(color), "outline": str(outline)}
+
+
+@pytest.mark.parametrize("operation", ["color", "both"])
+def test_cli_color_uses_protected_source_logo_review(
+    cli, client, manifest_icons, capsys, operation
+):
+    proposal = ["--color", manifest_icons["color"]]
+    if operation == "both":
+        proposal += ["--name", "People Support"]
+    assert basics.main(["preview", *proposal]) == 0
+    review = result_json(capsys)
+    expected = {"logo": "saved"}
+    if operation == "both":
+        expected["name"] = "saved"
+    assert set(review["changedProperties"]) == set(expected)
+    assert set(review["proposed"]["logoSources"]) == {"color"}
+    assert not client.writes
+    assert basics.main(["save", *proposal, "--approval", review["reviewId"]]) == 0
+    result = result_json(capsys)
+    assert result["properties"] == expected
+    assert len(client.writes) == 1
+    assert client.state["bot"]["iconBase64"] == encoded(
+        Path(manifest_icons["color"]).read_bytes()
+    )
+
+
+@pytest.mark.parametrize("kind", ["outline", "color32x32"])
+def test_prepare_refuses_independent_icons_before_reading_service(client, kind):
+    client.fail_reads = True
+    with pytest.raises(basics.AgentBasicsError, match="requires platform support"):
+        basics.prepare(client, TARGET, **{kind: "icon.png"})
+    assert not client.writes
+
+
+@pytest.mark.parametrize("quality_gate", ["test", "prod"])
+def test_color_alias_is_dev_only_before_authentication(
+    cli, client, monkeypatch, quality_gate
+):
+    def unexpected(*args, **kwargs):
+        pytest.fail("Test/Prod color edits must stop before authentication")
+
+    monkeypatch.setattr(basics, "authenticate", unexpected)
+    with pytest.raises(SystemExit) as exc:
+        basics.main(["preview", "--color", "color.png", "--quality-gate", quality_gate])
+    assert exc.value.code == 2
+    assert not client.writes
+
+
+def test_color_and_logo_aliases_cannot_silently_replace_each_other(
+    cli, client, logos, monkeypatch
+):
+    def unexpected(*args, **kwargs):
+        pytest.fail("Conflicting aliases must stop before authentication")
+
+    monkeypatch.setattr(basics, "authenticate", unexpected)
+    with pytest.raises(SystemExit) as exc:
+        basics.main(["preview", "--logo", logos["logo"], "--color", "other.png"])
+    assert exc.value.code == 2
+    with pytest.raises(basics.AgentBasicsError, match="use only one"):
+        basics.prepare(client, TARGET, **logos, color="other.png")
+    assert not client.writes
+
+
+@pytest.mark.parametrize(
+    ("kind", "data", "reason"),
+    [
+        ("color", png(32), "192x192"),
+        ("outline", png(192, outline=True), "32x32"),
+        ("outline", png(32, color="white"), "transparent background"),
+        ("outline", png(32, color=(255, 0, 0, 0)), "white on"),
+        ("color32x32", png(32, color="red"), "transparent background"),
+        ("color32x32", png(192, outline=True), "32x32"),
+    ],
+)
+def test_local_icon_validation_rejects_format_specific_errors(
+    tmp_path, monkeypatch, capsys, kind, data, reason
+):
+    path = tmp_path / "icon.png"
+    path.write_bytes(data)
+    monkeypatch.chdir(tmp_path)
+    assert basics.main(["validate-icons", f"--{kind}", str(path)]) == 2
+    result = result_json(capsys)
+    assert result["status"] == "blocked"
+    assert reason in result["message"]
+
+
+def test_all_documented_icon_types_can_be_validated_without_authentication(
+    tmp_path, monkeypatch, capsys, manifest_icons
+):
+    small = tmp_path / "small.png"
+    image = Image.new("RGBA", (32, 32))
+    image.putpixel((8, 8), (255, 0, 0, 255))
+    image.save(small)
+    inputs = {**manifest_icons, "color32x32": str(small)}
+    original = {kind: Path(path).read_bytes() for kind, path in inputs.items()}
+    monkeypatch.chdir(tmp_path)
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("Local icon validation must not authenticate or read setup")
+
+    monkeypatch.setattr(basics, "authenticate", unexpected)
+    monkeypatch.setattr(basics, "selected_target", unexpected)
+    arguments = [arg for kind, path in inputs.items() for arg in (f"--{kind}", path)]
+    assert basics.main(["validate-icons", *arguments]) == 0
+    result = result_json(capsys)
+    assert result["scope"] == "provided_local_icon_files_only"
+    assert result["nativeSaveUnsupported"] == ["outline", "color32x32"]
+    assert result["writeAttempted"] is False
+    assert {kind: Path(path).read_bytes() for kind, path in inputs.items()} == original
+    assert not (tmp_path / ".local").exists()
 
 
 def test_cleanup_failure_does_not_mask_persisted_result(cli, capsys, monkeypatch):
@@ -1992,8 +3351,374 @@ def test_access_denial_returns_sanitized_diagnostic(cli, client, capsys):
     result = result_json(capsys)
     assert result["httpStatus"] == 403
     assert result["requestId"] == "read-request"
+    assert "service denied access" in result["message"]
+    assert "Recheck access and current values" in result["message"]
     assert "People Support" not in json.dumps(result)
     assert not client.writes
+
+
+def test_current_name_logo_read_rechecks_after_denial_without_setup_fallback(
+    cli, client, capsys
+):
+    client.fail_reads = True
+    assert basics.main(["view"]) == 2
+    denied = result_json(capsys)
+    assert denied["httpStatus"] == 403
+    assert "current" not in denied
+    assert "Cached old label" not in json.dumps(denied)
+    client.fail_reads = False
+    client.state["bot"]["displayName"] = "Fresh live name"
+    current_logo = png(192, color="green")
+    client.state["bot"]["iconBase64"] = encoded(current_logo)
+    assert basics.main(["view"]) == 0
+    view = result_json(capsys)
+    assert view["current"]["name"] == "Fresh live name"
+    assert view["current"]["logo"] == "confirmed"
+    assert view["current"]["logoIssue"] is None
+    assert Path(view["current"]["colorPreview"]).read_bytes() == current_logo
+    assert view["current"]["colorPreviewMarkdown"] == (
+        f"![Current agent logo]({view['current']['colorPreviewUri']})"
+    )
+    assert not client.writes
+    assert basics.main(["cleanup", "--approval", view["reviewId"]]) == 0
+    result_json(capsys)
+
+
+def test_logo_preview_returns_inline_file_uri_without_deleting_image(client, tmp_path):
+    root = tmp_path / "preview with spaces #"
+    plan = basics.prepare(client, TARGET)
+    result = basics.review_output(plan, root)
+    current = result["current"]
+    path = Path(current["colorPreview"])
+    assert current["colorPreviewUri"] == path.as_uri()
+    assert "%20" in current["colorPreviewUri"]
+    assert "%23" in current["colorPreviewUri"]
+    assert current["colorPreviewMarkdown"] == (
+        f"![Current agent logo]({current['colorPreviewUri']})"
+    )
+    assert path.read_bytes() == basics._decode(client.state["bot"]["iconBase64"])
+    basics.cleanup(root, result["reviewId"])
+    assert not path.exists()
+    assert not client.writes
+
+
+def _branding_arguments(operation, logos):
+    return (["--name", "dev1"] if operation in ("name", "both") else []) + (
+        ["--logo", logos["logo"]] if operation in ("logo", "both") else []
+    )
+
+
+@pytest.mark.parametrize(
+    ("fault", "editable"),
+    [
+        ("none", ["name", "logo"]),
+        ("empty-name", ["name", "logo"]),
+        ("empty-logo", ["name", "logo"]),
+        ("missing-name", ["logo"]),
+        ("unreadable-logo", ["name"]),
+        ("unreadable-both", []),
+    ],
+)
+def test_cli_e2e_current_states_and_cancel_preserve_service_and_workspace(
+    cli, client, capsys, fault, editable
+):
+    if fault in ("missing-name", "unreadable-both"):
+        client.state["bot"].pop("displayName")
+    if fault == "empty-name":
+        client.state["bot"]["displayName"] = ""
+    if fault == "empty-logo":
+        client.state["bot"]["iconBase64"] = None
+    if fault in ("unreadable-logo", "unreadable-both"):
+        client.state["bot"]["iconBase64"] = "unreadable"
+    before = copy.deepcopy(client.state)
+    assert basics.main(["view"]) == 0
+    view = result_json(capsys)
+    assert view["editableProperties"] == editable
+    assert view["changedProperties"] == []
+    if fault == "empty-name":
+        assert view["current"]["name"] == ""
+    if fault == "empty-logo":
+        assert view["current"]["logo"] == "none"
+    assert basics.main(["cleanup", "--approval", view["reviewId"]]) == 0
+    assert result_json(capsys)["status"] == "cleaned"
+    assert client.state == before
+    assert not client.writes
+    directory = cli / basics.PREVIEW_DIRECTORY
+    assert not directory.exists() or not list(directory.iterdir())
+
+
+@pytest.mark.parametrize("operation", ["name", "logo", "both"])
+def test_cli_e2e_cancel_discards_proposal_without_saving(
+    cli, client, logos, capsys, operation
+):
+    before = copy.deepcopy(client.state)
+    paths = [
+        cli / ".local" / "config.json",
+        cli / ".local" / "setup" / "config.json",
+        Path(logos["logo"]),
+    ]
+    local_before = {path: path.read_bytes() for path in paths}
+    assert basics.main(["preview", *_branding_arguments(operation, logos)]) == 0
+    review = result_json(capsys)
+    assert review["status"] == "review"
+    assert basics.main(["cleanup", "--approval", review["reviewId"]]) == 0
+    assert result_json(capsys)["status"] == "cleaned"
+    assert client.state == before
+    assert {path: path.read_bytes() for path in paths} == local_before
+    assert not client.writes
+
+
+@pytest.mark.parametrize("fault", ["name", "logo-corrupt", "logo-missing"])
+@pytest.mark.parametrize("combined", [False, True])
+def test_cli_e2e_invalid_input_never_saves_valid_half(
+    cli, client, logos, capsys, fault, combined
+):
+    if fault == "name":
+        proposal = ["--name", "   "]
+        if combined:
+            proposal += ["--logo", logos["logo"]]
+    else:
+        if fault == "logo-corrupt":
+            Path(logos["logo"]).write_bytes(b"not an image")
+        else:
+            Path(logos["logo"]).unlink()
+        proposal = ["--logo", logos["logo"]]
+        if combined:
+            proposal += ["--name", "dev1"]
+    assert basics.main(["preview", *proposal]) == 2
+    result = result_json(capsys)
+    assert result["status"] == "blocked"
+    assert not client.writes
+    assert not basics._writes_disabled(cli)
+
+
+@pytest.mark.parametrize("operation", ["name", "logo", "both"])
+@pytest.mark.parametrize("gate", ["test", "prod"])
+def test_cli_e2e_gate_switch_requires_dev_review_and_new_approval(
+    cli, monkeypatch, logos, capsys, gate, operation
+):
+    family = QualityClient()
+    monkeypatch.setattr(basics, "AgentBuilderClient", lambda *args, **kwargs: family)
+    before = {
+        quality: copy.deepcopy(agent.state) for quality, agent in family.gates.items()
+    }
+    arguments = _branding_arguments(operation, logos)
+    assert basics.main(["view", "--quality-gate", gate]) == 0
+    gate_view = result_json(capsys)
+    assert gate_view["editableProperties"] == []
+    with pytest.raises(SystemExit) as exc:
+        basics.main(["preview", "--quality-gate", gate, *arguments])
+    assert exc.value.code == 2
+    capsys.readouterr()
+    assert not any(agent.writes for agent in family.gates.values())
+    assert basics.main(["preview", "--quality-gate", "dev", *arguments]) == 0
+    dev_review = result_json(capsys)
+    assert dev_review["target"]["qualityGate"] == "dev"
+    assert basics.main(["save", *arguments, "--approval", gate_view["reviewId"]]) == 2
+    assert result_json(capsys)["status"] == "review_again"
+    assert not any(agent.writes for agent in family.gates.values())
+    assert basics.main(["save", *arguments, "--approval", dev_review["reviewId"]]) == 0
+    assert result_json(capsys)["status"] == "saved"
+    assert len(family.gates["dev"].writes) == 1
+    for quality in ("test", "prod"):
+        assert family.gates[quality].state == before[quality]
+        assert not family.gates[quality].writes
+    for view in (gate_view, dev_review):
+        assert basics.main(["cleanup", "--approval", view["reviewId"]]) == 0
+        result_json(capsys)
+
+
+@pytest.mark.parametrize("issue", ["legacy", "missing", "denied"])
+def test_cli_e2e_target_failures_do_not_guess_supported_scope(
+    cli, client, capsys, issue
+):
+    if issue == "legacy":
+        path = cli / ".local" / "config.json"
+        config = json.loads(path.read_text())
+        config["releaseLine"] = "legacy"
+        path.write_text(json.dumps(config))
+    else:
+
+        def unavailable(agent_id):
+            raise AgentBuilderHTTPError("read", 404 if issue == "missing" else 403)
+
+        client.get_agent = unavailable
+    assert basics.main(["preview", "--name", "dev1"]) == 2
+    result = result_json(capsys)
+    assert result["status"] == "blocked"
+    if issue == "legacy":
+        assert "compatible kit" in result["message"]
+    else:
+        assert result["httpStatus"] == (404 if issue == "missing" else 403)
+        assert "unsupported" not in result["message"]
+    assert not client.writes
+
+
+def test_cli_e2e_access_restored_requires_fresh_current_values(cli, client, capsys):
+    client.fail_reads = True
+    assert basics.main(["preview", "--name", "dev1"]) == 2
+    denied = result_json(capsys)
+    assert denied["httpStatus"] == 403
+    assert not client.writes
+    client.fail_reads = False
+    client.state["bot"]["displayName"] = "Changed while access was denied"
+    client.state["botComponentChanges"][0]["component"]["displayName"] = client.state[
+        "bot"
+    ]["displayName"]
+    assert basics.main(["preview", "--name", "dev1"]) == 0
+    review = result_json(capsys)
+    assert review["current"]["name"] == "Changed while access was denied"
+    assert not client.writes
+    assert (
+        basics.main(["save", "--name", "dev1", "--approval", review["reviewId"]]) == 0
+    )
+    assert result_json(capsys)["properties"] == {"name": "saved"}
+    assert len(client.writes) == 1
+
+
+def test_cli_e2e_conflict_invalidates_approval_before_successful_fresh_review(
+    cli, client, capsys
+):
+    assert basics.main(["preview", "--name", "dev1"]) == 0
+    original_review = result_json(capsys)
+    update = client._update
+
+    def race(agent_id, bot, **kwargs):
+        client.state["bot"].update(version=5, displayName="Concurrent rename")
+        client.state["botComponentChanges"][0]["component"]["displayName"] = (
+            "Concurrent rename"
+        )
+        return update(agent_id, bot, **kwargs)
+
+    client._update = race
+    assert (
+        basics.main(
+            ["save", "--name", "dev1", "--approval", original_review["reviewId"]]
+        )
+        == 2
+    )
+    assert result_json(capsys)["status"] == "review_again"
+    assert len(client.writes) == 1
+    client._update = update
+    client.status = 200
+    assert basics.main(["preview", "--name", "dev1"]) == 0
+    refreshed = result_json(capsys)
+    assert refreshed["current"]["name"] == "Concurrent rename"
+    assert (
+        basics.main(
+            ["save", "--name", "dev1", "--approval", original_review["reviewId"]]
+        )
+        == 2
+    )
+    assert result_json(capsys)["status"] == "review_again"
+    assert len(client.writes) == 1
+    assert (
+        basics.main(["save", "--name", "dev1", "--approval", refreshed["reviewId"]])
+        == 0
+    )
+    assert result_json(capsys)["properties"] == {"name": "saved"}
+    assert len(client.writes) == 2
+
+
+@pytest.mark.parametrize("status", [403, 413, 500])
+def test_cli_e2e_rejected_save_is_not_completion_or_automatic_retry(
+    cli, client, capsys, status
+):
+    assert basics.main(["preview", "--name", "dev1"]) == 0
+    review = result_json(capsys)
+    client.status = status
+    assert (
+        basics.main(["save", "--name", "dev1", "--approval", review["reviewId"]]) == 2
+    )
+    result = result_json(capsys)
+    assert result["status"] != "saved"
+    assert result["properties"] == {"name": "failed" if status < 500 else "unverified"}
+    assert result["requestId"] == "save-request"
+    assert len(client.writes) == 1
+
+
+@pytest.mark.parametrize("recheck", ["confirmed", "inconclusive"])
+def test_cli_e2e_uncertain_save_rechecks_without_resending(
+    cli, client, capsys, monkeypatch, recheck
+):
+    fetch = client.fetch_components
+    reads = []
+
+    def readback(agent_id):
+        if client.writes:
+            reads.append(agent_id)
+            if len(reads) == 1 or recheck == "inconclusive":
+                raise AgentBuilderHTTPError("read", 503, request_id="readback-request")
+        return fetch(agent_id)
+
+    monkeypatch.setattr(client, "fetch_components", readback)
+    assert basics.main(["preview", "--name", "dev1"]) == 0
+    review = result_json(capsys)
+    expected_exit = 0 if recheck == "confirmed" else 2
+    assert (
+        basics.main(["save", "--name", "dev1", "--approval", review["reviewId"]])
+        == expected_exit
+    )
+    result = result_json(capsys)
+    assert result["properties"] == {
+        "name": "saved" if recheck == "confirmed" else "unverified"
+    }
+    assert reads == [AGENT_ID, AGENT_ID]
+    assert len(client.writes) == 1
+    if recheck == "inconclusive":
+        assert result["writesDisabled"] is True
+        assert (
+            basics.main(["save", "--name", "dev1", "--approval", review["reviewId"]])
+            == 2
+        )
+        assert result_json(capsys)["writesDisabled"] is True
+        assert len(client.writes) == 1
+
+
+@pytest.mark.parametrize("unapplied", ["name", "logo"])
+def test_cli_e2e_partial_success_recovery_only_saves_remaining_property(
+    cli, client, logos, capsys, unapplied
+):
+    before = copy.deepcopy(client.state)
+    arguments = _branding_arguments("both", logos)
+
+    def restore_unapplied(state):
+        if unapplied == "logo":
+            state["bot"]["iconBase64"] = before["bot"]["iconBase64"]
+        else:
+            state["bot"]["displayName"] = before["bot"]["displayName"]
+            state["botComponentChanges"][0]["component"]["displayName"] = before[
+                "botComponentChanges"
+            ][0]["component"]["displayName"]
+
+    client.mutate = restore_unapplied
+    assert basics.main(["preview", *arguments]) == 0
+    review = result_json(capsys)
+    assert basics.main(["save", *arguments, "--approval", review["reviewId"]]) == 2
+    partial = result_json(capsys)
+    assert partial["properties"] == {
+        field: "unverified" if field == unapplied else "saved"
+        for field in ("name", "logo")
+    }
+    assert partial["writesDisabled"] is True
+    assert len(client.writes) == 1
+    client.mutate = None
+    assert basics.main(["view"]) == 0
+    recovery = result_json(capsys)
+    assert basics.main(["resume-writes", "--approval", recovery["reviewId"]]) == 0
+    assert result_json(capsys)["writeAttempted"] is False
+    assert len(client.writes) == 1
+    assert basics.main(["preview", *arguments]) == 0
+    remaining = result_json(capsys)
+    assert remaining["changedProperties"] == [unapplied]
+    assert basics.main(["save", *arguments, "--approval", remaining["reviewId"]]) == 0
+    assert result_json(capsys)["properties"] == {unapplied: "saved"}
+    assert len(client.writes) == 2
+    assert client.state["bot"]["displayName"] == "dev1"
+    assert client.state["bot"]["iconBase64"] == encoded(
+        Path(logos["logo"]).read_bytes()
+    )
+    assert client.state["bot"]["configuration"] == before["bot"]["configuration"]
 
 
 def test_unsafe_cli_save_stops_writes_until_fresh_reviewed_recovery(
@@ -2085,13 +3810,19 @@ def test_promoted_recovery_requires_fresh_same_gate_review_without_service_write
     assert basics._writes_disabled(cli)
 
     agent.state["bot"]["version"] += 1
-    assert basics.main(["resume-writes", *options, "--approval", recovery["reviewId"]]) == 2
+    assert (
+        basics.main(["resume-writes", *options, "--approval", recovery["reviewId"]])
+        == 2
+    )
     assert result_json(capsys)["status"] == "review_again"
     assert basics._writes_disabled(cli)
 
     assert basics.main(["view", *options]) == 0
     recovery = result_json(capsys)
-    assert basics.main(["resume-writes", *options, "--approval", recovery["reviewId"]]) == 0
+    assert (
+        basics.main(["resume-writes", *options, "--approval", recovery["reviewId"]])
+        == 0
+    )
     resumed = result_json(capsys)
     assert resumed["status"] == "writes_resumed"
     assert resumed["writeAttempted"] is False

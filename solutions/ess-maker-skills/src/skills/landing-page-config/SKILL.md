@@ -1,7 +1,7 @@
 ---
 name: landing-page-config
 description: >-
-  View or configure an ESS landing page through the AgentConfiguration MCP server. Use for viewing current or default accent colors, branding, quick links, starter prompts, Stay up to date, reading the agent name or icon, deleting all landing-page configuration, suggesting context-grounded landing-page changes, and any call to the ess-landing-page-config MCP server.
+  View or configure an ESS landing page through the AgentConfiguration MCP server. Use for viewing current or default accent colors, branding, quick links, starter prompts, Stay up to date, inspecting explicitly requested landing-page-service metadata, deleting all landing-page configuration, suggesting context-grounded landing-page changes, and any call to the ess-landing-page-config MCP server. Current native agent name/logo reads and edits belong to Agent Basics.
 ---
 
 # Landing Page Configuration
@@ -10,12 +10,16 @@ Orchestrate landing-page configuration through the AgentConfiguration MCP
 server. Guide the maker through complete, safe section updates without relying
 only on individual tool descriptions.
 
-For an agent name, icon or logo **edit**, hand off immediately to
+For a current agent name, icon or logo **read or edit**, hand off immediately to
 `src/skills/agent-basics/SKILL.md`, preserving the requested target and values.
 Agent Basics requires completed canonical setup; this handoff does not bypass
 the shared setup gate. Do not require landing-page `titleId` or MCP availability
-for those native authoring edits. Agent Basics owns that path and approval;
-this server's name/icon fields remain read-only. For mixed requests, complete each
+for those native authoring reads or edits. Agent Basics owns that path and approval;
+this server's name/icon fields remain read-only service metadata, not a fallback
+for current native authoring values. In particular, "Show my agent name and logo"
+must not use `view_agent_icon` or reuse a setup name after a failed icon lookup.
+Only explicitly requested AgentConfiguration metadata inspection uses this
+server's name/icon tools. For mixed requests, complete each
 owning skill's separate review/save flow; do not claim they save atomically.
 
 ## Setup-state check
@@ -394,8 +398,8 @@ Derive every state from the saved server configuration. Unpublished drafts and l
 | Intent | Tool flow |
 |---|---|
 | Open `/landing-page`, customize the whole landing page, or summarize overall configuration | Follow **Start a guided configuration** for the standard overview and setting selection |
-| View the agent name | Resolve the target and establish existence -> fresh `get_agent_config` for this request -> report the read-only name |
-| Show the agent icon | Resolve `titleId` -> `view_agent_icon`; the tool displays the read-only PNG |
+| View the current agent name, icon or logo | Hand off to `src/skills/agent-basics/SKILL.md`; use a fresh native view, not AgentConfiguration metadata |
+| Inspect explicitly requested landing-page-service name/icon metadata | Resolve `titleId` -> fresh `get_agent_config` or `view_agent_icon`; label the result as read-only service metadata |
 | View current or default accent colors | Follow **View accent colors** -> `open_accent_color` with `titleId` only; the widget shows saved colors or the defaults |
 | Apply exact branding/accent values | Resolve the target and establish existence -> validate changed colors and obtain required confirmation -> for partial changes, fresh `get_agent_config` -> merge and validate -> `update_agent_config` -> report success |
 | Preview a synthesized branding/accent proposal | Resolve the target and establish existence -> build the complete branding section -> validate changed colors -> `open_accent_color` with `titleId` and `draft`; the widget reviews and publishes |
@@ -410,7 +414,7 @@ Derive every state from the saved server configuration. Unpublished drafts and l
 | Ask about current saved links, prompts, or settings | Follow **Read current canonical values** -> answer from the fresh server result |
 | Update Stay up to date | Resolve the target and establish existence -> follow **Fresh read-modify-write** -> send only `insightCardsConfig.isStayUpToDateEnabled` through `update_agent_config` |
 | Remove all landing-page configuration | Follow **Delete all landing-page configuration** |
-| Update the agent name or icon | Explain that the field is read-only and do not call an update tool |
+| Update the agent name or icon | Hand off to `src/skills/agent-basics/SKILL.md`; do not call an AgentConfiguration update tool |
 
 The maker does not need to name a tool explicitly. "Show me my accent color", "What accent color do I have configured?", and "What is my accent color?" follow **View accent colors**. "Change my accent color" opens the editor with its server baseline. "Set my accent color to blue" synthesizes complete light and dark six-digit colors and opens them as a draft. "Change my light accent color to `#CCAA00`" supplies an exact change and uses `update_agent_config` directly.
 
@@ -829,6 +833,11 @@ For a Stay up to date toggle change, follow **Fresh read-modify-write** and subm
 ```
 
 ## Display the read-only agent icon
+
+For a maker's current agent-logo request, hand off to
+`src/skills/agent-basics/SKILL.md` before this flow. This flow is only for
+explicitly requested landing-page-service icon inspection, not the current
+native authoring logo. Label that distinction in the result.
 
 1. Resolve `titleId`.
 2. Call `view_agent_icon`. The tool returns text plus MCP `image` content so the
