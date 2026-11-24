@@ -25,7 +25,7 @@ When an employee triggers this topic, the agent:
 
 Before you start, make sure you have:
 
-- The **msdyn_copilotforemployeeselfservicehr** managed solution installed in your agent
+- An editable ESS **Custom Engine Agent** with the ESS HR Workday integration and required CEA system topics configured; see the [shared CEA prerequisites](../#before-you-start)
 - A Workday tenant with the **Absence_Management** module enabled
 - A Workday connector configured with **User**-level authentication in your Power Platform environment
 - The global variable **`Global.ESS_UserContext_Employee_Id`** populated at session start with the logged-in employee's Workday Employee ID
@@ -44,11 +44,14 @@ Before you start, make sure you have:
 
 ## Import the templates
 
-Before configuring the topic, import the XML templates into your agent.
+Before configuring the topic, [register both ESS Template Configuration records](../#register-the-template-configurations) in the agent's environment:
 
-1. Add `msdyn_HRWorkdayAbsenceEnterTimeOff_MultiDay.xml` to your agent's ESS Template Configuration.
+| Unique name / topic `scenarioName` | Complete XML to paste in Value |
+|---|---|
+| `msdyn_HRWorkdayAbsenceEnterTimeOff_MultiDay` | [Time-off request](./msdyn_HRWorkdayAbsenceEnterTimeOff_MultiDay.xml) |
+| `msdyn_HRWorkdayHCMEmployeeGetVacationBalance` | [Vacation balance](../EmployeeGetVacationBalance/msdyn_HRWorkdayHCMEmployeeGetVacationBalance.xml) |
 
-2. If you haven't already, import the balance template `msdyn_HRWorkdayHCMEmployeeGetVacationBalance` from the [EmployeeGetVacationBalance](../EmployeeGetVacationBalance/) folder. This topic calls it to display leave balances.
+You need the balance configuration even if you do not create the vacation-balance topic. Preserve the request XML's inner scenario name `EmployeeEnterTimeOff`; the record's **Unique name** is the lookup key above, not that inner name.
 
 ## Configure the topic
 
@@ -80,11 +83,11 @@ Find the `set_plan_config` node. Replace each `PlanID` with the corresponding ID
 )
 ```
 
-You can find your Plan IDs in Workday under **Setup > Absence Plans > Plan ID**. Only plans listed here **and** returned by the Workday API will appear in the balance header.
+Obtain the Absence Plan IDs from your Workday administrator. Only plans listed here **and** returned by the Workday API will appear in the balance header.
 
 ### Step 3: Update Reason IDs
 
-Find the **second** `set_time_off_reason_config` node. Replace each `ReasonID` with your tenant's value:
+Find the `set_time_off_reason_config` node. Replace each `ReasonID` and `TimeOffTypeID` with your tenant's values:
 
 | ReasonKey | TimeOffTypeID | ReasonID ← replace this |
 |-----------|---------------|------------------------|
@@ -117,11 +120,11 @@ If your organization uses different leave types than Vacation, Floating holiday,
 
 | Keywords (comma-separated) | LeaveTypeValue |
 |---------------------------|----------------|
-| `vacation,annual,pto,holiday pay` | `Vacation_Hours` |
-| `floating,floater,float day` | `Floating_Holiday_Hours` |
+| `vacation,annual,pto,holiday pay` | `ESS_Vacation_Hours` |
+| `floating,floater,float day` | `ESS_Floating_Holiday_Hours` |
 | `sick,illness,medical,unwell,not feeling well` | `ESS_Sick_Time_Off` |
 
-If you add a new leave type, also add matching rows to `TimeOffReasonConfig` (one per ReasonKey).
+If you add a new leave type, also add matching rows to `TimeOffReasonConfig` (one per ReasonKey) and a friendly label to the success card's `Switch(Topic.timeOffType, ...)` expression. Keep the dropdown values, `LeaveTypeValue`, and `TimeOffTypeID` aligned; the supplied CEA sample already aligns the `ESS_`-prefixed values shown above.
 
 ### Step 5 (optional): Update the Workday icon
 
@@ -129,9 +132,9 @@ Find the `set_workday_icon_url` node and replace the 1×1 pixel placeholder with
 
 ## Import and test the topic
 
-1. In Copilot Studio, go to **Topics > + Add a topic > From file**.
-2. Select `topic.yaml` and import.
-3. Open **Test your agent** and try these:
+1. In Copilot Studio, select **Topics > Add a topic > From blank**.
+2. Select **More > Open code editor** and replace the contents with the entire configured `topic.yaml`. Resolve the CEA common-execution reference, return to the canvas, save, and enable the topic; see [Add a scenario](../#add-a-scenario).
+3. Start a **new test conversation** so employee context is initialized. Test cancellation and validation first, then submit only approved test requests:
 
 | What to test | What to expect |
 |-------------|---------------|
@@ -141,8 +144,10 @@ Find the `set_workday_icon_url` node and replace the 1×1 pixel placeholder with
 | Select "I don't see my leave type listed" and submit | Redirect message with a link to Workday |
 | Click **Cancel** | "Leave request was cancelled - nothing was submitted" |
 | Submit dates that overlap an existing request | Friendly AI-rewritten error with retry |
+| Include Vacation or Floating holiday in the prompt | The matching leave type is pre-selected; verify its friendly label on the result card |
+| Request time off for another employee | The agent does not submit a request on their behalf |
 
-If balances show as empty but the form appears, your `PlanConfig` Plan IDs likely don't match your Workday tenant.
+Verify submitted requests in Workday, including the approval state. If balances show as empty but the form appears, check the balance configuration and whether `PlanConfig` IDs match plans returned for the employee. A visible form is not evidence that the balance lookup succeeded.
 
 ## XML template reference
 
@@ -152,11 +157,11 @@ Two settings you might want to change:
 
 | Setting | Default | Change if… |
 |---------|---------|------------|
-| `<wd:Auto_Complete>` | `false` (requires manager approval) | Your process skips approval — set to `true` |
+| `<wd:Auto_Complete>` | `false` (does not auto-complete the business process) | Change only after review with your Workday business-process owner; approval routing is tenant-specific |
 | `<version>` and `wd:version` | `v42.0` | Your tenant uses a different API version |
 
 {: .important }
-> If you change the API version, update it in **both** the `<version>` element and the `wd:version` attribute. Mismatched versions cause API errors.
+> If you change the API version, review **both** the `<version>` element and the `wd:version` attribute, then validate the request against your tenant. Saving XML does not prove API compatibility.
 
 ## What you can safely edit in the YAML
 
@@ -164,7 +169,7 @@ Two settings you might want to change:
 |------|----------------------|
 | Workday tenant URL | `set_workday_url` node |
 | Plan IDs | `set_plan_config` node |
-| Reason IDs | Second `set_time_off_reason_config` node |
+| Reason and Time Off Type IDs | `set_time_off_reason_config` node |
 | Leave-type keywords | `set_leave_type_config` node |
 | Adaptive Card dropdown choices | `collect_time_off` node → `choices` array |
 | Trigger phrases | `modelDescription` block |
@@ -175,10 +180,10 @@ Two settings you might want to change:
 
 - Node `id` values (`id: main`, `id: collect_time_off`, etc.) — referenced by `GotoAction` jumps
 - `kind:` values — Copilot Studio node types
-- `dialog:` references — point to the shared solution
+- `dialog:` contracts — must resolve to the installed CEA system topic; use the topic picker if its generated schema name differs, without changing its bindings
 - `output: binding:` mappings — must match shared dialog outputs
 - XML placeholder tokens (`{Employee_ID}`, `{timeoff_Dates}`, etc.) — filled at runtime
-- The `EmployeeName` input — the model uses it to validate the request is for the logged-in user
+- The `EmployeeName` input contract — retained for orchestration; the request still uses the authenticated `Global.ESS_UserContext_Employee_Id`, and model instructions do not replace Workday authorization
 
 ## Dependencies
 
@@ -188,7 +193,7 @@ This topic depends on three external components:
 
 - **Workday `Enter_Time_Off`** — Absence_Management v42.0, User-level auth. Uses the `msdyn_HRWorkdayAbsenceEnterTimeOff_MultiDay` template in this folder. Called after form submission.
 
-- **`WorkdaySystemGetCommonExecution` dialog** — from the `msdyn_copilotforemployeeselfservicehr` solution. Executes XML templates against the Workday connector. Must be pre-installed.
+- **`msdyn_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution` dialog** — the installed CEA system topic that executes XML templates against the Workday connector. Its inputs are `scenarioName` and `parameters`; preserve its `workdayResponse`, `isSuccess`, and `errorResponse` output bindings.
 
 ## Troubleshooting
 
@@ -196,20 +201,20 @@ This topic depends on three external components:
 Your `PlanConfig` Plan IDs don't match your Workday tenant, or the balance template isn't imported. Verify the IDs and confirm `msdyn_HRWorkdayHCMEmployeeGetVacationBalance` is in your ESS Template Configuration.
 
 **"Something went wrong" when submitting**
-The `ReasonID` values in `TimeOffReasonConfig` don't match your Workday tenant. Check your IDs in Workday under **Setup > Time Off Reasons**.
+Inspect `isSuccess`/`errorResponse` and confirm `TimeOffReasonConfig` contains the selected type/reason pair with your tenant's IDs. Also review Workday business-process permissions and the submitted parameters with your administrator.
 
 **Authentication error**
 `Global.ESS_UserContext_Employee_Id` is empty or the Workday connector isn't configured. Verify both.
 
 **Vacation isn't pre-selected when the user says "request vacation"**
-The keyword mapping uses `Vacation_Hours` but the dropdown value is `ESS_Vacation_Hours`. Update `LeaveTypeConfig` to use `ESS_Vacation_Hours`. See [Open Questions](#open-questions).
+Check your customized `LeaveTypeConfig` value against the Adaptive Card dropdown value. Both use `ESS_Vacation_Hours` in the supplied CEA YAML; preserve the prefix and keep both values consistent when customizing.
 
 **Success card shows a raw ID like `ESS_Vacation_Hours`**
-The `Switch()` expression in the success card doesn't match the dropdown values. See [Open Questions](#open-questions).
+The supplied success card maps the sample IDs to friendly names. If you added a leave type or changed an ID, update its `Switch()` expression to match the dropdown value.
 
 ## Tips
 
-- Import the balance template **before** this topic — the balance lookup runs at topic start and fails silently if the template is missing.
+- Register the balance configuration **before testing** this topic — the balance lookup runs at topic start, and the form can appear even when balances were not retrieved.
 - Update `PlanConfig`, `TimeOffReasonConfig`, **and** the Adaptive Card `choices` together — they're interconnected but maintained separately.
 - Test with a real Workday employee ID that has leave balances.
 - Keep `ReasonKey` values as `full_day`, `half_day_am`, `half_day_pm` — they're bound to the Adaptive Card dropdown.
@@ -219,11 +224,11 @@ The `Switch()` expression in the success card doesn't match the dropdown values.
 When this repo publishes a new version of the topic:
 
 1. **Diff first.** Your customized tenant URL, Plan IDs, Reason IDs, and leave-type keywords will be overwritten if you re-import `topic.yaml`.
-2. **Merge.** Copy your config values from the current topic, pull the updated file, paste your values back, then import.
-3. The XML template is safe to overwrite — unless you changed `Auto_Complete` or the API version.
+2. **Merge.** Preserve your config values when applying the updated YAML through the topic's code editor.
+3. Back up and compare both XML configuration values before updating them. Preserve your customizations and use [Handle repo updates](../#handle-repo-updates); replacing a shared configuration can affect other topics.
 
 ## Known limitations
 
-- **Leave type pre-selection may not work for Vacation and Floating Holiday.** The keyword mapping (`LeaveTypeConfig`) uses `Vacation_Hours` and `Floating_Holiday_Hours`, but the Adaptive Card dropdown expects `ESS_Vacation_Hours` and `ESS_Floating_Holiday_Hours`. To fix this, update the `LeaveTypeValue` entries in `LeaveTypeConfig` to include the `ESS_` prefix.
-
-- **Success card may show raw IDs instead of friendly names.** After a successful submission, the confirmation card may display `ESS_Vacation_Hours` instead of "Vacation". To work around this, update the `Switch()` expression in the success card to match the `ESS_`-prefixed values from the dropdown.
+- **The date range includes every calendar day.** The loop increments by one day through the end date; it does not exclude weekends or holidays. Validate this against your Workday absence policies before rollout.
+- **Submit sends the request immediately.** The confirmation card is a result after submission, not a separate approval step. Test **Cancel** before submitting and verify your tenant's approval routing in Workday.
+- **Free-text comments are inserted into a JSON parameter string.** Validate quotes and line breaks with approved test text before enabling the scenario for employees.
