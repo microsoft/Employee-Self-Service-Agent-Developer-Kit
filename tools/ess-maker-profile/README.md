@@ -8,30 +8,32 @@ A proof-of-concept VS Code experience that provides a **guided, plain-English** 
 
 In Maker mode, the extension opens the **Agent Developer Kit** rail on the left, a native getting-started walkthrough in the center, and Copilot Chat on the right. The activity bar stays visible, and menus, tabs, and other developer surfaces retain the user's settings.
 
-| Rail panel | Contents |
-|---|---|
-| **Quick start** | **Tutorial** opens the walkthrough; **Start setup** sends `/setup` and shows connected-agent information after setup completes. |
-| **Customization** | The actions below, in display order. Every action is clickable; complete setup before customizing the agent. |
-| **Help** | **Documentation** opens the repository documentation. |
+| Rail panel        | Contents                                                                                                                        |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| **Quick start**   | **Tutorial** opens the walkthrough; **Start setup** sends `/setup` and shows connected-agent information after setup completes. |
+| **Customization** | The actions below, in display order. Every action is clickable; complete setup before customizing the agent.                    |
+| **Help**          | **Documentation** opens the repository documentation.                                                                           |
 
-| Customization action | Copilot Chat command |
-|---|---|
-| Post an announcement | Create an organization announcement |
-| Create a topic (Coming Soon) | Topic creation availability message |
-| Update a topic (Coming Soon) | Topic update availability message |
-| Scan for issues | `/scan` |
-| Run a flightcheck | `/flightcheck` |
-| Generate tests | `/evaluate` |
-| Push to Copilot Studio | `/push` |
-| Customize landing page | `/landing-page` |
+| Customization action   | Copilot Chat command                |
+| ---------------------- | ----------------------------------- |
+| Post an announcement   | Create an organization announcement |
+| Create a topic         | `Create a topic`                    |
+| Update a topic         | `Update a topic`                    |
+| Scan for issues        | `/scan`                             |
+| Run a flightcheck      | `/flightcheck`                      |
+| Generate tests         | `/evaluate`                         |
+| Push to Copilot Studio | `/push`                             |
+| Customize landing page | `/landing-page`                     |
+
+Describe the intended conversation and review the ordinary topic draft before approving a save to the selected editable Dev agent. New topics are inactive; updates preserve the selected topic's identity, active state, and unrelated behavior. Matching instruction changes require their own preview and approval. Saving does not activate, publish, or verify employee chat behavior. Power Automate authoring remains outside ADK; conversation testing depends on the installed bounded capability and topic readiness.
 
 The walkthrough has **What ADK does** and **Getting started** steps. Setup is user-driven in both modes: select **Start setup**, type `/setup`, or ask Copilot for setup help.
 
 ## Layout
 
-| Mode | Layout |
-|---|---|
-| Maker | Agent Developer Kit rail, native walkthrough, and Copilot Chat; normal VS Code chrome remains available. |
+| Mode      | Layout                                                                                                                                |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Maker     | Agent Developer Kit rail, native walkthrough, and Copilot Chat; normal VS Code chrome remains available.                              |
 | Developer | Default VS Code layout with a rendered workspace README preview. Revealing the Agent Developer Kit rail opens the guided walkthrough. |
 
 The installer selects the mode in the terminal and writes `essMaker.mode`. The extension reads that setting on each activation. The accepted values are `maker` and `developer`, with `lite` and `standard` supported as compatibility aliases.
@@ -43,11 +45,13 @@ The installer selects the mode in the terminal and writes `essMaker.mode`. The e
 These Maker-mode shortcuts install VS Code and the Maker Profile extension:
 
 **Windows** (PowerShell):
+
 ```powershell
 iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-lite.ps1)
 ```
 
 **macOS** (Terminal):
+
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-lite-mac.sh)"
 ```

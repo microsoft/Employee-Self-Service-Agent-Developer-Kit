@@ -2,19 +2,19 @@
 # Licensed under the MIT License.
 
 """
-ESS Maker Kit - Optional OOTB Workday topics installer.
+ESS Maker Kit - Optional OOTB Workday topic draft preparation.
 
 Deterministically copies selected ready-made Workday sample topics from the
 vendored ``src/examples/ess-samples/Workday`` tree into the agent's working
-``topics/`` folder, ready for ``push.py`` to publish.
+``topics/`` folder as local drafts. No remote topics are created or published.
 
 WHY THIS SCRIPT EXISTS
 ----------------------
 The optional installer (setup skill 5b) used to let the assistant hand-copy
 and name files from a prose playbook. Free-form name derivation produced
 mangled slugs such as ``w-or-kd-ay-ge-tu-se-rp-ro-fi-le.mcs.yml`` (letters
-chopped into 2-char groups). push.py builds a topic's Dataverse schema name
-and display name from its filename, so a mangled filename corrupts the
+chopped into 2-char groups). Topic creation derives the schema name from
+the draft filename, so a mangled filename corrupts the
 topic's identity. This script removes the assistant from the naming loop:
 filenames follow the kit's topic convention (PascalCase, alphanumeric — see
 ``src/skills/topics/create/SKILL.md``), which also yields clean schema names.
@@ -39,8 +39,9 @@ Each sample ``topic.yaml`` is rewritten before being written out:
   2. ``<TENANT_NAME>`` placeholder -> the configured Workday tenant.
 
 This module performs pure local file operations (no network / auth), so it is
-fully unit-testable. The caller runs ``push.py --only-from <manifest>``
-afterwards to publish exactly the topics written here.
+fully unit-testable. The manifest records the written draft paths. Any later
+save follows the normal Create review and approval process in
+``src/skills/topics/create/SKILL.md``.
 """
 
 import argparse
@@ -210,10 +211,10 @@ def install(selected, agent_dir, schema_name, tenant, dry_run=False):
 
 
 def write_manifest(manifest_path, rel_paths):
-    """Write a push scope manifest (one topic relative path per line)."""
+    """Record prepared local drafts (one topic relative path per line)."""
     os.makedirs(os.path.dirname(os.path.abspath(manifest_path)), exist_ok=True)
     with open(manifest_path, "w", encoding="utf-8", newline="") as f:
-        f.write("# OOTB Workday topics to push (scoped). Generated file.\n")
+        f.write("# Prepared local OOTB Workday topic drafts. Generated file.\n")
         for rel in rel_paths:
             f.write(rel + "\n")
 
@@ -247,7 +248,7 @@ def _resolve_config(args):
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(
-        description="Install ready-made Workday sample topics (topics only).")
+        description="Prepare ready-made Workday sample topics as local drafts only.")
     parser.add_argument("--list", action="store_true",
                         help="List available scenarios and exit.")
     parser.add_argument("--all", action="store_true",
@@ -261,7 +262,7 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true",
                         help="Show what would be written without writing.")
     parser.add_argument("--manifest-out", default=DEFAULT_MANIFEST,
-                        help="Where to write the push scope manifest.")
+                        help="Where to record the prepared local draft paths.")
     parser.add_argument("--agent-dir", default=None,
                         help="Override agent folder (default: from config).")
     parser.add_argument("--schema-name", default=None,
@@ -327,9 +328,10 @@ def main(argv=None):
             for s in result["skipped"]:
                 print(f"  - {s['basename']} ({s['reason']})")
         if result["written"] and not args.dry_run:
-            print(f"\nManifest: {args.manifest_out}")
-            print("Next: python scripts/push.py --only-from "
-                  f"{args.manifest_out}")
+            print(f"\nLocal draft manifest: {args.manifest_out}")
+            print("No remote topics were created or published.")
+            print("Before saving, follow the normal Create review and approval "
+                  "process in src/skills/topics/create/SKILL.md.")
     return 0
 
 

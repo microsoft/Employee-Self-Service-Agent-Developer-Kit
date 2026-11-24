@@ -1,6 +1,6 @@
 ---
 mode: agent
-description: "Compatibility alias for /manage-topics: list, enable or disable ESS topic sets"
+description: "Compatibility alias for /manage-topics: list, add, enable or disable ESS topic sets"
 ---
 
 # Manage topics

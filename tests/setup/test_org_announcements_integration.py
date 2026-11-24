@@ -149,7 +149,7 @@ def test_announcements_are_registered_across_current_entry_points() -> None:
     menu = _MENU.read_text(encoding="utf-8")
     foundation = _FOUNDATION.read_text(encoding="utf-8")
     setup_readme = _SETUP_README.read_text(encoding="utf-8")
-    profile_readme = _PROFILE_README.read_text(encoding="utf-8")
+    profile_readme = _normalized(_PROFILE_README)
     extension = _PROFILE_EXTENSION.read_text(encoding="utf-8")
 
     assert "derive its prompt filename from the command" in repo_instructions

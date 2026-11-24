@@ -595,10 +595,11 @@ def _acquire_token(
     emit_account_identity: bool = True,
     return_account_identity: bool = False,
     require_account_identity: bool = False,
+    client_id: str = CLIENT_ID,
 ) -> str | tuple[str, str | None]:
     cache = _load_token_cache(cache_path)
     app = msal.PublicClientApplication(
-        CLIENT_ID,
+        client_id,
         authority=authority,
         token_cache=cache,
     )
@@ -740,10 +741,13 @@ def authenticate_flightcheck_dependency(
 ) -> str:
     """Acquire one dependency-read audience for the already selected operator.
 
-    ENV-004 requests Flow or Dataverse access only after discovering an active
-    flow dependency. A different or unverifiable account must not satisfy that
-    dependency on behalf of the selected agent.
+    Power Apps/BAP uses the existing Power Platform public client: the
+    AgentBuilder client is not preauthorized for that resource in all tenants.
+    Other audiences retain their existing client. A different or unverifiable
+    account must not satisfy a dependency on behalf of the selected agent.
     """
+    from flightcheck.pp_admin_client import CLIENT_ID as POWER_PLATFORM_CLIENT_ID, PP_SCOPE
+
     if not account_hint:
         raise ValueError("Dependency reads require a verified account identity.")
     tenant_id = str(uuid.UUID(tenant_id))
@@ -757,6 +761,7 @@ def authenticate_flightcheck_dependency(
         emit_account_identity=False,
         return_account_identity=True,
         require_account_identity=True,
+        client_id=POWER_PLATFORM_CLIENT_ID if scope == PP_SCOPE else CLIENT_ID,
     )
     if not account or account.casefold() != account_hint.casefold():
         raise AgentBuilderError("Dependency authentication selected a different or unverifiable account.")

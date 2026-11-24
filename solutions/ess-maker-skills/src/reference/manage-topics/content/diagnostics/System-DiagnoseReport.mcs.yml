@@ -1,0 +1,429 @@
+kind: AdaptiveDialog
+inputs:
+  - kind: AutomaticTaskInput
+    propertyName: TargetQuestion
+    description: |-
+      The last user message before this one that is not /diagnose, copied exactly. Write "unavailable" only when no earlier user message is in the conversation.
+    entity: StringPrebuiltEntity
+    shouldPromptUser: false
+
+  - kind: AutomaticTaskInput
+    propertyName: ProfileTable
+    description: |-
+      Table: input source | field | value.
+      Read all three sources and give every field below its own row, in this order:
+      - structured user_profile object: Name, Job Title, Manager, Skip Manager, Company Name, Department, Office Location, Team, Top collaborators, Recent topics.
+      - separate location sentence: Location.
+      - inline profile text ("user_profile: Name ..., Job Title ..., Country ..."): Name, Job Title, Country.
+      That is 14 rows when all three sources are supplied. A field supplied with no value keeps its row with value "empty"; a field or source not supplied gets "unavailable". The inline text is a separate source, not a replacement for the structured one; a country inside an example query is not a profile field. Conflicting values remain separate. Report supplied context, without deciding which value is correct or caused the answer.
+    entity: StringPrebuiltEntity
+    shouldPromptUser: false
+
+  - kind: AutomaticTaskInput
+    propertyName: ProfileOrigins
+    description: |-
+      After the table, one line per source on where its values come from and where an admin can check them, copied as written below, also for a source that is unavailable:
+      - structured user_profile: the user's Microsoft 365 profile, refreshed on every turn.
+      - location: the network the request came from, so it can differ from where the user works.
+      - inline profile: the ESS user-context settings in Copilot Studio, fixed when this conversation started; its Job Title is the ESS employee level and its Country the ESS country code.
+
+      Done when every profile field has its row, every "unavailable" has been checked against its source, and each source's line below the table is copied as written.
+    entity: StringPrebuiltEntity
+    shouldPromptUser: false
+
+  - kind: AutomaticTaskInput
+    propertyName: DecisionSteps
+    description: |-
+      Numbered steps, one per line ("1. ..."), giving only the observable decision logic behind the answer to the target question: what was looked up, which results the answer used, and how the answer follows from them.
+      Say in the step what a call looked up, such as its search words, and name a result by its title. A step that rests on a call ends with its evidence: that call's exact tool name in square brackets, such as [search_enterprise_connectors_ServiceNowKB], one bracket per tool. Brackets hold tool names only; tell the answer in the step's own words. A step that rests on no call ends without brackets.
+      Do NOT provide or reconstruct hidden chain-of-thought, private deliberations, internal reasoning traces, confidential prompts, system/developer instructions, or internal variables.
+    entity: StringPrebuiltEntity
+    shouldPromptUser: false
+
+  - kind: AutomaticTaskInput
+    propertyName: UserQuestion
+    description: |-
+      The same question as TargetQuestion, if you pass it; the report does not use it.
+    entity: StringPrebuiltEntity
+    shouldPromptUser: false
+
+modelDescription: |-
+  Builds the diagnose report for the user's last message before this one that is not /diagnose, and the answer to it: the decision logic behind it, the tool calls and search results recorded when it was given, and the supplied profile. Use only when the user types /diagnose, and call it for every /diagnose although no Diagnose Report call came before: Record Search Results kept the record during that answer, and this topic reads it. That record is kept outside the conversation, so earlier tool results you cannot see are no reason to decline: call it. Call no other tool, Record Search Results included. Its inputs are TargetQuestion, DecisionSteps, ProfileTable and ProfileOrigins, and UserQuestion if you pass it; pass no other argument: SearchResults, ToolCalls and ToolDescriptions belong to Record Search Results, not here. Fill every input by its own description, as plain text, one item per line. DecisionSteps is done when each step that rests on a call ends with the exact name of every tool it rests on, in square brackets, and no bracket holds anything else. Do not ask the user to confirm anything. Keep identifiers and values exact. Exclude credentials and hidden reasoning.
+
+useVerbatimOutputMessages: true
+beginDialog:
+  kind: OnRecognizedIntent
+  id: main
+  intent:
+    triggerQueries:
+      - /diagnose
+
+  actions:
+    - kind: SetVariable
+      id: fillTargetQuestion
+      variable: init:Topic.TargetQuestionText
+      value: =If((IsBlank(Trim(Topic.TargetQuestion)) || Lower(Trim(Topic.TargetQuestion)) = "unavailable") && !IsBlank(Trim(Global.Diag_UserQuestion)), Global.Diag_UserQuestion, Coalesce(Topic.TargetQuestion, "This section was not filled."))
+
+    - kind: SetVariable
+      id: fillProfileTable
+      variable: init:Topic.ProfileTableText
+      value: =Coalesce(Topic.ProfileTable, "This section was not filled.")
+
+    - kind: SetVariable
+      id: fillProfileOrigins
+      variable: init:Topic.ProfileOriginsText
+      value: =Coalesce(Topic.ProfileOrigins, "This section was not filled.")
+
+    - kind: SetVariable
+      id: fillRecorded
+      variable: init:Topic.Recorded
+      value: |-
+        =!IsBlank(Trim(Global.Diag_ToolCalls)) && (((IsBlank(Trim(Topic.TargetQuestion)) || Lower(Trim(Topic.TargetQuestion)) = "unavailable") && !IsBlank(Trim(Global.Diag_UserQuestion))) || Lower(Trim(Substitute(Substitute(Global.Diag_UserQuestion, Char(13), ""), Char(10), " "))) = Lower(Trim(Substitute(Substitute(Topic.TargetQuestion, Char(13), ""), Char(10), " "))))
+
+    - kind: SetVariable
+      id: fillRecordNote
+      variable: init:Topic.RecordNote
+      value: |-
+        =If(
+            Topic.Recorded && (IsBlank(Trim(Topic.TargetQuestion)) || Lower(Trim(Topic.TargetQuestion)) = "unavailable"),
+            "The /diagnose call named no earlier question, so this is the last record kept, made " & If(IsBlank(Global.Diag_RecordedAt), "", "at " & Global.Diag_RecordedAt & " ") & "when the question above was answered.",
+            Topic.Recorded,
+            "Recorded " & If(IsBlank(Global.Diag_RecordedAt), "", "at " & Global.Diag_RecordedAt & " ") & "when the question above was answered.",
+            IsBlank(Trim(Global.Diag_ToolCalls)) && IsBlank(Trim(Global.Diag_SearchResults)),
+            "No search was recorded for this question, so its tool calls and search results are not shown.",
+            "The stored record is for a different question (" & Coalesce(Global.Diag_UserQuestion, "no question stored") & If(IsBlank(Global.Diag_RecordedAt), "", ", recorded at " & Global.Diag_RecordedAt) & "), so this question's tool calls and search results are not shown."
+        )
+
+    - kind: SetVariable
+      id: fillTargetLines
+      variable: init:Topic.TargetLines
+      value: |-
+        ="Q" & Trim(Substitute(Substitute(Topic.TargetQuestionText, Char(13), ""), Char(10), " "))
+
+    - kind: SetVariable
+      id: fillDecisionCut
+      variable: init:Topic.DecisionCut
+      value: |-
+        =Concat(
+            ForAll(
+                Split(Substitute(Substitute(Substitute(Substitute(Substitute(Coalesce(Topic.DecisionSteps, "This section was not filled."), Char(13), ""), "<File>", ""), "</File>", ""), "<External>", ""), "</External>", ""), Char(10)),
+                With(
+                    {parts: Split(Value, "turn")},
+                    Concat(
+                        Filter(
+                            Split(
+                                Substitute(
+                                    Concat(
+                                        Sequence(CountRows(parts)),
+                                        With(
+                                            {i: Value, p: Index(parts, Value).Value},
+                                            If(
+                                                i = 1,
+                                                p,
+                                                With(
+                                                    {k: Coalesce(Max(Filter(Sequence(Min(Len(p), 30)), IsMatch(Left(p, Value), "^[0-9]+[a-z]+[0-9]+$")), Value), 0)},
+                                                    If(k > 0, Mid(p, k + 1), "turn" & p)
+                                                )
+                                            )
+                                        )
+                                    ),
+                                    "[]",
+                                    ""
+                                ),
+                                " "
+                            ),
+                            !IsBlank(Value)
+                        ),
+                        Value,
+                        " "
+                    )
+                )
+            ),
+            Value,
+            Char(10)
+        )
+
+    - kind: SetVariable
+      id: fillDecisionLines
+      variable: init:Topic.DecisionLines
+      value: |-
+        =With(
+            {
+                steps: Filter(ForAll(Split(Topic.DecisionCut, Char(10)), {l: Trim(Substitute(Substitute(Substitute(Substitute(Value, "<File>", ""), "</File>", ""), "<External>", ""), "</External>", ""))}), !IsBlank(l)),
+                names: If(
+                    Topic.Recorded,
+                    "|" & Concat(
+                        Filter(ForAll(Split(Substitute(Coalesce(Global.Diag_ToolCalls, ""), Char(13), ""), Char(10)), {t: Trim(Value)}), StartsWith(t, "Tool:")),
+                        With({n: First(Split(Trim(Mid(t, 6)), " ")).Value}, If(StartsWith(n, "global."), Mid(n, 8), n)) & "|"
+                    ),
+                    "|"
+                )
+            },
+            Concat(
+                steps,
+                With(
+                    {
+                        m: Concat(
+                            With(
+                                {ws: Split(l, " ")},
+                                ForAll(
+                                Sequence(CountRows(ws)),
+                                With(
+                                    {n: Value},
+                                    With(
+                                    {w: Index(ws, n).Value, before: Concat(FirstN(ws, n - 1), Value, " ")},
+                                    If(
+                                        IsMatch(w, "[A-Za-z0-9_]"),
+                                        With(
+                                            {at: Filter(ForAll(Sequence(Len(w)), {i: Value, c: Mid(w, Value, 1)}), IsMatch(c, "[A-Za-z0-9_]"))},
+                                            With(
+                                                {a: First(at).i, b: Last(at).i},
+                                                With(
+                                                    {core: Mid(w, a, b - a + 1), ctx: before & " " & Left(w, a - 1), bare: If(StartsWith(Mid(w, a, b - a + 1), "global."), Mid(w, a + 7, b - a - 6), Mid(w, a, b - a + 1))},
+                                                    If(
+                                                        IsMatch(core, "^[A-Za-z][A-Za-z0-9.]*_[A-Za-z0-9_.]*$") &&
+                                                        Len(ctx) - Len(Substitute(ctx, "[", "")) > Len(ctx) - Len(Substitute(ctx, "]", "")) &&
+                                                        Mod(Len(ctx) - Len(Substitute(ctx, """", "")), 2) = 0 &&
+                                                        Len(ctx) - Len(Substitute(ctx, "“", "")) <= Len(ctx) - Len(Substitute(ctx, "”", "")),
+                                                        Left(w, a - 1) &
+                                                        If(
+                                                            EndsWith(core, "Record_Search_Results"), "Record Search Results",
+                                                            Find("|" & bare & "|", names) > 0, core,
+                                                            core & " · not in the record"
+                                                        ) &
+                                                        Mid(w, b + 1),
+                                                        w
+                                                    )
+                                                )
+                                            )
+                                        ),
+                                        w
+                                    )
+                                    )
+                                )
+                                )
+                            ),
+                            Value,
+                            " "
+                        )
+                    },
+                    "P" & If(IsMatch(m, "^[0-9]+\.\s.*$"), Substitute(m, ". ", "\. ", 1), m)
+                ),
+                Char(30)
+            ) &
+            Char(30) & "FSteps from what this chat retained, with their evidence; the model's own reasoning is not visible here."
+        )
+
+    - kind: SetVariable
+      id: fillResultLines
+      variable: init:Topic.ResultLines
+      value: |-
+        =With(
+            {lines: ForAll(Split(Substitute(Coalesce(Global.Diag_SearchResults, ""), Char(13), ""), Char(10)), {ln: Trim(Value)})},
+            With(
+                {heads: Filter(Sequence(CountRows(lines)), StartsWith(Index(lines, Value).ln, "S"))},
+                Concat(
+                    ForAll(
+                        Sequence(CountRows(lines)),
+                        With(
+                            {i: Value, ln: Index(lines, Value).ln},
+                            If(
+                                StartsWith(ln, "S"),
+                                    Char(28) & "@" & First(Split(ln, " ")).Value & Char(29) & If(IsBlank(Find("results: ", ln)), "", Trim(Last(Split(ln, "results: ")).Value)) & Char(31),
+                                StartsWith(ln, "- ") && CountRows(Split(ln, " | ")) >= 4,
+                                    With(
+                                        {parts: Split(Mid(ln, 3), " | ")},
+                                        With(
+                                            {
+                                                title: Substitute(Substitute(Substitute(Substitute(Substitute(Substitute(Index(parts, 2).Value, "<File>", ""), "</File>", ""), "<External>", ""), "</External>", ""), "[", "("), "]", ")"),
+                                                src: Index(parts, 3).Value
+                                            },
+                                            "R" & (i - Max(Filter(heads, Value <= i), Value)) & Char(31) &
+                                            If(StartsWith(src, "http"), "[" & title & "](" & Substitute(Substitute(src, " ", "%20"), ")", "%29") & ")", title & " · " & src) &
+                                            Char(31) & Concat(LastN(parts, CountRows(parts) - 3), Value, " | ") & Char(30)
+                                        )
+                                    ),
+                                IsBlank(ln), "",
+                                "L" & ln & Char(30)
+                            )
+                        )
+                    ),
+                    Value,
+                    ""
+                )
+            )
+        )
+
+    - kind: SetVariable
+      id: fillToolsLines
+      variable: init:Topic.ToolsLines
+      value: |-
+        =With(
+            {
+                descs: ForAll(
+                    Filter(
+                        Split(Substitute(Coalesce(Global.Diag_ToolDescriptions, ""), Char(13), ""), Char(10)),
+                        StartsWith(Trim(Value), "Tool:") && !IsBlank(Find("| Description:", Value))
+                    ),
+                    With(
+                        {cut: Find("| Description:", Value), colon: Find(":", Value)},
+                        {tool: Substitute(Trim(Mid(Value, colon + 1, cut - colon - 1)), "global.", ""), text: Trim(Mid(Value, cut + 14))}
+                    )
+                ),
+                pieces: Split(Topic.ResultLines, Char(28)),
+                entries: Filter(Split(Substitute(Substitute(Coalesce(Global.Diag_ToolCalls, ""), Char(13), ""), Char(10) & "E", Char(31) & "E"), Char(31)), !IsBlank(Trim(Value)))
+            },
+            If(
+                Topic.Recorded,
+                Concat(
+                    entries,
+                    With(
+                        {ls: Filter(ForAll(Split(Value, Char(10)), {l: Trim(Value)}), !IsBlank(l))},
+                        With(
+                            {
+                                head: First(ls).l,
+                                name: Trim(Mid(Coalesce(LookUp(ls, StartsWith(l, "Tool:")).l, "Tool: not recorded"), 6)),
+                                args: Coalesce(Trim(Mid(LookUp(ls, StartsWith(l, "Arguments:")).l & "", 11)), "not recorded"),
+                                status: Coalesce(Trim(Mid(LookUp(ls, StartsWith(l, "Result:")).l & "", 8)), "not recorded"),
+                                meta: LookUp(ls, StartsWith(l, "Search metadata:")).l,
+                                ptr: Trim(Mid(LookUp(ls, StartsWith(l, "Recorded results:")).l & "", 18))
+                            },
+                            With(
+                                {piece: If(IsBlank(ptr), "", Mid(LookUp(pieces, StartsWith(Value, "@" & ptr & Char(29))).Value & "", Len(ptr) + 3))},
+                                With(
+                                    {cnt: First(Split(piece, Char(31))).Value},
+                                    If(
+                                        IsMatch(head, "^E\d+$"),
+                                        Char(28) & "Tool call " & Mid(head, 2) & " · " & name & Char(30) &
+                                        "D" & Coalesce(LookUp(descs, tool = Substitute(name, "global.", "")).text, "Description not recorded") & Char(30) &
+                                        "HArguments" & Char(30) & "V" & args & Char(30) &
+                                        "HTool response" & Char(30) &
+                                        "V" & Upper(Left(status, 1)) & Mid(status, 2) & If(status = "data returned" && !IsBlank(cnt), " · " & cnt & If(cnt = "1", " result", " results"), "") & Char(30) &
+                                        If(IsBlank(meta), "", "M" & meta & Char(30)) &
+                                        Concat(
+                                            Filter(ls, !IsMatch(l, "^E\d+$") && !StartsWith(l, "Tool:") && !StartsWith(l, "Arguments:") && !StartsWith(l, "Result:") && !StartsWith(l, "Search metadata:") && !StartsWith(l, "Recorded results:")),
+                                            "L" & l & Char(30)
+                                        ) &
+                                        If(
+                                            IsBlank(ptr), "",
+                                            IsBlank(piece), "LResults missing from the record" & Char(30),
+                                            Mid(piece, Len(cnt) + 2)
+                                        ),
+                                        Char(28) & Char(30) & Concat(ls, "L" & l & Char(30))
+                                    )
+                                )
+                            )
+                        )
+                    )
+                ),
+                ""
+            )
+        )
+
+    - kind: SetVariable
+      id: fillProfileLines
+      variable: init:Topic.ProfileLines
+      value: |-
+        =With(
+            {
+                rows: ForAll(
+                    Filter(
+                        ForAll(Split(Substitute(Topic.ProfileTableText, Char(13), ""), Char(10)), {ln: Trim(If(StartsWith(Trim(Value), "- "), Mid(Trim(Value), 3), Value))}),
+                        !IsBlank(ln) && !IsMatch(ln, "^[\s\|:\-]+$") && !StartsWith(Lower(Trim(Substitute(ln, "|", " "))), "input source")
+                    ),
+                    With(
+                        {c: Filter(ForAll(Split(ln, "|"), {x: Trim(Value)}), !IsBlank(x))},
+                        {
+                            line: ln,
+                            full: CountRows(c) >= 3,
+                            source: First(c).x,
+                            grp: Substitute(Substitute(Lower(First(c).x), "user_profile object", "user_profile"), "profile text", "profile"),
+                            field: If(CountRows(c) >= 3, Index(c, 2).x, ""),
+                            val: If(CountRows(c) >= 3, Concat(LastN(c, CountRows(c) - 2), x, " | "), "")
+                        }
+                    )
+                ),
+                origins: ForAll(
+                    Filter(ForAll(Split(Substitute(Topic.ProfileOriginsText, Char(13), ""), Char(10)), {ln: Trim(If(StartsWith(Trim(Value), "- "), Mid(Trim(Value), 3), Value))}), !IsBlank(ln)),
+                    With(
+                        {cut: Find(":", ln)},
+                        {
+                            raw: ln,
+                            okey: If(IsBlank(cut) || !IsBlank(Find("|", ln)), "", Substitute(Substitute(Lower(Trim(Left(ln, cut - 1))), "user_profile object", "user_profile"), "profile text", "profile")),
+                            note: If(IsBlank(cut), ln, Trim(Mid(ln, cut + 1)))
+                        }
+                    )
+                )
+            },
+            Concat(
+                ForAll(
+                    Sequence(CountRows(rows)),
+                    With(
+                        {r: Index(rows, Value), first: Value = 1, before: If(Value = 1, "", Index(rows, Value - 1).grp)},
+                        If(
+                            r.full,
+                            If(
+                                r.grp <> before,
+                                If(first, "A", "G") & Upper(Left(r.source, 1)) & Mid(r.source, 2) & Char(30) & With({o: LookUp(origins, okey = r.grp)}, If(IsBlank(o.raw), "", "O" & Upper(Left(o.note, 1)) & Mid(o.note, 2) & Char(30))),
+                                ""
+                            ) & If(Lower(r.val) = "empty" || Lower(r.val) = "unavailable", "Z" & r.field & Char(31) & Upper(Left(r.val, 1)) & Mid(r.val, 2), "K" & r.field & Char(31) & r.val),
+                            "L" & r.line
+                        )
+                    )
+                ),
+                Value,
+                Char(30)
+            ) &
+            Concat(
+                Filter(origins, IsBlank(okey) || IsBlank(LookUp(rows, grp = okey).line)),
+                Char(30) & "L" & raw
+            )
+        )
+
+    - kind: SendActivity
+      id: showReport
+      activity:
+        attachments:
+          - kind: AdaptiveCardTemplate
+            cardContent: |-
+              ={
+                type: "AdaptiveCard",
+                '$schema': "http://adaptivecards.io/schemas/adaptive-card.json",
+                version: "1.5",
+                msteams: {width: "Full"},
+                body: [
+                {type: "TextBlock", text: "Diagnose report", size: "Large", weight: "Bolder", wrap: true},
+                {type: "TextBlock", text: "What this chat kept from the answer, with the tool calls and search results recorded when it was given. This is not a complete execution trace.", wrap: true, spacing: "Small"},
+                {type: "Container", style: "emphasis", spacing: "Medium", items: [{type: "Container", spacing: "None", selectAction: {type: "Action.ToggleVisibility", targetElements: [{elementId: "secTargetBody"}, {elementId: "secTargetOpen"}, {elementId: "secTargetShut"}]}, items: [{type: "ColumnSet", columns: [{type: "Column", width: "auto", verticalContentAlignment: "Center", items: [{type: "Container", id: "secTargetOpen", isVisible: true, items: [{type: "Icon", name: "ChevronDown", size: "xSmall", style: "Regular", fallback: {type: "TextBlock", text: "▾", weight: "Bolder"}}]}, {type: "Container", id: "secTargetShut", isVisible: false, spacing: "None", items: [{type: "Icon", name: "ChevronRight", size: "xSmall", style: "Regular", fallback: {type: "TextBlock", text: "▸", weight: "Bolder"}}]}]}, {type: "Column", width: "stretch", items: [{type: "TextBlock", text: "Target question", size: "Medium", weight: "Bolder", wrap: true}]}]}]}, {type: "Container", id: "secTargetBody", isVisible: true, spacing: "Default", items: ForAll(Filter(ForAll(Split(Topic.TargetLines, Char(30)), {t: Left(Value, 1), x: Mid(Value, 2)}), !IsBlank(Trim(x))), {type: "TextBlock", text: x, wrap: true, spacing: If(t = "P", "Default", t = "F", "Medium", "Small"), size: If(t = "F", "Small", "Default")})}]},
+                {type: "Container", style: "emphasis", spacing: "Medium", items: [{type: "Container", spacing: "None", selectAction: {type: "Action.ToggleVisibility", targetElements: [{elementId: "secDecisionBody"}, {elementId: "secDecisionOpen"}, {elementId: "secDecisionShut"}]}, items: [{type: "ColumnSet", columns: [{type: "Column", width: "auto", verticalContentAlignment: "Center", items: [{type: "Container", id: "secDecisionOpen", isVisible: true, items: [{type: "Icon", name: "ChevronDown", size: "xSmall", style: "Regular", fallback: {type: "TextBlock", text: "▾", weight: "Bolder"}}]}, {type: "Container", id: "secDecisionShut", isVisible: false, spacing: "None", items: [{type: "Icon", name: "ChevronRight", size: "xSmall", style: "Regular", fallback: {type: "TextBlock", text: "▸", weight: "Bolder"}}]}]}, {type: "Column", width: "stretch", items: [{type: "TextBlock", text: "Decision logic", size: "Medium", weight: "Bolder", wrap: true}]}]}]}, {type: "Container", id: "secDecisionBody", isVisible: true, spacing: "Default", items: ForAll(Filter(ForAll(Split(Topic.DecisionLines, Char(30)), {t: Left(Value, 1), x: Mid(Value, 2)}), !IsBlank(Trim(x))), {type: "TextBlock", text: x, wrap: true, spacing: If(t = "P", "Default", t = "F", "Medium", "Small"), size: If(t = "F", "Small", "Default")})}]},
+                {type: "Container", style: "emphasis", spacing: "Medium", items: [{type: "Container", spacing: "None", selectAction: {type: "Action.ToggleVisibility", targetElements: [{elementId: "secToolsBody"}, {elementId: "secToolsOpen"}, {elementId: "secToolsShut"}]}, items: [{type: "ColumnSet", columns: [{type: "Column", width: "auto", verticalContentAlignment: "Center", items: [{type: "Container", id: "secToolsOpen", isVisible: false, items: [{type: "Icon", name: "ChevronDown", size: "xSmall", style: "Regular", fallback: {type: "TextBlock", text: "▾", weight: "Bolder"}}]}, {type: "Container", id: "secToolsShut", isVisible: true, spacing: "None", items: [{type: "Icon", name: "ChevronRight", size: "xSmall", style: "Regular", fallback: {type: "TextBlock", text: "▸", weight: "Bolder"}}]}]}, {type: "Column", width: "stretch", items: [{type: "TextBlock", text: "Tools invoked for this question", size: "Medium", weight: "Bolder", wrap: true}]}]}]}, {type: "Container", id: "secToolsBody", isVisible: false, spacing: "Default", items: [{type: "TextBlock", text: Topic.RecordNote, wrap: true}, {type: "Container", spacing: "Medium", separator: true, isVisible: !IsBlank(Topic.ToolsLines), items: With({chunks: Filter(Split(Topic.ToolsLines, Char(28)), !IsBlank(Value))}, ForAll(Sequence(CountRows(chunks)), With({k: Value, p: Split(Index(chunks, Value).Value, Char(30))}, {type: "Container", separator: true, spacing: "Large", items: [{type: "Container", spacing: "None", isVisible: !IsBlank(Trim(First(p).Value)), selectAction: {type: "Action.ToggleVisibility", targetElements: [{elementId: "tc" & k & "b"}, {elementId: "tc" & k & "o"}, {elementId: "tc" & k & "s"}]}, items: [{type: "ColumnSet", columns: [{type: "Column", width: "auto", verticalContentAlignment: "Center", items: [{type: "Container", id: "tc" & k & "o", isVisible: true, items: [{type: "Icon", name: "ChevronDown", size: "xSmall", style: "Regular", fallback: {type: "TextBlock", text: "▾", weight: "Bolder"}}]}, {type: "Container", id: "tc" & k & "s", isVisible: false, spacing: "None", items: [{type: "Icon", name: "ChevronRight", size: "xSmall", style: "Regular", fallback: {type: "TextBlock", text: "▸", weight: "Bolder"}}]}]}, {type: "Column", width: "stretch", items: [{type: "TextBlock", text: First(p).Value, weight: "Bolder", wrap: true}]}]}]}, {type: "Container", id: "tc" & k & "b", isVisible: true, spacing: "Small", items: ForAll(Filter(ForAll(LastN(p, CountRows(p) - 1), {t: Left(Value, 1), f: Split(Mid(Value, 2), Char(31))}), !IsBlank(Trim(First(f).Value))), {type: If(t = "R", "ColumnSet", "TextBlock"), text: If(t = "R", Blank(), First(f).Value), wrap: true, spacing: If(t = "H", "Default", t = "V", "None", "Small"), weight: If(t = "H", "Bolder", "Default"), isSubtle: t = "D" || t = "V", columns: If(t = "R", [{type: "Column", width: "auto", items: [{type: "TextBlock", text: First(f).Value & ".", wrap: true, spacing: "None"}]}, {type: "Column", width: "stretch", items: [{type: "TextBlock", text: If(CountRows(f) >= 2, Index(f, 2).Value, ""), wrap: true, spacing: "None"}, {type: "TextBlock", text: If(CountRows(f) >= 3, Index(f, 3).Value, ""), wrap: true, spacing: "None", size: "Small", isSubtle: true}]}], Blank())})}]})))}, {type: "TextBlock", text: "Calls made inside the search sub-agent or inside Copilot Studio topics cannot be seen from this chat. A search_office365 call's arguments are a task handed to the search sub-agent, not its search terms.", size: "Small", wrap: true, spacing: "Medium"}]}]},
+                {type: "Container", style: "emphasis", spacing: "Medium", items: [{type: "Container", spacing: "None", selectAction: {type: "Action.ToggleVisibility", targetElements: [{elementId: "secProfileBody"}, {elementId: "secProfileOpen"}, {elementId: "secProfileShut"}]}, items: [{type: "ColumnSet", columns: [{type: "Column", width: "auto", verticalContentAlignment: "Center", items: [{type: "Container", id: "secProfileOpen", isVisible: false, items: [{type: "Icon", name: "ChevronDown", size: "xSmall", style: "Regular", fallback: {type: "TextBlock", text: "▾", weight: "Bolder"}}]}, {type: "Container", id: "secProfileShut", isVisible: true, spacing: "None", items: [{type: "Icon", name: "ChevronRight", size: "xSmall", style: "Regular", fallback: {type: "TextBlock", text: "▸", weight: "Bolder"}}]}]}, {type: "Column", width: "stretch", items: [{type: "TextBlock", text: "Supplied user profile", size: "Medium", weight: "Bolder", wrap: true}]}]}]}, {type: "Container", id: "secProfileBody", isVisible: false, spacing: "Default", items: ForAll(Filter(ForAll(Split(Topic.ProfileLines, Char(30)), {t: Left(Value, 1), f: Split(Mid(Value, 2), Char(31))}), !IsBlank(Trim(First(f).Value))), {type: If(t = "K" || t = "Z", "ColumnSet", "TextBlock"), text: If(t = "K" || t = "Z", Blank(), First(f).Value), wrap: true, spacing: If(t = "G", "Large", "Small"), weight: If(t = "A" || t = "G", "Bolder", "Default"), isSubtle: t = "O", columns: If(t = "K" || t = "Z", [{type: "Column", width: "stretch", items: [{type: "TextBlock", text: First(f).Value, wrap: true, spacing: "None"}]}, {type: "Column", width: "stretch", items: [{type: "TextBlock", text: If(CountRows(f) >= 2, Index(f, 2).Value, ""), wrap: true, spacing: "None"}]}], Blank())})}]}
+                ]
+              }
+
+    - kind: EndDialog
+      id: finishReport
+
+inputType:
+  properties:
+    TargetQuestion:
+      displayName: TargetQuestion
+      type: String
+
+    ProfileTable:
+      displayName: ProfileTable
+      type: String
+
+    ProfileOrigins:
+      displayName: ProfileOrigins
+      type: String
+
+    DecisionSteps:
+      displayName: DecisionSteps
+      type: String
+
+    UserQuestion:
+      displayName: UserQuestion
+      type: String
+
+outputType: {}

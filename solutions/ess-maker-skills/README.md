@@ -1,12 +1,12 @@
 # ESS Maker Kit
 
-Plan your Employee Self-Service (ESS) rollout and customize your agent using GitHub Copilot in VS Code — no deep platform knowledge required. Describe what you need in plain English to build a grounded rollout plan, coordinate owners, and generate topic YAML, workflow JSON, adaptive cards, and integration configurations.
+Plan your Employee Self-Service (ESS) rollout and customize your agent using GitHub Copilot in VS Code. Describe what you need in plain English to build a grounded rollout plan and coordinate owners. Review proposed topic or instruction changes and approve a save to the selected editable Dev agent.
 
 > **This repo is intended as an example or learning tool.** It demonstrates how to customize Employee Self-Service (ESS) agents using GitHub Copilot in VS Code. It is not a Microsoft product or a supported service. See [SUPPORT.md](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/blob/main/SUPPORT.md) for the support model and [SECURITY.md](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/blob/main/SECURITY.md) for reporting security issues.
 
 ## Why This Kit
 
-Building and customizing an ESS agent means working across topic YAML, Power Automate workflow schemas, ServiceNow/Workday connector patterns, adaptive card JSON, and Dataverse template configurations. The ESS Maker Kit packages all of that domain knowledge into a VS Code workspace so GitHub Copilot can do the heavy lifting — you describe the scenario, and the agent builds it.
+The ESS Maker Kit brings topic authoring, relevant integration references, local review, and evaluation authoring into a VS Code workspace. It uses existing integration contracts when they apply. Power Automate authoring, deployment, registration, and repair take place outside ADK.
 
 ---
 
@@ -40,13 +40,13 @@ action that starts execution and archives any previous active plan. Once shared,
 the local files are a cache of the shared plan. A local save is not confirmation
 that a shared update succeeded.
 
-| Example prompt in Copilot Chat | Result |
-|--------------------------------|--------|
-| `/planner plan an ESS HR rollout for Workday employee profiles and ServiceNow HR cases` | Capture the scope and build a draft grounded in the relevant documentation |
-| `/planner show my plan status` | Resume the plan and report progress, pending decisions, and the next action |
-| `/planner share this plan` | Store the reviewed local draft in the shared planner |
-| `/planner activate this plan` | Activate the shared draft for execution |
-| `/planner what am I assigned?` | Show the caller's assigned work and its prerequisites |
+| Example prompt in Copilot Chat                                                          | Result                                                                      |
+| --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `/planner plan an ESS HR rollout for Workday employee profiles and ServiceNow HR cases` | Capture the scope and build a draft grounded in the relevant documentation  |
+| `/planner show my plan status`                                                          | Resume the plan and report progress, pending decisions, and the next action |
+| `/planner share this plan`                                                              | Store the reviewed local draft in the shared planner                        |
+| `/planner activate this plan`                                                           | Activate the shared draft for execution                                     |
+| `/planner what am I assigned?`                                                          | Show the caller's assigned work and its prerequisites                       |
 
 A Power Platform administrator creates the rollout environment in the Power
 Platform admin center; `/setup` does not create environments. When a task needs
@@ -215,7 +215,7 @@ The kit ships with a complete reference library that the AI agent reads at task 
 - **Best practices** — Evaluation strategies, conversational design patterns, responsible AI test sets, and the ESS template config + shared flow architecture
 - **Integration-specific guidance** — Connector setup, SOAP/REST template patterns, and extensibility docs for each supported system
 
-The agent uses this knowledge automatically when generating topics, workflows, or test sets.
+The agent uses this knowledge when drafting topics or evaluation sets and inspecting existing integration contracts.
 
 ### Manage topics
 
@@ -236,11 +236,11 @@ Choose **Not now** to make no changes. If all selected topics already match
 the requested state, the skill reports that without asking for approval.
 After a change, it reads back the topic states and reports the result.
 
-| Example prompt in Copilot Chat | Result |
-|--------------------------------|--------|
-| `/manage-topics list topic sets` | Show available sets, topic counts, and current states |
-| `/manage-topics enable Workday HR Topics` | Review and approve enabling that set |
-| `/manage-topics disable ServiceNow HR Topics` | Review and approve disabling that set |
+| Example prompt in Copilot Chat                                      | Result                                                   |
+| ------------------------------------------------------------------- | -------------------------------------------------------- |
+| `/manage-topics list topic sets`                                    | Show available sets, topic counts, and current states    |
+| `/manage-topics enable Workday HR Topics`                           | Review and approve enabling that set                     |
+| `/manage-topics disable ServiceNow HR Topics`                       | Review and approve disabling that set                    |
 | `/manage-topics disable Workday HR Topics and ServiceNow HR Topics` | Review both sets in one request, when both are available |
 
 This changes topic states on the selected agent, not just local files. It does
@@ -248,34 +248,22 @@ not configure ISV connections. See the
 [Manage topics walkthrough](src/skills/manage-topics/SKILL.md) for the detailed
 flow.
 
-### ✏️ Create, Update & Delete Topics
+### ✏️ Create, Update and Delete Topics
 
-Create or update simple conversation topics from plain English, an approved
-eval scenario, or existing evaluation files. The agent first creates an eval
-contract, then writes the topic YAML and matching native evaluations.
+Describe the intended conversation or supply relevant evaluation cases. Copilot reads current topics, drafts ordinary `.mcs.yml` content, and previews the proposed behavior for approval.
 
-- **Create** (`/create`) — Approve the intended evals, then generate a new
-  simple informational, clarification, routing, or handoff topic
-- **Update** (`/update`) — Approve updated and regression evals, then modify an
-  existing simple topic and create or refresh its generated evals
-- **Delete** (`/delete`) — Remove topics cleanly with dependency checking
+- **Create** (`/create`): save one new inactive topic to the selected editable Dev agent after approval.
+- **Update** (`/update`): read and save the selected mapped topic while preserving its identity, active state, and unrelated behavior.
+- **Delete** (`/delete`): review and approve deletion of a selected editable Dev topic, keep its deletion local for a later Push, or discard a never-pushed local draft. Review any routing-instruction correction separately before approving its save.
+- **Instructions**: preview and approve matching instruction-section changes separately from topic changes.
 
-Workday, ServiceNow, SAP, connector-backed, and flow-backed customization
-requires the corresponding DA-GA product extension guidance, which is not yet
-available in this release.
+Save/readback verification is not activation, publication, or conversation acceptance. Supported conversation testing is offered when installed and the saved topic meets its conditions; otherwise acceptance remains pending.
 
-The current pipeline is checkpoint → local edit → error scan. Native DA-GA
-deployment is not yet available, so the kit leaves the live agent unchanged.
+Existing evaluation intent and thresholds remain unchanged by a topic save. Separately requested evaluation work retains its own authoring, review, deployment, and execution flow.
 
-### ⚡ Create, Update & Delete Workflows
+### ⚡ Power Automate Boundary
 
-Generate Power Automate cloud flows for integrations that don't have an ESS shared orchestrator (custom APIs, Jira, ADP, etc.).
-
-- Generates `workflow.json` with proper trigger/action structure and Copilot Studio response bindings
-- Creates connection reference entries for new connectors
-- Wires the workflow into your topic's `InvokeFlowAction`
-
-For ServiceNow and Workday, the kit uses the **template config + shared flow** pattern instead — no standalone workflows needed.
+Create, update, deploy, register, and repair flows outside ADK. Topic authoring may use an existing integration's verified contract; it does not create that integration or provide general backend conversation testing. Product-owned setup and read-only inspection retain their separate supported paths.
 
 ### 🔍 Error Scanning & Cleanup
 
@@ -319,18 +307,17 @@ review/connection prerequisites. A separate push command is not required;
 explicit evaluation push remains available outside this menu. Successful run
 initiation includes the current run's Copilot Studio link.
 
-These flows use the existing push APIs. Dataverse push stores `review.json`
-metadata in the evaluation-parent description. New or changed native MinimalBot
+These flows use the existing AgentBuilder push APIs for evaluations. New or changed
 YAML uploads a **new copy with a new deployed ID**, retaining the old remote copy;
 unchanged YAML, including local review-only changes, reuses its verified copy. The preview explains
-this before consent. Removing cases from a new native copy does not delete
+this before consent. Removing cases from a new copy does not delete
 them from the old remote set.
 
-Native push uploads YAML only: review status is retained locally but is **not
+Evaluation push uploads YAML only: review status is retained locally but is **not
 published as shared review metadata** or copied into the deployed baseline.
 Request Review and reviewer completion
 still perform the existing push in the same flow and report this limitation;
-they do not claim another user can discover the local review marker. New native
+they do not claim another user can discover the local review marker. New
 in-place-update APIs and cross-user-review parity are not part of this change.
 Files are retained when preparation or deployment cannot complete. Run
 `/evaluate` to create or manage sets and `/run` to prepare a selected set for
@@ -338,17 +325,17 @@ execution or inspect its history/results.
 
 ### 🚀 Local-First Authoring
 
-Local topic and workflow authoring follows this pipeline:
+Draft locally, review the exact requested change, and approve its supported save:
 
-```
-Checkpoint (backup) → Local edit → Error scan
+```text
+Local draft -> Review and preview -> Scoped approval -> AgentBuilder save and readback
 ```
 
-For topics and workflows, `/push` reports that native DA-GA deployment is not
-yet available; it does not fall back to the retired Dataverse mutation path.
-Explicit evaluation push uses its separate selected-set deployment flow and
-the existing evaluation APIs, including the native new-copy behavior described
-above. It does not add new native update/delete or review-metadata endpoints.
+General `/push` first shows local pending changes, then delegates selected topics, separately approved instructions, and evaluation sets to their owners. Each owner acknowledges only its submitted content; later edits and unsupported changes remain pending. A local baseline is not a remote mirror.
+
+This release supports DA authoring and Push operations. General Push no longer deploys Dataverse-based agent components. Connect Workday's Dataverse-backed runtime setup and topic wiring and activation remain supported through its separate lifecycle. For legacy/custom-engine guidance, see [`main-ca`](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/tree/main-ca).
+
+Explicit evaluation push retains its selected-set flow and AgentBuilder new-copy behavior. Topic deletion uses its owning operation with an impact preview and explicit destructive approval, including when selected in a Push batch. Workflow and template-config deployment, activation, and publication are not part of general Push. Publication remains separately approved.
 
 ### ✈️ FlightCheck — Agent Setup Diagnostics
 
@@ -375,12 +362,12 @@ Chat and standalone runs use the same checks for the same selected agent and
 scope. Both save a browser report (`report.html`) and detailed results
 (`results.json`). The terminal prints the full path to each saved file.
 
-| Scope | What it checks |
-|-------|----------------|
-| `full` | The selected agent and its applicable setup checks (default) |
-| `workday` | Applicable Workday setup checks |
-| `servicenow` | Applicable ServiceNow setup checks |
-| `local` | Agent files in the ADK workspace only; no remote API calls |
+| Scope        | What it checks                                               |
+| ------------ | ------------------------------------------------------------ |
+| `full`       | The selected agent and its applicable setup checks (default) |
+| `workday`    | Applicable Workday setup checks                              |
+| `servicenow` | Applicable ServiceNow setup checks                           |
+| `local`      | Agent files in the ADK workspace only; no remote API calls   |
 
 For example: `python scripts/flightcheck/cli.py --scope local`.
 
@@ -587,10 +574,10 @@ Planner prepares the solution's `.vscode/mcp.json` from the committed
 `.vscode/mcp.defaults.json`, preserving custom server entries. Configuration
 alone does not approve shared access or share a plan.
 
-| Server | Purpose | Requirements |
-|--------|---------|--------------|
-| `ess-planner` | Read and update shared plans, tasks, and role attestations through the WeveNova planner service | Host trust approval, Microsoft sign-in, and shared-plan access |
-| `workiq-preview` | Resolve people when the tenant blocks the normal directory lookup | Node.js with `npx`, Microsoft 365 Copilot, and WorkIQ access; the workspace pins `@microsoft/workiq@1.0.0` |
+| Server           | Purpose                                                                                         | Requirements                                                                                               |
+| ---------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `ess-planner`    | Read and update shared plans, tasks, and role attestations through the WeveNova planner service | Host trust approval, Microsoft sign-in, and shared-plan access                                             |
+| `workiq-preview` | Resolve people when the tenant blocks the normal directory lookup                               | Node.js with `npx`, Microsoft 365 Copilot, and WorkIQ access; the workspace pins `@microsoft/workiq@1.0.0` |
 
 Person resolution first uses Microsoft Graph's `User.ReadBasic.All` permission.
 If tenant policy prevents that sign-in or consent, the guided flow can use
@@ -628,18 +615,18 @@ may not support these experimental settings.
 
 **Last tested:** 2026-05-04
 
-| Model | Status | Notes |
-|-------|--------|-------|
-| **Claude Sonnet 4.6** | ✅ Recommended | Reliable tool use, follows multi-step instructions accurately |
-| **Claude Opus 4.6** | ✅ Recommended | Reliable tool use, follows multi-step instructions accurately |
-| **Codex 5.4 Medium** | ✅ Recommended | Successfully handles MCP tool detection and setup flows |
-| **GPT-4o** | ⚠️ Not recommended | Fails to detect MCP tools reliably, struggles with multi-step setup flows |
-| **GPT-4.1** | ⚠️ Not recommended | Unreliable string substitution, fails MCP tool detection, produces malformed URLs |
-| **GPT 5.4** | ⚠️ Not recommended | Unreliable MCP tool detection, inconsistent multi-step instruction following |
-| **Codex 5.3 High** | ⚠️ Not recommended | Inconsistent MCP tool detection, unreliable multi-step setup flows |
-| **Codex 5.3** | ⚠️ Not recommended | Inconsistent MCP tool detection, false negatives on server connectivity |
-| **Codex 5.3 Medium** | ⚠️ Not recommended | Fails MCP tool detection, insufficient reasoning for multi-step setup flows |
-| **Claude Sonnet 4** | ⚠️ Not recommended | Fails MCP tool detection, insufficient reasoning for multi-step setup flows |
+| Model                 | Status             | Notes                                                                             |
+| --------------------- | ------------------ | --------------------------------------------------------------------------------- |
+| **Claude Sonnet 4.6** | ✅ Recommended     | Reliable tool use, follows multi-step instructions accurately                     |
+| **Claude Opus 4.6**   | ✅ Recommended     | Reliable tool use, follows multi-step instructions accurately                     |
+| **Codex 5.4 Medium**  | ✅ Recommended     | Successfully handles MCP tool detection and setup flows                           |
+| **GPT-4o**            | ⚠️ Not recommended | Fails to detect MCP tools reliably, struggles with multi-step setup flows         |
+| **GPT-4.1**           | ⚠️ Not recommended | Unreliable string substitution, fails MCP tool detection, produces malformed URLs |
+| **GPT 5.4**           | ⚠️ Not recommended | Unreliable MCP tool detection, inconsistent multi-step instruction following      |
+| **Codex 5.3 High**    | ⚠️ Not recommended | Inconsistent MCP tool detection, unreliable multi-step setup flows                |
+| **Codex 5.3**         | ⚠️ Not recommended | Inconsistent MCP tool detection, false negatives on server connectivity           |
+| **Codex 5.3 Medium**  | ⚠️ Not recommended | Fails MCP tool detection, insufficient reasoning for multi-step setup flows       |
+| **Claude Sonnet 4**   | ⚠️ Not recommended | Fails MCP tool detection, insufficient reasoning for multi-step setup flows       |
 
 ### Quick Start
 
@@ -665,31 +652,31 @@ first** when setup offers it, or run **`/planner`** directly.
 
 ## Available Commands
 
-| Command | What it does |
-|---------|-------------|
-| `/setup` | Connect this workspace to an existing editable DA Dev agent |
-| `/planner` | Create, import, edit, share, activate, and track an ESS rollout plan; view assigned tasks |
-| `/roles` | Attest who holds a rollout role on a shared plan; list or revoke attestations |
-| `/discover` | Inventory tenant environments, agents, and integrations to ground the rollout in actual configuration |
-| `/landing-page` | Configure landing-page branding and content |
-| `/org-announcements` | Create and manage announcements for the selected ESS agent |
-| `/connect` | Choose an available integration |
-| `/connect-workday` | Connect the ESS HR agent to Workday |
-| `/manage-topics` | List current ISV topic-set states, or review and approve enabling or disabling sets |
-| `/topic-actions` | Compatibility alias for `/manage-topics` |
-| `/create` | Create a topic, workflow, or evaluation test set locally |
-| `/update` | Update a topic, workflow, or evaluation test set locally |
-| `/delete` | Report that DA-GA deletion is not yet available |
-| `/scan` | Scan your agent for compile errors and fix them |
-| `/review` | Review local topics or evaluation test sets tagged for review |
-| `/evaluate` | Generate evaluation test sets for your agent |
-| `/run` | Prepare and run selected evaluation sets, or inspect history and results |
-| `/test` | Drive topics in the currently deployed agent; DA-GA workflow diagnostics are not yet available |
-| `/flightcheck` | Check the selected agent's setup and show what needs attention |
-| `/push` | Push explicitly selected evaluation sets where supported; other native DA-GA deployment remains unavailable |
-| `/backup-template-configs` | Capture hybrid Workday reference-data template configs before an extension update |
-| `/restore-template-configs` | Restore hybrid Workday reference-data template configs after an extension update |
-| `/menu` | See all available commands |
+| Command                     | What it does                                                                                                  |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `/setup`                    | Connect this workspace to an existing editable DA Dev agent                                                   |
+| `/planner`                  | Create, import, edit, share, activate, and track an ESS rollout plan; view assigned tasks                     |
+| `/roles`                    | Attest who holds a rollout role on a shared plan; list or revoke attestations                                 |
+| `/discover`                 | Inventory tenant environments, agents, and integrations to ground the rollout in actual configuration         |
+| `/landing-page`             | Configure landing-page branding and content                                                                   |
+| `/org-announcements`        | Create and manage announcements for the selected ESS agent                                                    |
+| `/connect`                  | Choose an available integration                                                                               |
+| `/connect-workday`          | Connect the ESS HR agent to Workday                                                                           |
+| `/manage-topics`            | List current ISV topic-set states, or review and approve enabling or disabling sets                           |
+| `/topic-actions`            | Compatibility alias for `/manage-topics`                                                                      |
+| `/create`                   | Draft and approve a topic save, or separately author evaluation sets; flow authoring is outside ADK           |
+| `/update`                   | Read and approve a mapped topic save, or separately edit evaluation sets                                      |
+| `/delete`                   | Review and approve a selected Dev topic deletion, stage it locally, or discard a never-pushed local draft     |
+| `/scan`                     | Scan your agent for compile errors and fix them                                                               |
+| `/review`                   | Review local topics or evaluation test sets tagged for review                                                 |
+| `/evaluate`                 | Generate evaluation test sets for your agent                                                                  |
+| `/run`                      | Prepare and run selected evaluation sets, or inspect history and results                                      |
+| `/test`                     | Use installed bounded saved-topic testing when compatible and ready; otherwise report acceptance pending      |
+| `/flightcheck`              | Check the selected agent's setup and show what needs attention                                                |
+| `/push`                     | Inspect pending changes and compose selected topic, instruction, and evaluation saves with separate approvals |
+| `/backup-template-configs`  | Capture hybrid Workday reference-data template configs before an extension update                             |
+| `/restore-template-configs` | Restore hybrid Workday reference-data template configs after an extension update                              |
+| `/menu`                     | See all available commands                                                                                    |
 
 You can also describe what you want in plain English — the agent will figure out the right approach.
 
@@ -703,21 +690,21 @@ below; presenting a plan does not execute its tasks.
 
 For local authoring:
 
-```
+```text
 You describe what you need
         ↓
 GitHub Copilot reads the kit's reference docs and templates
         ↓
-The agent generates topic YAML, workflow JSON, or adaptive cards
+The agent drafts topic YAML or separately requested evaluation cases
         ↓
 Files are written to your local agent folder
         ↓
-The kit reports the current DA-GA deployment boundary
+Review and approve a supported save, then inspect its verified outcome
 ```
 
 ## Repository Structure
 
-```
+```text
 solutions/ess-maker-skills/
   .github/             Per-solution copilot-instructions and prompt files
   .vscode/             VS Code workspace settings + recommended extensions

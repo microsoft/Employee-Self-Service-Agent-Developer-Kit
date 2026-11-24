@@ -9,6 +9,24 @@ import html
 
 
 _BLOCKERS = (
+    ({"content_unreadable", "invalid_content_path", "content_members_mismatch"},
+     "The shipped topic files could not be validated.",
+     "Restore the kit's bundled content files, then make a new request."),
+    ({"dev_validation_failed"}, "The live Development and ALM configuration could not be verified.",
+     "Make a new request to verify the selected agent before changing its topics."),
+    ({"content_converter_unavailable", "content_conversion_failed"},
+     "The shipped topics could not be converted with the Object Model converter.",
+     "Run `python scripts/install_agentbuilder_object_model.py`. See `setup/README.md` and the platform setup path for Python.NET, .NET and NuGet prerequisites."),
+    ({"content_required"}, "Add only supports sets with shipped topic content.",
+     "Choose a content-backed topic set."),
+    ({"partial_set"}, "Only part of this topic set is present.",
+     "Delete the present topics of this set in Copilot Studio, then run add again."),
+    ({"content_differs"}, "Live topic content differs from the shipped content.",
+     "Keep the edited topics; add will not overwrite them."),
+    ({"wrong_component_kind"}, "A topic schema name is taken by another component kind.",
+     "Check the named component in Copilot Studio."),
+    ({"dev_alm_required"}, "Add requires a Development agent enrolled in ALM.",
+     "Select the enrolled Development agent, then make a new request."),
     ({"review_unavailable", "review_invalid", "session_consumed"},
      "This review is unavailable or has already been used.",
      "Make a new request for a fresh review and approval."),
@@ -25,7 +43,7 @@ _BLOCKERS = (
      "Check that operation's outcome before starting a new request."),
     ({"invalid_request"},
      "The topic-change request is not supported. Restore is not supported.",
-     "Specify Enable or Disable and the whole topic sets to change."),
+     "Specify Add, Enable or Disable and the whole topic sets to change."),
     ({"setup_not_run", "setup_incomplete"},
      "Workspace preparation is incomplete.",
      "Run /setup for the selected agent, then make a new request."),
@@ -93,7 +111,7 @@ def _topic_name(schema_name: str) -> str:
 
 
 def _state(value: str) -> str:
-    return {"On": "Enabled", "Off": "Disabled", "Mixed": "Mixed"}.get(value, "Unknown")
+    return {"On": "Enabled", "Off": "Disabled", "Mixed": "Mixed", "Absent": "Absent"}.get(value, "Unknown")
 
 
 def _topic_count(count: int) -> str:
@@ -166,6 +184,9 @@ def _blocker_messages(result: dict) -> list[str]:
         codes.add(result["reason"].split(":", 1)[0])
     matches = [(message, step) for keys, message, step in _BLOCKERS if codes & keys]
     messages.extend(message for message, _ in matches)
+    if result.get("action") == "add":
+        from manage_topics_content_presentation import member_problems
+        messages.extend(member_problems(blockers))
     step = matches[0][1] if matches else (
         "Choose a topic set available on this agent." if messages else
         "Make a new request to check the selected agent again."
@@ -180,7 +201,7 @@ def approval_question(review: dict) -> dict | None:
     changes = {item["componentId"] for item in review["proposedChanges"]}
     if review["blockers"] or not changes:
         return None
-    action = {"enable": "Enable", "disable": "Disable"}[review["action"]]
+    action = {"enable": "Enable", "disable": "Disable", "add": "Add"}[review["action"]]
     count = _topic_count(len(changes))
     names = [_set_names(review, (key,)) for key in review["selectedSets"]]
     sets = _text(
@@ -212,7 +233,7 @@ def review_text(review: dict, *, preview: bool = False) -> str:
         return "\n".join(_blocker_messages(review))
     if preview:
         return _topic_list_text(review)
-    action = {"enable": "Enable", "disable": "Disable"}[review["action"]]
+    action = {"enable": "Enable", "disable": "Disable", "add": "Add"}[review["action"]]
     target = review["target"]
     lines = [
         "## Review topic changes",
@@ -259,6 +280,11 @@ def review_text(review: dict, *, preview: bool = False) -> str:
         lines.extend(("", "Could not proceed. No topics were changed.", *_blocker_messages(review)))
     if not blocked:
         lines.extend(("", "The skill will not publish."))
+        if review["action"] == "add":
+            lines.append(
+                "Changes stay in the agent's draft. Microsoft 365 Copilot sees them only after you publish "
+                "in Copilot Studio."
+            )
     return "\n".join(lines)
 
 
@@ -285,6 +311,9 @@ def _topic_list_text(review: dict) -> str:
 def _topic_result_text(result: dict, topic: dict) -> str:
     plan = result.get("plan") or {}
     state = _state(topic["state"])
+    if plan.get("action") == "add":
+        from manage_topics_content_presentation import content_topic_result
+        return content_topic_result(topic, state)
     desired = "Enabled" if plan.get("action") == "enable" else "Disabled"
     status = topic["status"]
     if state == desired:
@@ -332,7 +361,12 @@ def _result_tables(result: dict) -> list[str]:
     return lines
 
 
-def result_text(result: dict) -> str:
+def result_text(result: dict, *, action: str | None = None, plain: bool = False) -> str:
+    if not plain:
+        from manage_topics_content_presentation import content_result_text
+        text = content_result_text(result, action)
+        if text is not None:
+            return text
     status = result["status"]
     if status == "sets_listed":
         lines = ["## Topic sets"]

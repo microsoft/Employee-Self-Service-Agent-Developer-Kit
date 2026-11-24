@@ -10,10 +10,7 @@ import json
 import pytest
 
 import agentbuilder
-import auth
-import plant_debug
 import publish
-import strip_debug
 
 
 def _da_config() -> dict:
@@ -239,44 +236,3 @@ def test_publish_malformed_diagnostics_keeps_server_summary(
     assert "PublishValidationFailure" in output
     assert "Validation for the bot failed" in output
     assert "Validation details" not in output
-
-
-def test_plant_debug_reports_da_ga_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setattr(auth, "is_connect_ready", lambda: True)
-    monkeypatch.setattr(auth, "load_config", _da_config)
-
-    result = plant_debug.main(
-        [
-            "--topic",
-            "test-topic",
-            "--after",
-            "action",
-            "--activity",
-            "DBG value",
-            "--yes",
-        ]
-    )
-
-    assert result == 2
-    assert "not yet available" in capsys.readouterr().out
-
-
-def test_strip_debug_reports_da_ga_unavailable(
-    tmp_path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    provenance = tmp_path / "provenance.json"
-    provenance.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(strip_debug, "PROVENANCE_PATH", provenance)
-    monkeypatch.setattr(strip_debug, "load_provenance", object)
-    monkeypatch.setattr(auth, "is_connect_ready", lambda: True)
-    monkeypatch.setattr(auth, "load_config", _da_config)
-
-    result = strip_debug.main(["--yes"])
-
-    assert result == 2
-    assert "not yet available" in capsys.readouterr().out
