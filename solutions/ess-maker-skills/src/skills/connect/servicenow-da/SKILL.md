@@ -36,6 +36,9 @@ continue with `selectedAgent`, then run
 `discover-realm-target --realm {realmHint}` at once. It finds the promoted
 agent and its link by itself through the API even when its name differs from
 Dev; never ask the maker for a link or write your own question.
+When the named HR or IT agent is not prepared in this workspace, the controller
+returns `agent-link-required` with `requestedProduct`: show its `chatMessage`
+verbatim and follow its `afterReply`; never offer the other product's agent.
 Never match an agent by display name yourself.
 
 When the maker answers **Yes**, rerun with the returned `prepared:{ID}`

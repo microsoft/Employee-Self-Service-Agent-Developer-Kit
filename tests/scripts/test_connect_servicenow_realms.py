@@ -2191,7 +2191,10 @@ def test_chooser_product_word_resolves_only_a_unique_agent_of_that_kind(
     assert resolved["resolvedBy"] == "product"
     twin = choice("c", profile, "Contoso Gamma")
     assert snow._agent_name_result(word, [mine, twin], [], []) is None
-    assert snow._agent_name_result(word, [others], [], []) is None
+    not_prepared = snow._agent_name_result(word, [others], [], [])
+    assert not_prepared is not None
+    assert not_prepared["status"] == "agent-link-required"
+    assert not_prepared["requestedProduct"] == word.upper()
 
 
 @pytest.mark.parametrize("profile", ["hrsd", "itsm"])

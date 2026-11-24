@@ -84,8 +84,13 @@ selected, attached, or prepared. Reuse it silently, without asking:
 - Otherwise, when the maker only named the agent (for example "my Benefits
   agent"), run `agent-chooser --agent-name "{NAME_AS_TYPED}"` and follow its
   result without showing a card: `ready` continues, `setup-incomplete` is the
-  Setup handoff, and `unsupported-agent` shows its `message` verbatim (see
+  Setup handoff, `agent-link-required` with `requestedProduct` (the HR or IT
+  agent the maker named is not prepared in this workspace) is a stop: send its
+  `chatMessage` verbatim, end the turn, and follow its `afterReply` once the
+  maker replies, staying on the named product (never offer or select the other
+  product's agent), and `unsupported-agent` shows its `message` verbatim (see
   **Unsupported agent**). Never ask for a Copilot Studio link for a named agent
+    yourself (only the controller's not-prepared question above may ask for one)
   and never start Setup for an unsupported one. When the maker also names a
   destination (for example "test the IT agent in Prod"), pass the words as
   typed. Pass the whole sentence as typed, for example "We've now promoted ESS

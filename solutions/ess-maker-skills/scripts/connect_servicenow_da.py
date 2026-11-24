@@ -3687,6 +3687,36 @@ def _promoted_agent_result(
     return result
 
 
+def _product_not_prepared_result(product_word: str) -> dict[str, Any]:
+    """Ask for the link of the named product's agent when none is prepared."""
+    label = f"ESS {product_word.upper()}"
+    return {
+        "schemaVersion": "servicenow.agent-chooser.v1",
+        "status": "agent-link-required",
+        "branch": "requested-product-not-prepared",
+        "requestedProduct": product_word.upper(),
+        "question": {
+            "header": f"I can't find a prepared {label} agent in this workspace.",
+            "question": (
+                f"Paste the link to your {label} agent and I'll set it up "
+                "first, or tell me if you want to prepare one first."
+            ),
+            "options": [],
+            "allowFreeformInput": True,
+        },
+        "afterReply": (
+            "When the maker replies: if they paste a Copilot Studio link, run "
+            'agent-chooser --selection-key "another-agent" --agent-link '
+            f'"{{LINK}}" and follow its result. If they want to prepare the '
+            f"agent first, send exactly: Prepare your {label} agent with "
+            "/setup, then ask me to connect ServiceNow again. Then end the "
+            f"turn. Stay on {label}: never offer or select the other "
+            "product's agent."
+        ),
+        "stateChanged": False,
+    }
+
+
 def _agent_name_result(
     agent_name: str,
     prepared_choices: list[dict[str, Any]],
@@ -3795,7 +3825,10 @@ def _agent_name_core(
             result = _prepared_agent_result(by_product[0])
             result["resolvedBy"] = "product"
             return result
-        # Several or no prepared agents of that kind: ask, never guess.
+        if not by_product:
+            # The named product is never swapped for the other one.
+            return _product_not_prepared_result(product_word)
+        # Several prepared agents of that kind: ask, never guess.
         return None
     if not allow_unsupported:
         return None

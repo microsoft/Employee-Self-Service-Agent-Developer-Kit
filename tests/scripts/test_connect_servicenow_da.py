@@ -16004,7 +16004,8 @@ def test_agent_chooser_resolves_a_bare_product_word_to_the_only_agent_of_that_ki
     assert "realmHint" not in ready
 
     other = snow.agent_chooser_handoff(tmp_path, agent_name="HR")
-    assert other["status"] == "choice-required"
+    assert other["status"] == "agent-link-required"
+    assert other["requestedProduct"] == "HR"
 
 
 @pytest.mark.parametrize(
@@ -16160,13 +16161,116 @@ def test_agent_chooser_hr_request_never_reports_unsupported_without_an_hr_agent(
 
     for typed in ("Connect ServiceNow for my HR agent.", "my HR agent", "HR agent"):
         result = snow.agent_chooser_handoff(tmp_path, agent_name=typed)
-        assert result["status"] != "unsupported-agent"
-        assert result["status"] != "ready"
+        assert result["status"] == "agent-link-required"
+        assert "selectedAgent" not in result
 
     for typed in ("Connect ServiceNow for my IT agent.", "my IT agent", "IT agent"):
         result = snow.agent_chooser_handoff(tmp_path, agent_name=typed)
         assert result["status"] == "ready"
         assert result["selectedAgent"]["id"] == AGENT_ID
+
+
+def _set_only_agent_to_hr(setup_path: Path) -> None:
+    state = json.loads(setup_path.read_text(encoding="utf-8"))
+    state["agents"][AGENT_ID]["agent"]["schema_name"] = snow.HR_SCHEMA_NAME
+    state["agents"][AGENT_ID]["agent"]["workspace_slug"] = (
+        "employee-self-service-hr"
+    )
+    setup_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def _add_hr_agent(setup_path: Path, config_path: Path) -> None:
+    state = json.loads(setup_path.read_text(encoding="utf-8"))
+    hr = json.loads(json.dumps(state["agents"][AGENT_ID]))
+    hr["agent"].update(
+        {
+            "id": OTHER_AGENT_ID,
+            "schema_name": snow.HR_SCHEMA_NAME,
+            "workspace_slug": "employee-self-service-hr",
+        }
+    )
+    hr["workspace"]["folder"] = "workspace/agents/employee-self-service-hr"
+    state["agents"][OTHER_AGENT_ID] = hr
+    setup_path.write_text(json.dumps(state), encoding="utf-8")
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["agents"].append(
+        {
+            "slug": "employee-self-service-hr",
+            "botId": OTHER_AGENT_ID,
+            "agentBuilderChangeSetPath": (
+                "workspace/agents/employee-self-service-hr/"
+                ".agentbuilder/components.json"
+            ),
+        }
+    )
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+
+_IT_REQUESTS = (
+    "Connect ServiceNow for my IT agent.",
+    "my IT agent",
+    "IT agent",
+    "IT",
+    "the IT agent in Prod",
+)
+_HR_REQUESTS = (
+    "Connect ServiceNow for my HR agent.",
+    "my HR agent",
+    "HR agent",
+    "HR",
+    "the HR agent in Prod",
+)
+
+
+@pytest.mark.parametrize(
+    ("requests", "product", "only_other"),
+    [(_IT_REQUESTS, "IT", "hr"), (_HR_REQUESTS, "HR", "it")],
+)
+def test_agent_chooser_asks_for_the_link_when_the_named_product_is_not_prepared(
+    tmp_path: Path,
+    requests: tuple[str, ...],
+    product: str,
+    only_other: str,
+) -> None:
+    setup_path, _ = _seed_it_setup(tmp_path)
+    if only_other == "hr":
+        _set_only_agent_to_hr(setup_path)
+
+    for typed in requests:
+        result = snow.agent_chooser_handoff(tmp_path, agent_name=typed)
+        assert result["status"] == "agent-link-required"
+        assert result["requestedProduct"] == product
+        assert "selectedAgent" not in result and "agents" not in result
+        question = result["question"]
+        assert f"ESS {product} agent" in question["header"]
+        assert "Paste the link" in question["question"]
+        assert "prepare one first" in question["question"]
+        other = "IT" if product == "HR" else "HR"
+        assert f"ESS {other}" not in json.dumps(result)
+
+        wrapped = snow._with_agent_rules(result, "agent-chooser")
+        assert wrapped["endTurn"] is True
+        assert "pendingCard" not in wrapped
+        assert wrapped["chatMessage"].startswith(
+            f"I can't find a prepared ESS {product} agent"
+        )
+        assert "never offer or select the other" in wrapped["afterReply"]
+
+
+def test_agent_chooser_keeps_the_named_product_when_both_are_prepared(
+    tmp_path: Path,
+) -> None:
+    setup_path, config_path = _seed_it_setup(tmp_path)
+    _add_hr_agent(setup_path, config_path)
+
+    for typed in _IT_REQUESTS[:4]:
+        result = snow.agent_chooser_handoff(tmp_path, agent_name=typed)
+        assert result["status"] == "ready"
+        assert result["selectedAgent"]["id"] == AGENT_ID
+    for typed in _HR_REQUESTS[:4]:
+        result = snow.agent_chooser_handoff(tmp_path, agent_name=typed)
+        assert result["status"] == "ready"
+        assert result["selectedAgent"]["id"] == OTHER_AGENT_ID
 
 
 def test_agent_chooser_with_a_destination_never_reports_unsupported(
@@ -16220,7 +16324,7 @@ def test_agent_chooser_resolves_a_named_ess_agent_without_a_card(
     assert ready["selectedAgent"]["id"] == AGENT_ID
 
     other = snow.agent_chooser_handoff(tmp_path, agent_name="HR")
-    assert other["status"] == "choice-required"
+    assert other["status"] == "agent-link-required"
 
     with pytest.raises(snow.ServiceNowConnectError):
         snow.agent_chooser_handoff(
