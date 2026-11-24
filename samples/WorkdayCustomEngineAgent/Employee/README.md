@@ -6,7 +6,7 @@ search_exclude: false
 
 **Register the XML configurations for the scenarios you need, then create their topics in your existing ESS Custom Engine Agent.** These samples let employees read their own Workday records and submit self-service changes.
 
-Unlike the DA samples on the repository's `main` branch, these CEA topics use ESS Template Configuration records and `msdyn_copilotforemployeeselfservicehr.topic.*` system topics. Do not copy the DA shared template-config setup topic or its runtime lookup keys into this agent.
+These topics use ESS Template Configuration records and `msdyn_copilotforemployeeselfservicehr.topic.*` system topics. Use the configuration lookup names and system-topic bindings documented below.
 
 ## Contents
 
@@ -80,7 +80,7 @@ Contact information also calls the existing OOB configurations `msdyn_HRWorkdayH
 3. In Copilot Studio, select **Topics > Add a topic > From blank** and name the topic.
 4. Select **More > Open code editor**. Replace the blank topic's contents with the scenario's **entire** `topic.yaml`; use the raw file contents when copying from GitHub.
 5. Review tenant-specific values. Replace `<TENANT_NAME>` in user-facing Workday links, and review country/state choices, leave-plan/type/reason IDs, and reference-data mappings where applicable.
-6. Resolve child-topic references to the installed CEA system topics. If your agent generates a different schema name, select the existing topic through the topic picker and retain its input/output bindings. Do not substitute DA dialogs or hard-code another employee's ID.
+6. Resolve child-topic references to the installed CEA system topics. If your agent generates a different schema name, select the existing topic through the topic picker and retain its input/output bindings. Do not hard-code another employee's ID.
 7. Return to the canvas, save, and enable the topic. Resolve topic-checker errors before testing.
 
 The common-execution input contract includes `scenarioName` and the JSON `parameters` string. Its output bindings include `workdayResponse`, `isSuccess`, and `errorResponse`. Preserve those contracts, XML placeholder tokens, and node IDs when customizing.

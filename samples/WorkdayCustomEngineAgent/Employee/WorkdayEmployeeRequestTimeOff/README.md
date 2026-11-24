@@ -207,7 +207,7 @@ Inspect `isSuccess`/`errorResponse` and confirm `TimeOffReasonConfig` contains t
 `Global.ESS_UserContext_Employee_Id` is empty or the Workday connector isn't configured. Verify both.
 
 **Vacation isn't pre-selected when the user says "request vacation"**
-Check your customized `LeaveTypeConfig` value against the Adaptive Card dropdown value. Both use `ESS_Vacation_Hours` in the supplied CEA YAML; do not remove its prefix when applying DA examples or older customizations.
+Check your customized `LeaveTypeConfig` value against the Adaptive Card dropdown value. Both use `ESS_Vacation_Hours` in the supplied CEA YAML; preserve the prefix and keep both values consistent when customizing.
 
 **Success card shows a raw ID like `ESS_Vacation_Hours`**
 The supplied success card maps the sample IDs to friendly names. If you added a leave type or changed an ID, update its `Switch()` expression to match the dropdown value.
