@@ -128,7 +128,10 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-sl
 ```
 
 If the refreshed result contains `links.serviceNowInstance`, preserve it for
-later phases and do not display an action link before the Entra step.
+later phases and do not display an action link before the Entra step. Once
+`record-preflight` has recorded the instance, its output never repeats the
+instance question; send its `chatMessage` verbatim and continue with the next
+command.
 
 Return `ACTION_RESULT = "recorded"` after discovery is persisted. The
 subsequent Entra, OIDC, and credential phases independently reverify

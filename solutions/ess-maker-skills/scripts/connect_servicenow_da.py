@@ -6290,7 +6290,20 @@ def record_preflight_instance(
         "status": "pending"
     }
     _write_lifecycle_state(context, state)
-    return copy.deepcopy(preflight)
+    recorded = copy.deepcopy(preflight)
+    discovery = recorded.get("discovery")
+    if isinstance(discovery, dict):
+        # The instance is recorded now; returning the saved question would
+        # make the output ask it again and end the turn.
+        discovery["instanceInputRequired"] = False
+        for stale in (
+            "instanceQuestion",
+            "manualInstanceQuestion",
+            "instanceChoices",
+            "instanceFollowUps",
+        ):
+            discovery.pop(stale, None)
+    return recorded
 
 
 def _discovered_instance_candidates(
@@ -11221,6 +11234,42 @@ def _checklist_due(
     return True
 
 
+def _checklist_snapshot(context: dict[str, Any]) -> bytes | None:
+    try:
+        return _checklist_shown_path(context).read_bytes()
+    except OSError:
+        return None
+
+
+def _keep_checklist_only_when_turn_final(
+    context: dict[str, Any] | None,
+    snapshot: bytes | None,
+    output: Any,
+) -> None:
+    """Count a checklist as shown only when this output ends the turn.
+
+    A mid-turn output (``endTurn`` false, or a question card) is easy for the
+    model to skip. Remembering it as shown would then hide the checklist from
+    every later message, so the shown marker is rolled back and the next
+    output that ends the turn carries the checklist again.
+    """
+    if context is None or not isinstance(output, dict):
+        return
+    if output.get("endTurn") is True:
+        return
+    path = _checklist_shown_path(context)
+    try:
+        current = path.read_bytes() if path.exists() else None
+        if current == snapshot:
+            return
+        if snapshot is None:
+            path.unlink()
+        else:
+            path.write_bytes(snapshot)
+    except OSError:
+        return
+
+
 _DEV_TEST_COPY = {
     "hrsd": {
         "article": "an",
@@ -12166,6 +12215,14 @@ def _checkpoint_render_block(
 
 _CHECKLIST_RECORD_COMMANDS = frozenset(
     {
+        "inspect-admin-setup",
+        "identity-direct-handoff",
+        "shared-reuse-handoff",
+        "portal-reuse-handoff",
+        "topic-action-handoff",
+        "record-admin-phase",
+        "claim-confirmation-handoff",
+        "test-failure-handoff",
         "record-identity-direct",
         "record-identity-requirement",
         "record-preflight",
@@ -12243,7 +12300,13 @@ def _with_state_checklist(
         return result
     try:
         block = _state_checklist_block(context)
-    except (ServiceNowConnectError, AgentBuilderError, ValueError, OSError):
+    except (
+        ServiceNowConnectError,
+        AgentBuilderError,
+        ValueError,
+        OSError,
+        KeyError,
+    ):
         return result
     if block is None:
         return result
@@ -18607,6 +18670,7 @@ def main(argv: list[str] | None = None) -> int:
         _hoist_global_options(sys.argv[1:] if argv is None else list(argv))
     )
     context: dict[str, Any] | None = None
+    checklist_snapshot: bytes | None = None
     try:
         profile = product_profile_for_provider(args.provider)
         if profile is None:  # pragma: no cover
@@ -18685,6 +18749,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.maker_username:
                 context_kwargs["maker_username"] = args.maker_username
             context = load_context(**context_kwargs)
+            checklist_snapshot = _checklist_snapshot(context)
         if args.command == "inspect":
             result = inspect(context, offline=args.offline)
         elif args.command == "inspect-portal-url":
@@ -19011,12 +19076,9 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(_with_agent_rules(error, None, args), indent=2))
         return 1
     result = _with_state_checklist(context, result, args.command)
-    print(
-        json.dumps(
-            _with_agent_rules(result, args.command, args),
-            indent=2,
-        )
-    )
+    output = _with_agent_rules(result, args.command, args)
+    _keep_checklist_only_when_turn_final(context, checklist_snapshot, output)
+    print(json.dumps(output, indent=2))
     return 0
 
 

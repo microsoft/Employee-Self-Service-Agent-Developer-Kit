@@ -18165,7 +18165,10 @@ def test_setup_checklist_shows_on_every_resume(
         assert "✅" in again
 
 
-def test_checklist_due_always_shows_the_final_state(tmp_path: Path) -> None:
+def test_checklist_due_always_shows_the_final_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
     context = _profile_context(
         "hrsd", agent_id=AGENT_ID, agent_slug="employee-self-service-hr"
     )
@@ -18214,7 +18217,14 @@ def test_pasted_admin_reply_is_never_followed_by_an_availability_card() -> None:
     )
     assert "never a trigger for availability" in entry
     assert "every command that records a result carries it" in entry
-
+    assert "counts as shown only when the output ends the turn" in entry
+    for provider in ("servicenow-da-hrsd", "servicenow-da-itsm"):
+        preflight = " ".join(
+            (root / provider / "actions" / "admin-preflight.md")
+            .read_text(encoding="utf-8")
+            .split()
+        )
+        assert "never repeats the instance question" in preflight
 
 def test_state_checklist_is_added_only_for_record_commands_that_change_state(
     tmp_path: Path,
@@ -18235,6 +18245,98 @@ def test_state_checklist_is_added_only_for_record_commands_that_change_state(
         assert snow._with_state_checklist(
             context, error, "record-identity-direct"
         ) is error
+
+
+@pytest.mark.parametrize("end_turn", [True, False])
+def test_checklist_counts_as_shown_only_when_the_output_ends_the_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, end_turn: bool
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context = _profile_context(
+        "hrsd", agent_id=AGENT_ID, agent_slug="employee-self-service-hr"
+    )
+    context["root"] = tmp_path
+    with snow.product_profile_context("hrsd"):
+        before = snow._checklist_snapshot(context)
+        assert snow._checklist_due(context, "a") is True
+        snow._keep_checklist_only_when_turn_final(
+            context, before, {"endTurn": end_turn}
+        )
+        # A skipped mid-turn message must not hide the checklist later.
+        assert snow._checklist_due(context, "a") is (not end_turn)
+
+
+def test_mid_turn_checklist_rolls_back_to_the_previous_shown_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context = _profile_context(
+        "hrsd", agent_id=AGENT_ID, agent_slug="employee-self-service-hr"
+    )
+    context["root"] = tmp_path
+    with snow.product_profile_context("hrsd"):
+        assert snow._checklist_due(context, "a") is True
+        before = snow._checklist_snapshot(context)
+        assert snow._checklist_due(context, "b") is True
+        snow._keep_checklist_only_when_turn_final(
+            context, before, {"endTurn": False, "pendingCard": {}}
+        )
+        assert snow._checklist_due(context, "a") is False
+        assert snow._checklist_due(context, "b") is True
+
+
+def test_checklist_carriers_cover_dev_handoffs_and_skip_fixed_text_replies() -> None:
+    for command in (
+        "inspect-admin-setup",
+        "identity-direct-handoff",
+        "topic-action-handoff",
+        "test-failure-handoff",
+        "record-preflight",
+        "record-test",
+    ):
+        assert command in snow._CHECKLIST_RECORD_COMMANDS
+    fixed_text = (
+        "validation-notice",
+        "realm-reply-notice",
+        "redo-step-notice",
+        "agent-chooser",
+        "discover-realm-target",
+        "check-realm",
+        "realm-status",
+    )
+    assert not set(fixed_text) & snow._CHECKLIST_RECORD_COMMANDS
+
+
+def test_record_preflight_output_does_not_repeat_the_saved_instance_question(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    state = snow._load_lifecycle_state(_context())
+    snow._admin_setup(state)["preflight"]["discovery"] = {
+        "instanceInputRequired": True,
+        "instanceQuestion": {
+            "header": "Which ServiceNow instance should Employee Self-Service HR use?",
+            "question": "Send its public HTTPS URL, not credentials.",
+            "allowFreeformInput": True,
+        },
+        "manualInstanceQuestion": {"header": "x", "question": "y"},
+        "instanceChoices": {"Yes": "https://dev123.service-now.com"},
+        "instanceFollowUps": [],
+    }
+    snow._write_lifecycle_state(_context(), state)
+
+    recorded = snow.record_preflight_instance(
+        _context(), instance_url="https://dev123.service-now.com"
+    )
+    wrapped = snow._with_agent_rules(
+        recorded, "record-preflight", SimpleNamespace(provider=None, agent_slug=None)
+    )
+
+    assert recorded["instanceName"] == "dev123"
+    assert recorded["discovery"]["instanceInputRequired"] is False
+    assert "instanceQuestion" not in recorded["discovery"]
+    assert "Which ServiceNow instance" not in wrapped.get("chatMessage", "")
+    assert "pendingCard" not in wrapped
 
 
 @pytest.mark.parametrize(
