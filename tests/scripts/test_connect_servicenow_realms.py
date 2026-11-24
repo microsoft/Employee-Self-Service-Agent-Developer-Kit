@@ -1894,6 +1894,154 @@ def test_returning_after_an_untested_finish_rechecks_before_continuing(
 
 
 @pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+@pytest.mark.parametrize("realm", ["test", "prod"])
+def test_destination_replies_are_fixed_plain_text_and_record_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: str, realm: str
+) -> None:
+    import connect_servicenow_da as snow
+
+    monkeypatch.setattr(snow, "ACTIVE_PROFILE", snow.PRODUCT_PROFILES[profile])
+    _prepare_controller(monkeypatch, dev_reference=DEV_RECORD)
+    context = _controller_context(tmp_path)
+    snow.run_realm_command(context, _args("discover-realm-target", realm=realm))
+    before = (tmp_path / "workspace").exists() and sorted(
+        p.name for p in (tmp_path / "workspace").rglob("*") if p.is_file()
+    )
+    label = realm.title()
+    agent = snow._spec_agent_name()
+    record = "case" if profile == "hrsd" else "ticket"
+
+    def reply(situation: str, **extra: Any) -> dict[str, Any]:
+        result = snow.realm_reply_notice(context, realm, situation, **extra)
+        assert result["recordsNothing"] is True
+        wrapped = snow._with_agent_rules(result, "realm-reply-notice")
+        assert wrapped["endTurn"] is True
+        assert "pendingCard" not in wrapped and "nextCommand" not in wrapped
+        assert "nothing before or after" in wrapped["afterReply"]
+        return wrapped
+
+    assert reply("pause")["chatMessage"] == (
+        f"We're waiting for your real-data request in **{agent} in {label}**."
+        "\n\nWhen you return, tell us what happened and whether it matched "
+        f"what you expected. Don't include {record} contents, employee "
+        "identifiers, tokens, or other secrets. The completed setup "
+        "information stays in place."
+    )
+    reported = "dev" if realm == "test" else "test"
+    assert reply("wrong-realm", reported_realm=reported)["chatMessage"] == (
+        f"That's a {reported.title()} result; we still need a result from "
+        f"**{label}**.\n\nOpen **{agent} in {label}** and run the request in "
+        "that agent's **Test pane**. Then tell us whether it returns the "
+        "expected data."
+    )
+    assert reply("dev-connection")["chatMessage"] == (
+        "A working Dev connection doesn't tell us whether a usable "
+        "connection is available and linked to this agent in "
+        f"**{label}**.\n\nWe'll check the destination's connection and agent "
+        "link. You don't need to resend applicable administrator "
+        "confirmations."
+    )
+    assert reply("dev-untested")["chatMessage"] == (
+        "The Dev integration was left untested, so we don't have a working "
+        "result from that realm.\n\nThis run will establish the result for "
+        f"**{agent} in {label}**. We still need its destination connection "
+        "and agent link, followed by your real-data request."
+    )
+    with pytest.raises(snow.ServiceNowConnectError):
+        snow.realm_reply_notice(context, realm, "wrong-realm", reported_realm=realm)
+    audience = "HR" if profile == "hrsd" else "IT"
+    assert reply("empty-matches")["chatMessage"] == (
+        "That matches what you expected, but an empty result alone doesn't "
+        f"show whether the agent can retrieve your {audience} data.\n\n"
+        "Try a supported request for ServiceNow data you know exists for "
+        "your account, then tell us whether the result matches. You can "
+        "also finish without testing."
+    )
+    assert reply("no-result")["chatMessage"] == (
+        f"What did the request from **{agent} in {label}** return, and was "
+        "that what you expected?"
+    )
+    after = (tmp_path / "workspace").exists() and sorted(
+        p.name for p in (tmp_path / "workspace").rglob("*") if p.is_file()
+    )
+    assert before == after
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_identity_mismatch_reply_is_the_exact_spec_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: str
+) -> None:
+    import connect_servicenow_da as snow
+
+    monkeypatch.setattr(snow, "ACTIVE_PROFILE", snow.PRODUCT_PROFILES[profile])
+    _prepare_controller(monkeypatch, dev_reference=DEV_RECORD)
+    context = _controller_context(tmp_path)
+    snow.run_realm_command(context, _args("discover-realm-target", realm="test"))
+    result = snow.realm_reply_notice(context, "test", "identity-mismatch")
+    wrapped = snow._with_agent_rules(result, "realm-reply-notice")
+    text = wrapped["chatMessage"]
+    agent = snow._spec_agent_name()
+    assert wrapped["endTurn"] is True and result["recordsNothing"] is True
+    assert text.startswith(
+        "The supplied evidence shows that the sign-in claim value doesn't "
+        "match the administrator-confirmed ServiceNow user field.\n\n"
+        "Send the message below to your ServiceNow administrator."
+    )
+    assert (
+        "Don't include employee identifiers or secrets. We'll retain "
+        "unrelated healthy work and recheck any dependencies affected by the "
+        "identity repair.\n\n**Ready-to-send message**\n\n"
+        f"> During setup validation of **{agent} in Test**, the available "
+        "evidence identified a mismatch"
+    ) in text
+    assert "**https://contoso.service-now.com**" in text
+    assert "This identity setup is shared across Dev, Test, and Prod." in text
+    assert "any changed Client ID or custom claim name that applies" in text
+    assert text.rstrip().endswith(
+        "> **Do not send employee identifiers, record contents, or secrets.**"
+    )
+    assert "tenant" not in text.lower()
+    assert "Tell me when" not in text
+    assert "record-identity-direct" in wrapped["afterReply"]
+    assert "check-realm" in wrapped["afterReply"]
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_an_empty_result_that_does_not_match_gets_the_spec_follow_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: str
+) -> None:
+    import connect_servicenow_da as snow
+
+    monkeypatch.setattr(snow, "ACTIVE_PROFILE", snow.PRODUCT_PROFILES[profile])
+    _prepare_controller(monkeypatch, dev_reference=DEV_RECORD)
+    context = _controller_context(tmp_path)
+    snow.run_realm_command(context, _args("discover-realm-target", realm="test"))
+    result = snow.run_realm_command(
+        context,
+        _args(
+            "record-realm-test",
+            realm="test",
+            prompt_category=snow.ACTIVE_PROFILE.test_prompt_category,
+            result="fail",
+            failure_category="empty-result",
+        ),
+    )
+    text = snow._with_agent_rules(result, "record-realm-test")["chatMessage"]
+    record = "case" if profile == "hrsd" else "ticket"
+    assert "❌ Real-data test in the Test pane — Needs attention" in text
+    assert text.endswith(
+        "That doesn't match the result you expected. We'll check the "
+        "available setup information for the agent in **Test** before asking "
+        "you for anything else.\n\nWe can't identify the cause from the "
+        "information available yet.\n\nDid the Test pane show an error or "
+        "only an empty result? If there was an error, send only its text "
+        f"without {record} contents, employee identifiers, tokens, or other "
+        "secrets."
+    )
+    assert "Do not add a statement" in result["afterReply"]
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
 def test_a_different_instance_pauses_and_keeps_the_earlier_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: str
 ) -> None:

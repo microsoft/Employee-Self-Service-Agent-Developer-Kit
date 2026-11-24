@@ -13239,6 +13239,19 @@ def _realm_untested_message(realm: str) -> str:
     )
 
 
+def _realm_empty_result_message(realm: str) -> str:
+    record = "case" if ACTIVE_PROFILE.key == "hrsd" else "ticket"
+    return (
+        "That doesn't match the result you expected. We'll check the "
+        f"available setup information for the agent in **{realm.title()}** "
+        "before asking you for anything else.\n\n"
+        "We can't identify the cause from the information available yet.\n\n"
+        "Did the Test pane show an error or only an empty result? If there "
+        f"was an error, send only its text without {record} contents, "
+        "employee identifiers, tokens, or other secrets."
+    )
+
+
 def _realm_render_context(
     context: dict[str, Any],
     registry: dict[str, Any],
@@ -13256,6 +13269,13 @@ def _realm_render_context(
         footer = _realm_completion_message(realm)
     elif status == "untested":
         footer = _realm_untested_message(realm)
+    else:
+        validation = target["stages"].get("maker-validation") or {}
+        if (
+            validation.get("result") == "fail"
+            and validation.get("failureCategory") == "empty-result"
+        ):
+            footer = _realm_empty_result_message(realm)
     return {
         "agent": _spec_agent_name(),
         "kind": "HR" if hr else "IT",
@@ -13442,7 +13462,16 @@ def _run_realm_command(
             failure_category=args.failure_category,
         )
     realms.save_registry(root, registry)
-    return _realm_check_result(context, registry, realm, resume=resumed)
+    result = _realm_check_result(context, registry, realm, resume=resumed)
+    if command == "record-realm-test" and args.failure_category == "empty-result":
+        result["afterReply"] = (
+            "Send chatMessage verbatim with nothing before or after it and "
+            "end your turn. Do not add a statement about what was recorded. "
+            "When the maker replies with an error text, record nothing from "
+            "it; use realm-reply-notice --situation identity-mismatch only "
+            "when it names a sign-in claim or user-field mismatch."
+        )
+    return result
 
 
 def _record_realm_portal_url(
@@ -13725,6 +13754,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     service_areas_parser.add_argument(
         "--realm", choices=("dev", "test", "prod"), default="dev"
+    )
+    realm_reply_parser = subparsers.add_parser(
+        "realm-reply-notice",
+        help=(
+            "Fixed maker-facing reply for a destination-agent situation (maker "
+            "pauses, reports a result from another realm, offers the Dev "
+            "connection, says Dev was never tested, reports an empty or "
+            "missing result, or reports a sign-in identity mismatch); records "
+            "nothing."
+        ),
+    )
+    realm_reply_parser.add_argument(
+        "--realm", choices=("test", "prod"), required=True
+    )
+    realm_reply_parser.add_argument(
+        "--situation", choices=REALM_REPLY_SITUATIONS, required=True
+    )
+    realm_reply_parser.add_argument(
+        "--reported-realm",
+        choices=("dev", "test"),
+        default="dev",
+        help="Realm the maker's result came from (wrong-realm only).",
     )
     validation_parser = subparsers.add_parser(
         "validation-notice",
@@ -14912,6 +14963,193 @@ def empty_service_areas_handoff(realm: str = "dev") -> dict[str, Any]:
         "recordsNothing": True,
         "renderBlock": {"kind": "waiting", "text": text},
         "afterReply": _SERVICE_AREAS_AFTER_REPLY,
+    }
+
+
+REALM_REPLY_SITUATIONS = (
+    "pause",
+    "wrong-realm",
+    "dev-connection",
+    "dev-untested",
+    "empty-matches",
+    "no-result",
+    "identity-mismatch",
+)
+_REALM_REPLY_AFTER_PLAIN = (
+    "Send chatMessage verbatim with nothing before or after it and end your "
+    "turn. Nothing is recorded by this command; do not write a statement "
+    "about what was or was not recorded."
+)
+_REALM_REPLY_AFTER_IDENTITY = (
+    "Send chatMessage verbatim with nothing before or after it and end your "
+    "turn. Use this only when the maker's pasted error or a supported check "
+    "shows the sign-in claim value does not match the confirmed ServiceNow "
+    "user field; never infer it from a generic failure. When the maker "
+    "returns, any message means they want to continue: record only the "
+    "administrators' non-sensitive reply with the existing "
+    "record-identity-direct commands (never secrets or employee "
+    "identifiers), do not change an existing OIDC configuration serving SSO "
+    "or the Microsoft Graph connector, then run check-realm for this realm "
+    "to recheck the affected setup. Do not present earlier Dev or Test "
+    "success as current validation of the changed configuration; a fresh "
+    "Test-pane request from this agent is still required. Nothing is "
+    "recorded by this command."
+)
+
+
+def _quote_block(paragraphs: list[str]) -> str:
+    return "\n>\n".join(
+        "\n".join(f"> {line}" for line in paragraph.splitlines())
+        for paragraph in paragraphs
+    )
+
+
+def _realm_instance_name(context: dict[str, Any], realm: str) -> str | None:
+    try:
+        registry = realms.load_registry(
+            Path(context["root"]),
+            ACTIVE_PROFILE.provider_key,
+            _agent_slug(context),
+        )
+        target = registry["targets"].get(realm) or {}
+        instance = (target.get("expected") or {}).get("values", {}).get(
+            "instanceName"
+        )
+        if isinstance(instance, str) and instance.strip():
+            return normalize_instance_name(instance)
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        AttributeError,
+        ServiceNowConnectError,
+        realms.ServiceNowRealmError,
+    ):
+        pass
+    return _state_instance_name(_realm_dev_state(context))
+
+
+def realm_reply_notice(
+    context: dict[str, Any],
+    realm: str,
+    situation: str,
+    reported_realm: str = "dev",
+) -> dict[str, Any]:
+    """Fixed maker-facing reply for a Test-pane situation at a destination.
+
+    Wording follows spec scenarios S5-P (waiting), S5-J, S5-H, S5-O, and
+    S5-L. The caller names the situation only after the maker's reply or a
+    supported check shows it. Nothing is recorded.
+    """
+    if realm not in realms.PROMOTED_REALMS:
+        raise ServiceNowConnectError("Realm must be a destination realm.")
+    if situation not in REALM_REPLY_SITUATIONS:
+        raise ServiceNowConnectError("Unsupported destination situation.")
+    agent = _display_agent_name(context)
+    label = realm.title()
+    agent_in = f"**{agent} in {label}**"
+    after_reply = _REALM_REPLY_AFTER_PLAIN
+    if situation == "pause":
+        record = "case" if ACTIVE_PROFILE.key == "hrsd" else "ticket"
+        text = (
+            f"We're waiting for your real-data request in {agent_in}.\n\n"
+            "When you return, tell us what happened and whether it matched "
+            f"what you expected. Don't include {record} contents, employee "
+            "identifiers, tokens, or other secrets. The completed setup "
+            "information stays in place."
+        )
+    elif situation == "wrong-realm":
+        if reported_realm not in ("dev", "test") or reported_realm == realm:
+            raise ServiceNowConnectError(
+                "--reported-realm must name a different realm than --realm."
+            )
+        text = (
+            f"That's a {reported_realm.title()} result; we still need a "
+            f"result from **{label}**.\n\n"
+            f"Open {agent_in} and run the request in that agent's **Test "
+            "pane**. Then tell us whether it returns the expected data."
+        )
+    elif situation == "dev-connection":
+        text = (
+            "A working Dev connection doesn't tell us whether a usable "
+            "connection is available and linked to this agent in "
+            f"**{label}**.\n\n"
+            "We'll check the destination's connection and agent link. You "
+            "don't need to resend applicable administrator confirmations."
+        )
+    elif situation == "dev-untested":
+        text = (
+            "The Dev integration was left untested, so we don't have a "
+            "working result from that realm.\n\n"
+            f"This run will establish the result for {agent_in}. We still "
+            "need its destination connection and agent link, followed by "
+            "your real-data request."
+        )
+    elif situation == "empty-matches":
+        text = _dev_empty_result_message()
+    elif situation == "no-result":
+        text = (
+            f"What did the request from {agent_in} return, and was that "
+            "what you expected?"
+        )
+    else:
+        instance = _realm_instance_name(context, realm)
+        if not instance:
+            raise ServiceNowConnectError(
+                "The ServiceNow instance name is not recorded yet; do not "
+                "write an instance address that is not confirmed."
+            )
+        intro = [
+            "The supplied evidence shows that the sign-in claim value "
+            "doesn't match the administrator-confirmed ServiceNow user "
+            "field.",
+            "Send the message below to your ServiceNow administrator. It "
+            "asks them to review the mapping with your Entra "
+            "administrator, including its existing uses.",
+            "Bring back their non-sensitive confirmation of the completed "
+            "setup and exact mapping. We'll recheck the affected setup "
+            "before you repeat the request in the destination agent's "
+            "Test pane.",
+            "Don't include employee identifiers or secrets. We'll retain "
+            "unrelated healthy work and recheck any dependencies affected "
+            "by the identity repair.",
+        ]
+        message = [
+            f"During setup validation of {agent_in}, the available "
+            "evidence identified a mismatch between the sign-in claim "
+            "value and the confirmed ServiceNow user field.",
+            "Please review the intended claim-to-field mapping with the "
+            f"Entra administrator for **https://{instance}.service-now.com**"
+            ". This identity setup is shared across Dev, Test, and Prod.",
+            "Do not change an existing OIDC configuration serving SSO or "
+            "the Microsoft Graph connector. Any coexistence conflict needs "
+            "manual coordination using the [coexistence guidance]"
+            f"({_COEXISTENCE_LINK}).",
+            "**Please send back:** confirmation that the corrected "
+            "configuration is saved and supports this ESS setup, the exact "
+            "User Claim and User Field, and any changed Client ID or custom "
+            "claim name that applies. If the custom claim setup changed, "
+            "include its exact configured name and confirmation that it is "
+            "complete, including the appropriate format and populated "
+            "source attribute for every intended employee.",
+            "**If the mapping or compatibility is unresolved:** report the "
+            "remaining blocker instead of confirming completion.",
+            "**Do not send employee identifiers, record contents, or "
+            "secrets.**",
+        ]
+        text = (
+            "\n\n".join(intro)
+            + "\n\n**Ready-to-send message**\n\n"
+            + _quote_block(message)
+        )
+        after_reply = _REALM_REPLY_AFTER_IDENTITY
+    return {
+        "status": "realm-reply-notice",
+        "decision": f"realm-{situation}",
+        "realm": realm,
+        "recordsNothing": True,
+        "renderBlock": {"kind": "waiting", "text": text},
+        "afterReply": after_reply,
     }
 
 
@@ -18197,6 +18435,13 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "target-change-handoff":
             result = target_change_handoff(context, args.change, args.target)
+        elif args.command == "realm-reply-notice":
+            result = realm_reply_notice(
+                context,
+                args.realm,
+                args.situation,
+                reported_realm=args.reported_realm,
+            )
         elif args.command == "existing-identity-handoff":
             result = existing_identity_handoff(
                 context,

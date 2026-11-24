@@ -365,7 +365,10 @@ contents" instead of "case contents".
 
 **Maker pauses**
 
-When the maker says they will run the request later, record nothing and say:
+When the maker says they will run the request later, run `realm-reply-notice
+--realm {test|prod} --situation pause` and send `chatMessage` verbatim. Write
+nothing before or after it and no statement about what was or was not
+recorded; the command records nothing. It says:
 
 > We're waiting for your real-data request in **{Agent} in {Environment}**.
 >
@@ -407,8 +410,10 @@ that step's instruction instead. When the maker returns after the repair,
 
 When the maker replies with only "Done", "Finished", or anything else that does
 not say what the request returned, do not treat it as pass or fail and do not
-run `record-realm-test`. Ask once, and keep asking until the reply says what
-was returned and whether it matched:
+run `record-realm-test`. Run `realm-reply-notice --realm {test|prod}
+--situation no-result` and send `chatMessage` verbatim with nothing before or
+after it. Keep asking until the reply says what was returned and whether it
+matched. It says:
 
 > What did the request from **{Agent} in {Environment}** return, and was that
 > what you expected?
@@ -433,33 +438,48 @@ what to do next.
 
 ### Recovery rules
 
+Each situation below that has a `realm-reply-notice` command is controller-owned
+fixed text. When the maker's reply matches, run the command, send `chatMessage`
+verbatim with nothing before or after it (no preamble, no trailer, no sentence
+about what was or was not recorded), and end your turn. Do not improvise these
+replies from this guide.
+
 - **Wrong environment tested.** When the result came from the Dev agent (or from
-  Test while Prod is being checked), say the following and do not record the
-  result:
+  Test while Prod is being checked), run `realm-reply-notice --realm
+  {test|prod} --situation wrong-realm --reported-realm {dev|test}` and do not
+  record the result. It says:
 
   > That's a {Dev|Test} result; we still need a result from **{Environment}**.
   >
   > Open **{Agent} in {Environment}** and run the request in that agent's
   > **Test pane**. Then tell us whether it returns the expected data.
-- **Expected empty result.** Open with: "That doesn't match the result you
-  expected. We'll check the available setup information for the agent in
-  **{Environment}** before asking you for anything else." Check the setup items
-  first. If no cause shows, ask: "Did the Test pane show an error or only an
-  empty result?" Tell the maker to send only the error text, without case or
-  ticket contents, employee identifiers, tokens, or other secrets. Never blame
-  sign-in mapping, connection references or promotion without evidence.
-- **Empty result that matches what the maker expected (no records).** Say:
+- **Expected empty result.** Record it with `record-realm-test --result fail
+  --failure-category empty-result`. The controller's checklist block already
+  ends with the text below; send `chatMessage` verbatim and add nothing,
+  including any statement about what was recorded. It opens with: "That doesn't
+  match the result you expected. We'll check the available setup information
+  for the agent in **{Environment}** before asking you for anything else." When
+  no setup cause shows it continues: "We can't identify the cause from the
+  information available yet." and asks: "Did the Test pane show an error or only
+  an empty result?" It tells the maker to send only the error text, without case
+  or ticket contents, employee identifiers, tokens, or other secrets. Never
+  blame sign-in mapping, connection references or promotion without evidence.
+- **Empty result that matches what the maker expected (no records).** Run
+  `realm-reply-notice --realm {test|prod} --situation empty-matches` (nothing
+  is recorded, and it is not a pass). It says:
 
   > That matches what you expected, but an empty result alone doesn't show
   > whether the agent can retrieve your HR data.
   >
-  > Try a supported request for data you know exists for your account, then tell
-  > us whether the result matches. You can also finish without testing.
+  > Try a supported request for ServiceNow data you know exists for your
+  > account, then tell us whether the result matches. You can also finish
+  > without testing.
 
-  In the IT agent say "your IT data" instead of "your HR data".
+  In the IT agent it says "your IT data" instead of "your HR data".
 - **Maker offers the Dev connection.** For example "Use the connection from Dev.
-  It already works." Say the following, and do not assume a cross-environment
-  connection can be selected directly:
+  It already works." Run `realm-reply-notice --realm {test|prod} --situation
+  dev-connection`, then run `check-realm`. Do not assume a cross-environment
+  connection can be selected directly. It says:
 
   > A working Dev connection doesn't tell us whether a usable connection is
   > available and linked to this agent in **{Environment}**.
@@ -467,8 +487,9 @@ what to do next.
   > We'll check the destination's connection and agent link. You don't need to
   > resend applicable administrator confirmations.
 - **Dev was never tested.** For example "Dev was configured, but we skipped the
-  test. We've deployed to Test now." Say the following, and do not upgrade Dev's
-  status or ask the maker to restart Dev:
+  test. We've deployed to Test now." Run `realm-reply-notice --realm
+  {test|prod} --situation dev-untested`, then run the realm check. Do not
+  upgrade Dev's status or ask the maker to restart Dev. It says:
 
   > The Dev integration was left untested, so we don't have a working result
   > from that realm.
@@ -506,7 +527,15 @@ what to do next.
   > This destination run is paused while support for the different-instance path
   > is resolved. We'll retain the earlier result only for its original instance
   > and identify which setup information needs review.
-- **Sign-in identity does not match (HR and IT).** Say:
+- **Sign-in identity does not match (HR and IT).** Use this when the maker
+  pastes a Test-pane error that says no ServiceNow user matches the sign-in
+  claim value (or the user was not found for the sign-in claim), or a
+  supported check shows the mismatch. Never infer it from a generic failure.
+  Run `realm-reply-notice --realm {test|prod} --situation identity-mismatch`
+  and send `chatMessage` verbatim (intro and ready-to-send message). Do not
+  add a preamble such as "the setup checks passed" and do not add a trailer
+  such as "tell me when it's fixed". The command needs the confirmed instance
+  name and never includes a tenant ID. It says:
 
   > The supplied evidence shows that the sign-in claim value doesn't match the
   > administrator-confirmed ServiceNow user field.
@@ -548,7 +577,10 @@ what to do next.
   >
   > **Do not send employee identifiers, record contents, or secrets.**
 
-  Re-check after the maker says it is fixed.
+  Re-check after the maker returns: record only the administrators'
+  non-sensitive reply with the existing identity commands, then run
+  `check-realm --realm {test|prod}`. A fresh Test-pane request is still
+  required; earlier success does not validate the changed configuration.
 - **Empty HR service areas (HR only).** Get the Message from the controller
   (`empty-service-areas-handoff --realm {test|prod}`) and send `chatMessage`
   verbatim; it records nothing. The text is:

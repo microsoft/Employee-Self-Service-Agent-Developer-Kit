@@ -747,6 +747,22 @@ When the existing sign-in setup marker is set, the last line is "We won't assume
 that the connection or test evidence from {Previous environment} applies
 there." The command applies it automatically.
 
+**Test or Prod Test-pane replies.** For a Test or Prod destination, these
+maker replies are controller-owned fixed text. Run
+`python scripts/connect_servicenow_da.py --provider {PROVIDER} realm-reply-notice --realm {test|prod} --situation {SITUATION}`,
+send `chatMessage` verbatim as the whole reply (no preamble, no trailer, no
+sentence about what was or was not recorded), and follow `endTurn` and
+`afterReply`. The command records nothing. Situations: `pause` (the maker will
+run the request later), `wrong-realm` with `--reported-realm {dev|test}` (the
+maker reports a result from another realm), `dev-connection` (the maker offers
+the Dev connection), `dev-untested` (Dev was never tested), `empty-matches` (an
+empty result that matches what the maker expected), `no-result` (the reply says
+nothing about the result), and `identity-mismatch` (the maker's Test-pane error
+says no ServiceNow user matches the sign-in claim value; never use it for a
+generic failure). The "returned no cases, but I expected cases" reply is
+recorded with `record-realm-test --result fail --failure-category
+empty-result`, whose output already contains the follow-up text.
+
 **HR service areas empty (HR agent only).** When the maker reports that the
 HR service-area list is empty (for example when creating an HR case), get the
 Message from the controller instead of writing it: run
