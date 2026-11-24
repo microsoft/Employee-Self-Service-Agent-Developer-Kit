@@ -1863,7 +1863,7 @@ def connection_repair_steps(
             f"**How to fix the {kind} connection in {label}**",
             lead,
             "\n".join(steps),
-            f"When it shows **Connected**, reply **Done** and we'll recheck "
+            "When it shows **Connected**, reply **Done** and we'll recheck "
             "this step only.",
             _REPAIR_SAFETY,
         ]

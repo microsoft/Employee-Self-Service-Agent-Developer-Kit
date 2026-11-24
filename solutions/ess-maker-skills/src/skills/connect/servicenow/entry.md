@@ -304,9 +304,8 @@ provider uses them.
 Parse the returned `servicenow.resume-handoff.v1` object:
 
 - before any lifecycle action/checkpoint, show
-  `renderBlock.text` as an ordinary agent response. It renders
-  HR's four or IT's three collaboration groups with one responsible role and
-  nested internal-step statuses. When
+  `renderBlock.text` as an ordinary agent response. It renders the flat setup
+  checklist: one line per task, with finished tasks checked. When
   `transport.businessGroupAvailability.gateRequired` is false, continue
   without an availability question. When true, ask only
   `transport.businessGroupAvailability.question`: serialize that exact

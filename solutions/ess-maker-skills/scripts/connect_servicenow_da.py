@@ -53,6 +53,7 @@ ACTIVE_CONFIG = Path(".local/config.json")
 SOLUTION_ROOT = Path(__file__).resolve().parents[1]
 CONNECTOR_ID = "/providers/Microsoft.PowerApps/apis/shared_service-now"
 CONNECTOR_NAME = "shared_service-now"
+SERVICENOW_CONNECTOR_CLIENT_ID = "c26b24aa-7874-4e06-ad55-7d06b1f79b63"
 CONNECTIVITY_API_VERSION = "1"
 CONNECTIVITY_READ_TIMEOUT_SECONDS = 60
 SETUP_SCHEMA_VERSION = 4
@@ -10499,25 +10500,6 @@ def _phase_responsible_roles(
     return defaults.get(phase_id, ["ESS Maker / Agent Developer"])
 
 
-def _phase_status_icon(status: str) -> str:
-    icons = {
-        "complete-checked": "✅",
-        "complete-manual": "✅",
-        "complete-reused": "✅",
-        "rechecking": "🔄",
-        "checking": "🔄",
-        "current": "🔄",
-        "pending": "⬜",
-        "needs-attention": "❌",
-    }
-    try:
-        return icons[status]
-    except KeyError as exc:
-        raise ServiceNowConnectError(
-            "ServiceNow lifecycle progress status is invalid."
-        ) from exc
-
-
 _DEV_FINAL_SCOPE = {
     "hrsd": ("HR case lookup", "cases"),
     "itsm": ("IT ticket lookup", "tickets"),
@@ -10686,7 +10668,7 @@ def _build_phase_progress(
             if current_status is not None and current_id is not None
             else None
         )
-        return _render_grouped_phases(
+        return _render_setup_checklist(
             contract,
             items,
             title=headline,
@@ -11638,7 +11620,7 @@ def _setup_title() -> str:
     )
 
 
-def _render_grouped_phases(
+def _render_setup_checklist(
     contract: dict[str, Any],
     items: list[dict[str, Any]],
     *,
@@ -11692,7 +11674,7 @@ def _business_group_transport(
     availability_context_sha256: str | None,
 ) -> dict[str, Any]:
     groups = _business_groups(contract)
-    ordinary_text = _render_grouped_phases(
+    ordinary_text = _render_setup_checklist(
         contract, phase_items, title=title
     )
     group_context = (
@@ -15948,7 +15930,7 @@ def _existing_entra_packet(
         "4. Select **Add scope**.\n"
         "5. Select **Add a client application**. Enter Microsoft's "
         "ServiceNow connector Client ID: "
-        "`c26b24aa-7874-4e06-ad55-7d06b1f79b63`.\n"
+        f"`{SERVICENOW_CONNECTOR_CLIENT_ID}`.\n"
         "6. Select the `user_impersonation` scope and select **Add "
         "application**.",
         "**Part 4: Only if ServiceNow identifies employees by something "
@@ -16903,7 +16885,8 @@ _CUSTOM_ENTRA_SETUP_PARTS = (
     "ServiceNow access, such as **Access ServiceNow**\n"
     "4. Select **Add scope**.\n"
     "5. Select **Add a client application**. Enter Microsoft's ServiceNow "
-    "connector Client ID: `c26b24aa-7874-4e06-ad55-7d06b1f79b63`.\n"
+    "connector Client ID: "
+    f"`{SERVICENOW_CONNECTOR_CLIENT_ID}`.\n"
     "6. Select the `user_impersonation` scope and select **Add "
     "application**.",
 )

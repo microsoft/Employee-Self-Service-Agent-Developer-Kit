@@ -13,6 +13,7 @@ import uuid
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -12974,7 +12975,6 @@ def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
             guidance("agent-connection", state(None))
         portal = guidance("portal-url", state(None))
         test = guidance("test", state(None))
-        agent_name = snow._spec_agent_name()
 
     audience = "HR" if profile == "hrsd" else "IT"
     saved = (

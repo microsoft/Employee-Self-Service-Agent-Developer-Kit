@@ -126,7 +126,8 @@ or all of them (for example "Check HR and IT in Prod"), first run
 `validation-notice --situation multi-agent`, send `chatMessage` verbatim with
 no preamble or trailer, and end the turn before any chooser, status, preflight,
 or checklist step (see **More than one agent in one request** in
-starts.
+`src/skills/connect/servicenow/entry.md`). The controller's fixed text is the
+whole reply; no run starts.
 
 **A step failed with no controller message.** Controller messages always win.
 When none covers the failure, run

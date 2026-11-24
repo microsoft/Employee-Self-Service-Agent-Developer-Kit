@@ -70,8 +70,8 @@ the ordinary Message-block silence rule.
 
 **More than one agent.** A request naming both ESS agents or all of them (for example "Check HR and IT in Prod") is answered only by `validation-notice --situation multi-agent`: send `chatMessage` verbatim with no preamble or trailer, end the turn, start no run, and record nothing. This is the first action, before any capability emit, `realm-status`, preflight, or checklist.
 
-On every first run and resume, show the controller's HR collaboration groups
-and nested internal-step statuses as an ordinary response. Preflight and
+On every first run and resume, show the controller's flat setup checklist
+(`renderBlock.text`) as an ordinary response. Preflight and
 instance input run without an availability question. When the controller
 enters HR prerequisite, Entra identity, ServiceNow SSO/user mapping, or Maker
 configuration, ask only that group's returned Yes/No question. A No answer

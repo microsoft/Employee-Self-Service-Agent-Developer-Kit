@@ -639,7 +639,7 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     assert "askUserArguments" in prompt
     assert "{message, requestedSchema}" in prompt
     assert "`questions: [...]` is internal host output" in prompt
-    assert "HR's four or IT's three collaboration groups" in prompt
+    assert "It renders the flat setup checklist" in " ".join(prompt.split())
     assert "Preflight and instance input never ask availability" in prompt
     assert "with `--roles-available yes`" in prompt
     assert "`--business-group-id`" in prompt

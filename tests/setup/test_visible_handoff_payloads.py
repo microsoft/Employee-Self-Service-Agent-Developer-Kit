@@ -43,7 +43,7 @@ def _validate_payload(
     payload: object,
     *,
     required_phrases: tuple[str, ...],
-    minimum_length: int = 0,
+    minimum_length: int = 20,
     rendered: bool = False,
 ) -> dict:
     if not isinstance(payload, list) or len(payload) != 1:
@@ -588,6 +588,29 @@ def test_portal_url_is_plain_text_with_manual_fallback_card_only() -> None:
     assert "show this manual fallback in the ordinary current-task reply" in (
         source_normalized
     )
+
+
+@pytest.mark.parametrize(
+    "provider",
+    ("servicenow-da-hrsd", "servicenow-da-itsm"),
+)
+def test_topics_choice_is_a_yes_no_card_with_explanation_in_chat(
+    provider: str,
+) -> None:
+    doc = " ".join(
+        (_CONNECT / provider / "actions" / "prepare-topics.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "<!-- visible-handoff-question:v1 -->" not in doc
+    assert (
+        'the card title is the question "Should we enable the inactive '
+        'ServiceNow topics?" with exactly these short labels: **Yes** and '
+        "**No**" in doc
+    )
+    assert "is sent as chat text, not in the card" in doc
+    assert "record-topic-choice --choice keep-current" in doc
+    assert "enable-all-topics --yes" in doc
 
 
 @pytest.mark.parametrize(

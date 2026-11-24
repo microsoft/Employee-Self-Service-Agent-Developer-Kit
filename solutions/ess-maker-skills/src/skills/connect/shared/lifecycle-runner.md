@@ -234,12 +234,11 @@ DA ServiceNow uses the provider controller's
 `servicenow.lifecycle-transport.v2` result instead of the generic confirmation
 below.
 
-1. Show `renderBlock.text` as an ordinary agent response. It has
-   one automatic preflight line, then exactly four HR or three IT
-   **Collaboration groups**. Each group has one responsible role and its
-   internal phase statuses.
-2. Preflight, chooser, and instance confirmation run before collaboration
-   groups. When
+1. Show `renderBlock.text` as an ordinary agent response. It is the flat setup
+   checklist: a title, one line saying to complete these tasks to finish
+   setup, then one checkbox line per task with finished tasks checked.
+2. Preflight, chooser, and instance confirmation run before the setup
+   checklist. When
    `transport.businessGroupAvailability.gateRequired` is false, continue the
    returned lifecycle decision without asking availability.
 3. When the gate is true, ask only
@@ -628,7 +627,7 @@ pass the resulting single canonical object through `adapt-question`, and call
 the active `ask_user` tool with the generated arguments verbatim. Use the
 canonical `header`/`question`/`options`/`allowFreeformInput` shape exactly;
 `choices` is not a canonical ServiceNow question field. For DA ServiceNow,
-collaboration groups and current status have
+the setup checklist and current status have
 already been shown in an ordinary reply. ServiceNow action questions are
 question-only: never add the group plan, internal-step checklist, progress,
 future roles, checkpoint table, or a synthetic `Progress` input anywhere in

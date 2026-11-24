@@ -155,12 +155,10 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
     assert "without re-showing the\n   up-front plan" in resume
     assert "Do **not**\n   re-render the U.0 table" in resume
     assert "DA ServiceNow business-group availability" in runner
-    assert "exactly four HR or three IT" in runner
+    assert "It is the flat setup\n   checklist" in runner
     assert "Preflight, chooser, and instance confirmation" in runner
     assert "`renderBlock.text`" in runner
     assert "`transport.businessGroupAvailability.question`" in runner
-    assert "exactly four HR or three IT" in runner
-    assert "Preflight, chooser, and instance confirmation" in runner
     assert "One acknowledgement unlocks every internal phase" in runner
     assert "question-only" in normalized
     assert (

@@ -87,15 +87,16 @@ def test_pending_card_title_is_the_question_and_has_no_body() -> None:
         {
             "status": "input-required",
             "question": _card(
-                "Which ServiceNow instance should ESS IT use?",
-                body="Use only the instance root, for example the dev instance.",
+                "Should we continue with ESS IT?",
+                options=["Yes", "No"],
+                body="We'll use the saved setup for this agent.",
             ),
         },
         "resume-handoff",
     )
     card = out["pendingCard"]["askUserArguments"]
-    assert "Use only the instance root" in out["chatMessage"]
-    assert card["message"] == "Which ServiceNow instance should ESS IT use?"
+    assert "We'll use the saved setup" in out["chatMessage"]
+    assert card["message"] == "Should we continue with ESS IT?"
     field = next(iter(card["requestedSchema"]["properties"].values()))
     assert "description" not in field
     assert out["endTurn"] is False
