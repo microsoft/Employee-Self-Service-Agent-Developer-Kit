@@ -16101,6 +16101,74 @@ def test_product_word_never_reads_the_pronoun_or_two_agents() -> None:
     assert snow._product_word_in_sentence("Check HR and IT in Prod") is None
 
 
+_HR_CHOICE = {"id": "hr-id", "name": "Contoso Helpdesk", "profile": "hrsd"}
+_IT_CHOICE = {"id": "it-id", "name": "Fabrikam Desk", "profile": "itsm"}
+
+
+@pytest.mark.parametrize(
+    ("typed", "product"),
+    [
+        ("Connect ServiceNow for my HR agent.", "hrsd"),
+        ("Connect ServiceNow for my IT agent.", "itsm"),
+        ("Connect ServiceNow to the HR agent", "hrsd"),
+        ("connect servicenow for IT", "itsm"),
+        ("I want to set up ServiceNow for HR, please", "hrsd"),
+        ("my HR agent", "hrsd"),
+        ("HR agent", "hrsd"),
+        ("hr", "hrsd"),
+        ("my IT agent", "itsm"),
+        ("IT agent", "itsm"),
+        ("it", "itsm"),
+        ("ESS HR", "hrsd"),
+        ("Employee Self-Service IT", "itsm"),
+    ],
+)
+def test_agent_name_resolves_hr_and_it_phrasings_symmetrically(
+    typed: str, product: str
+) -> None:
+    result = snow._agent_name_result(typed, [_HR_CHOICE, _IT_CHOICE], [], [])
+
+    assert result is not None
+    assert result["status"] == "ready"
+    assert result["selectedAgent"]["profile"] == product
+    assert "realmHint" not in result
+
+
+@pytest.mark.parametrize(
+    "typed",
+    [
+        "Connect ServiceNow for my Benefits agent.",
+        "Connect ServiceNow for my HR Benefits agent",
+        "Connect ServiceNow for HR and IT",
+        "Connect ServiceNow for it",
+    ],
+)
+def test_agent_name_never_guesses_for_other_names_or_two_products(
+    typed: str,
+) -> None:
+    result = snow._agent_name_result(typed, [_HR_CHOICE, _IT_CHOICE], [], [])
+
+    assert result is None or result["status"] == "unsupported-agent"
+    if "Benefits" not in typed:
+        assert result is None or "selectedAgent" not in result
+
+
+def test_agent_chooser_hr_request_never_reports_unsupported_without_an_hr_agent(
+    tmp_path: Path,
+) -> None:
+    _seed_it_setup(tmp_path)
+
+    for typed in ("Connect ServiceNow for my HR agent.", "my HR agent", "HR agent"):
+        result = snow.agent_chooser_handoff(tmp_path, agent_name=typed)
+        assert result["status"] != "unsupported-agent"
+        assert result["status"] != "ready"
+
+    for typed in ("Connect ServiceNow for my IT agent.", "my IT agent", "IT agent"):
+        result = snow.agent_chooser_handoff(tmp_path, agent_name=typed)
+        assert result["status"] == "ready"
+        assert result["selectedAgent"]["id"] == AGENT_ID
+
+
 def test_agent_chooser_with_a_destination_never_reports_unsupported(
     tmp_path: Path,
 ) -> None:

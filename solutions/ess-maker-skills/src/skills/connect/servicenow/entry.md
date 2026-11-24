@@ -91,6 +91,11 @@ selected, attached, or prepared. Reuse it silently, without asking:
   typed. Pass the whole sentence as typed, for example "We've now promoted ESS
   IT to Prod. Check ServiceNow there too." or "deployed HR to Test": the
   controller picks out the agent (HR or IT) and the destination itself. The
+  same holds without a destination: "Connect ServiceNow for my HR agent." and
+  "my IT agent" both resolve to the Employee Self-Service HR or IT agent, so
+  never reduce, translate or guess the words, and never answer with the
+  unsupported-agent text yourself; only the controller's `unsupported-agent`
+  result may show it. The
   controller splits off the destination, resolves the Dev agent, and
   returns it with a `realmHint` and a `nextCommand`: use `selectedAgent`, then run
   `discover-realm-target --realm {realmHint}` immediately. It finds the

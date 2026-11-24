@@ -3550,6 +3550,45 @@ def _normalize_agent_name(name: str) -> str:
 
 _PRODUCT_WORD_PROFILE = {"hr": "hrsd", "it": "itsm"}
 
+# Words a maker may wrap around "HR" or "IT" in a request such as "Connect
+# ServiceNow for my HR agent". Any other word could be an unknown agent name.
+_REQUEST_FILLER = frozenset(
+    {
+        "connect", "servicenow", "now", "for", "to", "with", "and", "a", "an",
+        "i", "me", "we", "want", "need", "please", "help", "set", "up", "setup",
+        "add", "use", "integrate", "integration", "link", "hook", "on", "of",
+        "can", "you", "let", "s", "lets", "start", "begin", "do", "go", "ahead",
+    }
+)
+
+
+def _only_product_words(text: str) -> bool:
+    words = [
+        word
+        for word in _normalize_agent_name(text).split()
+        if word not in _REQUEST_FILLER
+    ]
+    return len(words) > 1 and all(word in _PRODUCT_WORD_PROFILE for word in words)
+
+
+def _product_word_in_request(text: str) -> str | None:
+    """Return "hr" or "it" when a request only wraps one product word.
+
+    A request that also contains another word (an unknown agent name such as
+    "Benefits") is never read as an HR or IT request.
+    """
+    words = [
+        word
+        for word in _normalize_agent_name(text).split()
+        if word not in _REQUEST_FILLER
+    ]
+    if len(words) == 1 and words[0] in _PRODUCT_WORD_PROFILE:
+        # "it" in a longer sentence is a pronoun unless it is written "IT".
+        if words[0] == "it" and not re.search(r"\bIT\b", text):
+            return None
+        return words[0]
+    return None
+
 _DESTINATION_WORDS = {"test": "test", "prod": "prod", "production": "prod"}
 _DESTINATION_PHRASE = re.compile(
     r"\b(?:(?:in|on|for|from|to|into|at)\s+)?(?:the\s+)?"
@@ -3740,11 +3779,16 @@ def _agent_name_core(
     ]
     if unsupported:
         return _unsupported_agent_result(unsupported[0])
-    if wanted in _PRODUCT_WORD_PROFILE:
+    product_word = (
+        wanted
+        if wanted in _PRODUCT_WORD_PROFILE
+        else _product_word_in_request(agent_name)
+    )
+    if product_word is not None:
         by_product = [
             choice
             for choice in prepared_choices
-            if choice["profile"] == _PRODUCT_WORD_PROFILE[wanted]
+            if choice["profile"] == _PRODUCT_WORD_PROFILE[product_word]
         ]
         if len(by_product) == 1:
             result = _prepared_agent_result(by_product[0])
@@ -3753,6 +3797,9 @@ def _agent_name_core(
         # Several or no prepared agents of that kind: ask, never guess.
         return None
     if not allow_unsupported:
+        return None
+    if _only_product_words(agent_name):
+        # "HR and IT" names both supported agents: ask which one.
         return None
     return _unsupported_agent_result({"id": None, "name": agent_name.strip()})
 
