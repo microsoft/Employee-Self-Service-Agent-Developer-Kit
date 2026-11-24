@@ -32,7 +32,7 @@ cannot import the kit's dependencies, stop and tell the maker to rerun
 
 **A step failed and no controller message covers it.** Controller messages always win: when a command returns its own `chatMessage` or `renderBlock` for the failure (test failure, validation notices, realm replies, empty service areas, metadata URL, existing identity), send that text and nothing else. Only when no such message exists, send the step's instructions again by running `python scripts/connect_servicenow_da.py --provider {PROVIDER} --agent-slug {SLUG} redo-step-notice --step {connection|portal-url|topics|test}` and send `renderBlock.text` verbatim. It repeats the same steps the maker saw, with the non-secret values from recorded state (sign-in type, Resource URI, instance name), and records nothing. Never paste, ask for, or echo a password, client secret, or token; the notice says such values come from the administrator. For identity (Entra or ServiceNow single sign-on) problems, re-run `identity-direct-handoff --stage entra|servicenow` instead. Never write your own instructions.
 
-**A Test or Prod check is paused and the maker asks what to do.** `check-realm` and `realm-status` render the whole destination checklist plus, right after the controller's "Validation is paused" text, the concrete steps for that blocker (connection, topics, missing sign-in values). Send `renderBlock.text` verbatim, including the steps. Never cut the steps, never summarize them, and Never answer "the supported repair" without them. If a destination blocker block has no steps, run `redo-step-notice` for that step; do not improvise.
+**A Test or Prod check is paused and the maker asks what to do.** `check-realm` and `realm-status` render the whole destination checklist plus, right after the controller's "Validation is paused" text, the concrete steps for that blocker (connection, topics, missing sign-in values). Send `renderBlock.text` verbatim, including the steps. Never cut the steps, never summarize them, and never answer "the supported repair" without them. If a destination blocker block has no steps, run `redo-step-notice` for that step; do not improvise.
 
 **Hard rules.** Read `src/skills/connect/shared/lifecycle-runner.md` before the first action. When `resume-handoff` returns `renderBlock`, emit `renderBlock.text` verbatim as an assistant message; terminal output does not count. Never edit `lifecycle.json` by hand; record results with `record-checkpoint-results`. Run every command with the launcher resolved by `/setup` (`py -3`, `python3`, then `python`), never assuming bare `python`.
 
@@ -88,13 +88,19 @@ selected, attached, or prepared. Reuse it silently, without asking:
   **Unsupported agent**). Never ask for a Copilot Studio link for a named agent
   and never start Setup for an unsupported one. When the maker also names a
   destination (for example "test the IT agent in Prod"), pass the words as
-  typed. The controller splits off the destination, resolves the Dev agent, and
-  returns it with a `realmHint`: use `selectedAgent`, then run
+  typed. Pass the whole sentence as typed, for example "We've now promoted ESS
+  IT to Prod. Check ServiceNow there too." or "deployed HR to Test": the
+  controller picks out the agent (HR or IT) and the destination itself. The
+  controller splits off the destination, resolves the Dev agent, and
+  returns it with a `realmHint` and a `nextCommand`: use `selectedAgent`, then run
   `discover-realm-target --realm {realmHint}` immediately. It finds the
   promoted agent and its link through the API even when its name differs from
   Dev. Do not ask the maker for the agent link or whether it was promoted, and
-  never write your own question. See `realms.md` (**Agent names differ across
-  environments**, **Discover the promoted agent**).
+  never write your own question. Never use `ask_user`, a card, or a chat
+  question to request a promoted URL, an agent link, or "the saved target";
+  the only question allowed is the controller's own `realm-target-not-found`
+  text. Run the two commands first, before reading other files. See `realms.md`
+  (**Agent names differ across environments**, **Discover the promoted agent**).
 - When the maker named no agent and wants a plain chat question instead of the
   card, get it from
   `python scripts/connect_servicenow_da.py --provider {PROVIDER} validation-notice --situation agent-chooser`

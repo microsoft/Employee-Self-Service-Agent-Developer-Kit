@@ -16031,6 +16031,77 @@ def test_agent_chooser_splits_a_named_destination_and_points_to_discovery(
     assert "Do not ask the maker" in ready["nextStep"]
 
 
+@pytest.mark.parametrize(
+    ("typed", "realm"),
+    [
+        ("We've now promoted ESS IT to Prod. Check ServiceNow there too.", "prod"),
+        ("Help me check ServiceNow after promotion for IT in Test.", "test"),
+        ("Prod IT agent", "prod"),
+        ("Check the Production environment for the IT agent", "prod"),
+        ("We deployed the IT agent to Test. Validate ServiceNow.", "test"),
+        ("test the IT agent in Prod", "prod"),
+    ],
+)
+def test_agent_chooser_resolves_whole_sentences_to_agent_and_destination(
+    tmp_path: Path, typed: str, realm: str
+) -> None:
+    setup_path, _ = _seed_it_setup(tmp_path)
+    _rename_dev_agent(setup_path, "Contoso Dev Helpdesk")
+
+    ready = snow.agent_chooser_handoff(tmp_path, agent_name=typed)
+    assert ready["status"] == "ready"
+    assert ready["selectedAgent"]["id"] == AGENT_ID
+    assert ready["realmHint"] == realm
+    assert f"discover-realm-target --realm {realm}" in ready["nextStep"]
+
+
+@pytest.mark.parametrize(
+    ("typed", "realm", "product"),
+    [
+        ("We've now promoted ESS HR to Prod. Check ServiceNow there too.", "prod", "HR"),
+        ("deployed HR to Test", "test", "HR"),
+        ("Prod HR agent", "prod", "HR"),
+        ("promoted ESS IT to Test, check it", "test", "IT"),
+    ],
+)
+def test_destination_sentences_split_into_realm_and_one_product(
+    typed: str, realm: str, product: str
+) -> None:
+    destination, words = snow._split_destination(typed)
+    assert destination == realm
+    assert snow._product_word_in_sentence(words) == product
+
+
+def test_chooser_output_hands_a_skipping_model_the_discovery_command(
+    tmp_path: Path,
+) -> None:
+    setup_path, _ = _seed_it_setup(tmp_path)
+    _rename_dev_agent(setup_path, "Contoso Dev Helpdesk")
+
+    result = snow.agent_chooser_handoff(
+        tmp_path,
+        agent_name="We've now promoted ESS IT to Prod. Check ServiceNow there too.",
+    )
+    wrapped = snow._with_agent_rules(result, "agent-chooser")
+    assert wrapped["endTurn"] is False
+    command = wrapped["nextCommand"]
+    assert "discover-realm-target --realm prod" in command
+    assert "--provider servicenow-da-itsm" in command
+    assert "--agent-slug employee-self-service-it" in command
+    assert "never ask the maker for a link" in command
+
+    plain = snow._with_agent_rules(
+        snow.agent_chooser_handoff(tmp_path, agent_name="the IT agent"),
+        "agent-chooser",
+    )
+    assert "nextCommand" not in plain
+
+
+def test_product_word_never_reads_the_pronoun_or_two_agents() -> None:
+    assert snow._product_word_in_sentence("check it in Prod") is None
+    assert snow._product_word_in_sentence("Check HR and IT in Prod") is None
+
+
 def test_agent_chooser_with_a_destination_never_reports_unsupported(
     tmp_path: Path,
 ) -> None:

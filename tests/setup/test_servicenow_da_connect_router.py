@@ -1570,6 +1570,47 @@ def test_named_destination_runs_discovery_first_and_never_asks_for_a_link() -> N
     assert 'Never write your own "please paste the URL"' in realms
 
 
+def test_plain_servicenow_destination_requests_route_before_the_setup_gate() -> None:
+    instructions = (_SOLUTION / ".github" / "copilot-instructions.md").read_text(
+        encoding="utf-8"
+    )
+    routes = instructions.split("### Setup-independent routes", 1)[1].split(
+        "### Setup gate for all other requests", 1
+    )[0]
+    text = " ".join(routes.split())
+    assert "We've now promoted ESS IT to Prod. Check ServiceNow there too." in text
+    assert "src/skills/connect/servicenow/entry.md" in text
+    assert "`agent-chooser`, then `discover-realm-target --realm <test|prod>`" in text
+    assert "Never ask the maker for an agent link, a URL" in text
+
+
+def test_no_doc_tells_the_model_to_ask_for_a_promoted_url_or_link() -> None:
+    allowed = ("never", "do not", "don't", "not ", "without", "only the controller")
+    pattern = re.compile(
+        r"(ask|request|prompt)[^.\n]{0,40}(promoted|prod|test)[^.\n]{0,20}"
+        r"(url|link)|(paste|provide)[^.\n]{0,30}promoted[^.\n]{0,20}(url|link)",
+        re.IGNORECASE,
+    )
+    roots = [
+        _SOLUTION / "src" / "skills" / "connect" / "servicenow",
+        _SOLUTION / "src" / "skills" / "connect" / "servicenow-da",
+        _SOLUTION / "src" / "skills" / "connect" / "servicenow-da-hrsd",
+        _SOLUTION / "src" / "skills" / "connect" / "servicenow-da-itsm",
+    ]
+    files = [_SOLUTION / ".github" / "copilot-instructions.md"]
+    for root in roots:
+        files.extend(root.rglob("*.md"))
+    for path in files:
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        for match in pattern.finditer(text):
+            start = max(0, match.start() - 160)
+            context = text[start : match.end() + 40].casefold()
+            assert any(word in context for word in allowed), (
+                path.name,
+                match.group(0),
+            )
+
+
 def test_redo_step_fallback_is_routed_and_never_replaces_spec_text() -> None:
     root = _SOLUTION / "src" / "skills" / "connect"
     for name, path in {
@@ -1584,7 +1625,7 @@ def test_redo_step_fallback_is_routed_and_never_replaces_spec_text() -> None:
         (root / "servicenow" / "realms.md").read_text(encoding="utf-8").split()
     )
     assert "How to fix the {HR|IT} connection in {Environment}" in realms
-    assert "How to turn the {HR|IT} topics on in {Environment}" in realms
+    assert "How to fix the {HR|IT} topics in {Environment}" in realms
 
 
 def test_existing_identity_flag_is_routed_to_the_first_resume() -> None:

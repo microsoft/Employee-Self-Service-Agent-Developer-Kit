@@ -331,10 +331,11 @@ from the administrators; paste their reply, never a secret).
   topics unchanged." The controller records the topics to enable as a request
   (`repairs.enableTopics` in `realm-status`). The controller never changes the
   destination, and no supported command for it exists yet; do not invent one.
-  The block appends "How to turn the {HR|IT} topics on in {Environment}" with
-  the steps (open the agent, **Topics**, turn on the ServiceNow topics that
-  show Off, or fix them in Dev and deploy again if the environment doesn't
-  allow changes) and "reply **Done**". Send it verbatim, then run
+  The block appends "How to fix the {HR|IT} topics in {Environment}" with the
+  only supported path: fix the topics in Dev (run `/connect servicenow`
+  again), publish in Dev, deploy to the destination again, and reply "Done".
+  Never tell the maker to turn topics on directly in the destination. Send it
+  verbatim, then run
   `check-realm --realm {test|prod}` when the maker returns.
 - **Portal URL missing.** The block says the agent is missing its employee
   portal URL so its {case|ticket} links may not open correctly, and asks: "What

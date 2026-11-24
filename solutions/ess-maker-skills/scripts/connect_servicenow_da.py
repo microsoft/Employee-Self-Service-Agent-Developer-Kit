@@ -3552,21 +3552,49 @@ _PRODUCT_WORD_PROFILE = {"hr": "hrsd", "it": "itsm"}
 
 _DESTINATION_WORDS = {"test": "test", "prod": "prod", "production": "prod"}
 _DESTINATION_PHRASE = re.compile(
-    r"\b(?:(?:in|on|for|from|to)\s+)?(?:the\s+)?"
+    r"\b(?:(?:in|on|for|from|to|into|at)\s+)?(?:the\s+)?"
     r"(test|prod|production)\b(?:\s+(?:environment|env|realm|version|copy))?",
+    re.IGNORECASE,
+)
+_DESTINATION_MARKED = re.compile(
+    r"\b(?:in|on|for|from|to|into|at)\s+(?:the\s+)?(test|prod|production)\b"
+    r"|\b(test|prod|production)\s+(?:environment|env|realm|version|copy)\b",
     re.IGNORECASE,
 )
 
 
 def _split_destination(agent_name: str) -> tuple[str | None, str]:
-    """Separate a typed destination ("in Prod") from the agent words."""
-    found = {
-        _DESTINATION_WORDS[match.group(1).casefold()]
-        for match in _DESTINATION_PHRASE.finditer(agent_name)
+    """Separate a typed destination ("in Prod") from the agent words.
+
+    A realm word that follows a preposition or precedes "environment" names the
+    destination; a bare "test" in "test the IT agent in Prod" is a verb.
+    """
+    marked = {
+        _DESTINATION_WORDS[(match.group(1) or match.group(2)).casefold()]
+        for match in _DESTINATION_MARKED.finditer(agent_name)
     }
+    if len(marked) == 1:
+        found = marked
+    else:
+        found = {
+            _DESTINATION_WORDS[match.group(1).casefold()]
+            for match in _DESTINATION_PHRASE.finditer(agent_name)
+        }
     if len(found) != 1:
         return None, agent_name
     return next(iter(found)), _DESTINATION_PHRASE.sub(" ", agent_name).strip()
+
+
+def _product_word_in_sentence(text: str) -> str | None:
+    """Return "HR" or "IT" when a sentence names exactly one of them.
+
+    "IT" counts only in capitals so the pronoun "it" is never read as an agent.
+    """
+    hr = bool(re.search(r"\bHR\b", text, re.IGNORECASE))
+    it = bool(re.search(r"\bIT\b", text))
+    if hr == it:
+        return None
+    return "HR" if hr else "IT"
 
 
 def _promoted_agent_records(
@@ -3642,7 +3670,11 @@ def _agent_name_result(
             promoted_records,
             allow_unsupported=True,
         )
-    for words in (agent_name, agent_words):
+    sentence_product = _product_word_in_sentence(agent_words)
+    candidates = [agent_name, agent_words]
+    if sentence_product is not None:
+        candidates.append(sentence_product)
+    for words in candidates:
         named = _agent_name_core(
             words,
             prepared_choices,
@@ -18500,6 +18532,23 @@ def _with_agent_rules(
         else:
             ordered["endTurn"] = False
             ordered["nextCommand"] = _next_command(result, command, args)
+    elif (
+        command == "agent-chooser"
+        and result.get("status") == "ready"
+        and result.get("realmHint")
+        and isinstance(result.get("selectedAgent"), dict)
+    ):
+        selected = result["selectedAgent"]
+        ordered["endTurn"] = False
+        ordered["nextCommand"] = (
+            "Run now, without asking the maker anything: python "
+            "scripts/connect_servicenow_da.py "
+            f"--provider {selected.get('provider')} "
+            f"--agent-slug {selected.get('slug')} discover-realm-target "
+            f"--realm {result['realmHint']}. It finds the promoted agent and "
+            "its link itself; never ask the maker for a link, a URL, or the "
+            "saved target."
+        )
     elif command in _RECORD_COMMANDS and result.get("resumeArguments"):
         ordered["endTurn"] = False
         ordered["nextCommand"] = (

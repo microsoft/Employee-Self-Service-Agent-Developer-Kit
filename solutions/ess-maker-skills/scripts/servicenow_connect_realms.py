@@ -1956,24 +1956,21 @@ def _portal_reported_instruction(
 
 def topics_repair_steps(label: str, context: Mapping[str, Any]) -> str:
     agent = str(context["agent"])
-    product = str(context.get("product") or context["kind"])
     return "\n\n".join(
         [
-            f"**How to turn the {context['kind']} topics on in {label}**",
+            f"**How to fix the {context['kind']} topics in {label}**",
+            f"{label} is a managed environment, so the topics can't be "
+            "edited there. Fix them in Dev, then deploy again:",
             "\n".join(
                 [
-                    f"1. Open {_agent_reference(context)} in **{label}** and "
-                    "go to **Topics**.",
-                    f"2. Find the ServiceNow {product} topics that show "
-                    "**Off** and turn each one on. Leave unrelated topics "
-                    "as they are.",
-                    f"3. If {label} doesn't let you change topics there, "
-                    f"turn them on in Dev instead, publish {agent} in Dev, "
-                    f"and deploy it to {label} again through your own "
-                    "deployment process.",
+                    "1. Go back to Dev and turn the topics on: run "
+                    "`/connect servicenow` again.",
+                    "2. Publish the agent in Dev.",
+                    f"3. Deploy (promote) {agent} to {label} again through "
+                    "your own deployment process.",
+                    '4. Reply "Done" and we\'ll recheck this step only.',
                 ]
             ),
-            "When they're on, reply **Done** and we'll recheck this step only.",
         ]
     )
 

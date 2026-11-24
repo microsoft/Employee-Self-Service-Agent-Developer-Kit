@@ -1634,12 +1634,15 @@ def test_realm_block_topics_disabled_is_enabled_by_the_agent() -> None:
         "We'll enable the affected built-in topic and leave unrelated topics "
         "unchanged."
     ) in block
-    assert "Publish the agent in Dev" not in block
-    assert "run `/connect servicenow` again" not in block
-    steps = block.index("**How to turn the HR topics on in Test**")
+    steps = block.index("**How to fix the HR topics in Test**")
     assert block.index("We'll enable the affected built-in topic") < steps
-    assert "Find the ServiceNow" in block[steps:]
-    assert "reply **Done**" in block[steps:]
+    after = block[steps:]
+    assert "run `/connect servicenow` again" in after
+    assert "Publish the agent in Dev" in after
+    assert "Deploy (promote) Employee Self-Service (HR) to Test again" in after
+    assert 'Reply "Done"' in after
+    assert "Topics**" not in after
+    assert "turn each one on" not in after
 
 
 def test_realm_block_portal_problem_asks_for_the_url() -> None:

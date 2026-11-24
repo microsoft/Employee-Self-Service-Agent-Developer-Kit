@@ -37,6 +37,17 @@ The selected entry point owns any metadata checks and missing-state handling.
   `connect_ready: true`; Workday connections may be the remaining runtime
   readiness blocker. A missing `.local` directory or a `Path does not exist`
   result is expected unprepared state, not a terminal Connect failure.
+- If the user typed `/connect servicenow`, or described ServiceNow work for the
+  ESS HR or ESS IT agent in plain words — connect or check ServiceNow, or a
+  request such as "We've now promoted ESS IT to Prod. Check ServiceNow there
+  too.", "deployed HR to Test", or "test the IT agent in Prod" — proceed with
+  `src/skills/connect/SKILL.md` and retain `servicenow` as the selected
+  integration. Follow `src/skills/connect/servicenow/entry.md`. When the request
+  names Test or Prod (also as "there" after a promotion), the first controller
+  commands are `agent-chooser`, then `discover-realm-target --realm <test|prod>`,
+  then the destination check. Never ask the maker for an agent link, a URL, or
+  "the saved target" with `ask_user` or a card; discovery finds the promoted
+  agent itself, and only the controller's fixed "not found" text may ask.
 - If the user typed `/setup` or gave the direct setup invocation `run setup`
   (the Copilot CLI has no typed `/setup`, so `run setup` is its
   command-equivalent), proceed with setup — read
