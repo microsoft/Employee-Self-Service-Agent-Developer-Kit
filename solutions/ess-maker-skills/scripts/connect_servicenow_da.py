@@ -11820,6 +11820,92 @@ def _checkpoint_render_block(
     }
 
 
+_CHECKLIST_RECORD_COMMANDS = frozenset(
+    {
+        "record-identity-direct",
+        "record-identity-requirement",
+        "record-preflight",
+        "record-shared-reuse",
+        "record-portal-reuse",
+        "record-credential",
+        "resolve-credential",
+        "record-topic-choice",
+        "enable-all-topics",
+        "set-topic-state",
+        "set-portal-url",
+        "record-test",
+    }
+)
+
+
+def _state_checklist_block(
+    context: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Checklist for the recorded state, or ``None`` when nothing changed.
+
+    Command outputs that change a visible step embed this in their chat
+    message, so the maker sees progress without a separate resume call.
+    """
+    state_path = _lifecycle_state_path(context)
+    if not state_path.exists():
+        return None
+    root = Path(context["root"])
+    contract = _load_json(root / CONTRACT_PATH)
+    state = _load_lifecycle_state(context)
+    done = frozenset(
+        key
+        for key, value in (state.get("phases") or {}).items()
+        if isinstance(value, dict) and value.get("status") == "done"
+    )
+    decision = decide_next_step(
+        root,
+        provider=ACTIVE_PROFILE.provider_key,
+        agent_slug=_agent_slug(context),
+        executed_actions=frozenset(),
+        verified_phases=done,
+    )
+    progress = _build_phase_progress(
+        contract,
+        state,
+        decision,
+        executed_actions=frozenset(),
+        verified_phases=done,
+        environment_display_name=_recorded_environment_name(context),
+        other_agent=_second_agent_audience(context, state),
+    )
+    final_text = progress["internal"].get("groupedFinalText")
+    text = str(final_text or progress["internal"]["groupedText"])
+    if not _checklist_due(
+        context,
+        str(progress["internal"]["groupedText"]),
+        force=bool(final_text),
+    ):
+        return None
+    return {"kind": "checklist", "text": text}
+
+
+def _with_state_checklist(
+    context: dict[str, Any] | None,
+    result: Any,
+    command: str | None,
+) -> Any:
+    if (
+        context is None
+        or command not in _CHECKLIST_RECORD_COMMANDS
+        or not isinstance(result, dict)
+        or result.get("status") == "error"
+        or "checklistBlock" in result
+    ):
+        return result
+    try:
+        block = _state_checklist_block(context)
+    except (ServiceNowConnectError, AgentBuilderError, ValueError, OSError):
+        return result
+    if block is None:
+        return result
+    return {**result, "checklistBlock": block}
+
+
 def resume_handoff(
     context: dict[str, Any],
     *,
@@ -17406,6 +17492,9 @@ def _chat_message(result: dict[str, Any]) -> str:
                 parts.append(cleaned)
 
     render_block = result.get("renderBlock")
+    checklist_block = result.get("checklistBlock")
+    if isinstance(checklist_block, dict):
+        add(checklist_block.get("text"))
     if isinstance(render_block, dict):
         add(render_block.get("text"))
     ordinary = result.get("ordinaryReply")
@@ -17415,7 +17504,7 @@ def _chat_message(result: dict[str, Any]) -> str:
     body = {
         key: item
         for key, item in result.items()
-        if key not in {"renderBlock", "ordinaryReply"}
+        if key not in {"renderBlock", "ordinaryReply", "checklistBlock"}
     }
     if result.get("status") in _MESSAGE_STOP_STATUSES:
         add(result.get("message"))
@@ -17435,6 +17524,9 @@ def _output_waits_for_maker(
     command: str | None,
 ) -> bool:
     """True when the maker must reply or act outside chat before the flow moves."""
+    result = {
+        key: item for key, item in result.items() if key != "checklistBlock"
+    }
     if result.get("status") == "error" or command in REALM_COMMANDS:
         return True
     explicit = result.get("waitsForMaker")
@@ -17581,7 +17673,7 @@ def _with_agent_rules(
         {
             key: item
             for key, item in result.items()
-            if key not in {"renderBlock", "ordinaryReply"}
+            if key not in {"renderBlock", "ordinaryReply", "checklistBlock"}
         }
     )
     if chat_message or cards:
@@ -17604,6 +17696,16 @@ def _with_agent_rules(
                         result, args, executed=_running_phase(result)
                     )
                 )
+        elif command in _RECORD_COMMANDS and result.get("resumeArguments"):
+            ordered["endTurn"] = False
+            ordered["nextCommand"] = (
+                "Continue now with: "
+                + _resume_command(
+                    result,
+                    args,
+                    extra_args=[str(item) for item in result["resumeArguments"]],
+                )
+            )
         else:
             ordered["endTurn"] = False
             ordered["nextCommand"] = _next_command(result, command, args)
@@ -18005,6 +18107,7 @@ def main(argv: list[str] | None = None) -> int:
             error["details"] = details
         print(json.dumps(_with_agent_rules(error, None, args), indent=2))
         return 1
+    result = _with_state_checklist(context, result, args.command)
     print(
         json.dumps(
             _with_agent_rules(result, args.command, args),

@@ -17754,6 +17754,66 @@ def test_checklist_due_always_shows_the_final_state(tmp_path: Path) -> None:
         assert snow._checklist_due(context, "b", force=True) is True
         assert snow._checklist_due(context, "b") is False
 
+
+def test_record_command_embeds_the_checklist_in_its_chat_message() -> None:
+    result = {
+        "status": "recorded",
+        "ordinaryReply": {"text": "Saved."},
+        "checklistBlock": {
+            "kind": "checklist",
+            "text": "**Set up ServiceNow HR**\n\n- ✅ Confirm prerequisites",
+        },
+    }
+    wrapped = snow._with_agent_rules(
+        result, "record-identity-direct", SimpleNamespace(
+            provider=None, agent_slug=None, stage="servicenow"
+        )
+    )
+    assert wrapped["chatMessage"].startswith("**Set up ServiceNow HR**")
+    assert "Saved." in wrapped["chatMessage"]
+    assert "pendingCard" not in wrapped
+    assert wrapped["endTurn"] is False
+
+
+def test_pasted_admin_reply_is_never_followed_by_an_availability_card() -> None:
+    root = snow.SOLUTION_ROOT / "src" / "skills" / "connect"
+    for provider in ("servicenow-da-hrsd", "servicenow-da-itsm"):
+        for guide in ("guide-servicenow-oidc.md", "guide-entra-registration.md"):
+            text = " ".join(
+                (root / provider / "actions" / guide)
+                .read_text(encoding="utf-8")
+                .split()
+            )
+            assert 'never write your own "Are you available' in text
+            assert "is evidence, never a reason to ask availability" in text
+    entry = " ".join(
+        (root / "servicenow" / "entry.md").read_text(encoding="utf-8").split()
+    )
+    assert "never a trigger for availability" in entry
+    assert "every command that records a result carries it" in entry
+
+
+def test_state_checklist_is_added_only_for_record_commands_that_change_state(
+    tmp_path: Path,
+) -> None:
+    context = _profile_context(
+        "hrsd", agent_id=AGENT_ID, agent_slug="employee-self-service-hr"
+    )
+    context["root"] = tmp_path
+    with snow.product_profile_context("hrsd"):
+        result = {"status": "recorded"}
+        assert snow._with_state_checklist(
+            context, result, "resume-handoff"
+        ) is result
+        assert snow._with_state_checklist(
+            context, result, "record-identity-direct"
+        ) is result
+        error = {"status": "error"}
+        assert snow._with_state_checklist(
+            context, error, "record-identity-direct"
+        ) is error
+
+
 @pytest.mark.parametrize(
     "provider", ["servicenow-da-hrsd", "servicenow-da-itsm"]
 )
