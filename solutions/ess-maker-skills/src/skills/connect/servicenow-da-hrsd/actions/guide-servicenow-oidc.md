@@ -57,8 +57,9 @@ An administrator reply the maker has already pasted or typed (in whole or in
 part) is evidence, never a reason to ask availability. Do not run the
 availability gate and never write your own "Are you available…" card: run the
 `record-identity-direct` command in this guide with the supplied values right
-away, show its `chatMessage` (it already carries the updated checklist when a
-step changed), and follow its `endTurn` and `nextCommand`. A mismatch comes
+away, show its `chatMessage`, and follow its `endTurn` and `nextCommand`; the
+checklist comes from the next `resume-handoff` `renderBlock.text`, which you
+send verbatim. A mismatch comes
 back as plain chat; send it verbatim. Only `resume-handoff` ever asks an
 availability question, only when the next step needs an administrator, and
 its question already names who must act.

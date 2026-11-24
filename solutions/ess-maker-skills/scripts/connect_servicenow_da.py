@@ -11204,72 +11204,6 @@ def _take_dev_opening(
     return text
 
 
-def _checklist_shown_path(context: dict[str, Any]) -> Path:
-    return _lifecycle_state_path(context).with_name("checklist-shown.json")
-
-
-def _checklist_due(
-    context: dict[str, Any],
-    checklist_text: str,
-    *,
-    force: bool = False,
-) -> bool:
-    """True when the setup checklist should be shown to the maker.
-
-    The checklist is shown at the start, whenever its checked state changed
-    since it was last shown, and always at the end. The last shown state is
-    kept beside, not inside, the lifecycle state so read-only resumes never
-    change the lifecycle file.
-    """
-    path = _checklist_shown_path(context)
-    digest = hashlib.sha256(checklist_text.encode("utf-8")).hexdigest()
-    shown = _load_json(path) if path.exists() else None
-    if (
-        not force
-        and isinstance(shown, dict)
-        and shown.get("sha256") == digest
-    ):
-        return False
-    _write_json_atomic(path, {"sha256": digest, "shownAt": _utc_now()})
-    return True
-
-
-def _checklist_snapshot(context: dict[str, Any]) -> bytes | None:
-    try:
-        return _checklist_shown_path(context).read_bytes()
-    except OSError:
-        return None
-
-
-def _keep_checklist_only_when_turn_final(
-    context: dict[str, Any] | None,
-    snapshot: bytes | None,
-    output: Any,
-) -> None:
-    """Count a checklist as shown only when this output ends the turn.
-
-    A mid-turn output (``endTurn`` false, or a question card) is easy for the
-    model to skip. Remembering it as shown would then hide the checklist from
-    every later message, so the shown marker is rolled back and the next
-    output that ends the turn carries the checklist again.
-    """
-    if context is None or not isinstance(output, dict):
-        return
-    if output.get("endTurn") is True:
-        return
-    path = _checklist_shown_path(context)
-    try:
-        current = path.read_bytes() if path.exists() else None
-        if current == snapshot:
-            return
-        if snapshot is None:
-            path.unlink()
-        else:
-            path.write_bytes(snapshot)
-    except OSError:
-        return
-
-
 _DEV_TEST_COPY = {
     "hrsd": {
         "article": "an",
@@ -11709,13 +11643,10 @@ def _business_group_transport(
     roles_available: bool | None,
     availability_group_id: str | None,
     availability_context_sha256: str | None,
-    show_checklist: bool = True,
 ) -> dict[str, Any]:
     groups = _business_groups(contract)
-    ordinary_text = (
-        _render_grouped_phases(contract, phase_items, title=title)
-        if show_checklist
-        else ""
+    ordinary_text = _render_grouped_phases(
+        contract, phase_items, title=title
     )
     group_context = (
         _business_group_context(context, contract, current_group)
@@ -12121,7 +12052,6 @@ def _resume_render_block(
     *,
     group_changed: bool,
     waiting: bool = False,
-    show_checklist: bool = True,
 ) -> dict[str, Any]:
     availability = transport["businessGroupAvailability"]
     internal = progress["internal"]
@@ -12134,7 +12064,7 @@ def _resume_render_block(
     elif waiting and isinstance(current, dict):
         kind = "waiting"
         parts = [
-            str(current["groupedWaitingText"]) if show_checklist else "",
+            str(current["groupedWaitingText"]),
             str(current["waitingText"]),
             _WAITING_RESUME_NOTE,
         ]
@@ -12145,7 +12075,7 @@ def _resume_render_block(
     ):
         kind = "error"
         parts = [
-            str(current["groupedErrorText"]) if show_checklist else "",
+            str(current["groupedErrorText"]),
             str(current["needsAttentionText"]),
         ]
     else:
@@ -12159,14 +12089,14 @@ def _resume_render_block(
             str(
                 transport["internal"]["ordinaryReply"]["text"]
                 if plan
-                else (internal["groupedText"] if show_checklist else "")
+                else internal["groupedText"]
             )
         ]
         if isinstance(current, dict) and not availability["gateRequired"]:
             parts.append(str(current["startText"]))
     return {
         "kind": kind,
-        "text": "\n\n".join(part for part in parts if part),
+        "text": "\n\n".join(parts),
         "instruction": _RENDER_INSTRUCTION,
     }
 
@@ -12198,119 +12128,19 @@ def _checkpoint_render_block(
     current = progress["internal"]["currentPhase"]
     if outcome == "blocked":
         kind = "error"
-        checklist = current["groupedErrorText"]
-        parts = [current["needsAttentionText"]]
+        parts = [current["groupedErrorText"], current["needsAttentionText"]]
     else:
         kind = "waiting"
-        checklist = current["groupedWaitingText"]
-        parts = [current["waitingText"], _WAITING_RESUME_NOTE]
-    if _checklist_due(context, checklist):
-        parts.insert(0, checklist)
+        parts = [
+            current["groupedWaitingText"],
+            current["waitingText"],
+            _WAITING_RESUME_NOTE,
+        ]
     return {
         "kind": kind,
         "text": "\n\n".join(parts),
         "instruction": _RENDER_INSTRUCTION,
     }
-
-
-_CHECKLIST_RECORD_COMMANDS = frozenset(
-    {
-        "inspect-admin-setup",
-        "identity-direct-handoff",
-        "shared-reuse-handoff",
-        "portal-reuse-handoff",
-        "topic-action-handoff",
-        "record-admin-phase",
-        "claim-confirmation-handoff",
-        "test-failure-handoff",
-        "record-identity-direct",
-        "record-identity-requirement",
-        "record-preflight",
-        "record-shared-reuse",
-        "record-portal-reuse",
-        "record-credential",
-        "resolve-credential",
-        "record-topic-choice",
-        "enable-all-topics",
-        "set-topic-state",
-        "set-portal-url",
-        "record-test",
-    }
-)
-
-
-def _state_checklist_block(
-    context: dict[str, Any],
-) -> dict[str, Any] | None:
-    """Checklist for the recorded state, or ``None`` when nothing changed.
-
-    Command outputs that change a visible step embed this in their chat
-    message, so the maker sees progress without a separate resume call.
-    """
-    state_path = _lifecycle_state_path(context)
-    if not state_path.exists():
-        return None
-    root = Path(context["root"])
-    contract = _load_json(root / CONTRACT_PATH)
-    state = _load_lifecycle_state(context)
-    done = frozenset(
-        key
-        for key, value in (state.get("phases") or {}).items()
-        if isinstance(value, dict) and value.get("status") == "done"
-    )
-    decision = decide_next_step(
-        root,
-        provider=ACTIVE_PROFILE.provider_key,
-        agent_slug=_agent_slug(context),
-        executed_actions=frozenset(),
-        verified_phases=done,
-    )
-    progress = _build_phase_progress(
-        contract,
-        state,
-        decision,
-        executed_actions=frozenset(),
-        verified_phases=done,
-        environment_display_name=_recorded_environment_name(context),
-        other_agent=_second_agent_audience(context, state),
-    )
-    final_text = progress["internal"].get("groupedFinalText")
-    text = str(final_text or progress["internal"]["groupedText"])
-    if not _checklist_due(
-        context,
-        str(progress["internal"]["groupedText"]),
-        force=bool(final_text),
-    ):
-        return None
-    return {"kind": "checklist", "text": text}
-
-
-def _with_state_checklist(
-    context: dict[str, Any] | None,
-    result: Any,
-    command: str | None,
-) -> Any:
-    if (
-        context is None
-        or command not in _CHECKLIST_RECORD_COMMANDS
-        or not isinstance(result, dict)
-        or result.get("status") == "error"
-        or "checklistBlock" in result
-    ):
-        return result
-    try:
-        block = _state_checklist_block(context)
-    except (
-        ServiceNowConnectError,
-        AgentBuilderError,
-        ValueError,
-        OSError,
-        KeyError,
-    ):
-        return result
-    if block is None:
-        return result
-    return {**result, "checklistBlock": block}
 
 
 def resume_handoff(
@@ -12322,7 +12152,6 @@ def resume_handoff(
     availability_group_id: str | None = None,
     availability_context_sha256: str | None = None,
     group_changed: bool = False,
-    dedupe_checklist: bool | None = None,
 ) -> dict[str, Any]:
     root = Path(context["root"])
     contract = _load_json(root / CONTRACT_PATH)
@@ -12354,16 +12183,6 @@ def resume_handoff(
         verified_phases=verified_phases,
     )
     current_group = _current_business_group(contract, progress)
-    is_final = bool(progress["internal"].get("groupedFinalText"))
-    # Every resume shows the checklist; only the continuation of a business
-    # group acknowledgement (the previous call already showed it) may skip it.
-    if dedupe_checklist is None:
-        dedupe_checklist = availability_group_id is not None
-    show_checklist = _checklist_due(
-        context,
-        str(progress["internal"]["groupedText"]),
-        force=is_final or not dedupe_checklist,
-    )
     pre_action_handoff, bypass_availability = (
         _shared_reuse_before_availability(
             context,
@@ -12383,7 +12202,6 @@ def resume_handoff(
         roles_available=roles_available,
         availability_group_id=availability_group_id,
         availability_context_sha256=availability_context_sha256,
-        show_checklist=show_checklist,
     )
     opening = _take_dev_opening(context, state, progress)
 
@@ -12407,7 +12225,6 @@ def resume_handoff(
                 progress,
                 transport,
                 group_changed=group_changed,
-                show_checklist=show_checklist,
             )
         ),
     }
@@ -12449,7 +12266,6 @@ def resume_handoff(
             executed_actions=executed_actions,
             verified_phases=verified_phases,
             group_changed=True,
-            dedupe_checklist=True,
         )
     result["businessGroupAvailabilityAccepted"] = False
     if (
@@ -12468,7 +12284,6 @@ def resume_handoff(
                 transport,
                 group_changed=group_changed,
                 waiting=True,
-                show_checklist=show_checklist,
             )
         )
         return result
@@ -18378,9 +18193,6 @@ def _chat_message(result: dict[str, Any]) -> str:
                 parts.append(cleaned)
 
     render_block = result.get("renderBlock")
-    checklist_block = result.get("checklistBlock")
-    if isinstance(checklist_block, dict):
-        add(checklist_block.get("text"))
     if isinstance(render_block, dict):
         add(render_block.get("text"))
     ordinary = result.get("ordinaryReply")
@@ -18390,7 +18202,7 @@ def _chat_message(result: dict[str, Any]) -> str:
     body = {
         key: item
         for key, item in result.items()
-        if key not in {"renderBlock", "ordinaryReply", "checklistBlock"}
+        if key not in {"renderBlock", "ordinaryReply"}
     }
     if result.get("status") in _MESSAGE_STOP_STATUSES:
         add(result.get("message"))
@@ -18410,9 +18222,6 @@ def _output_waits_for_maker(
     command: str | None,
 ) -> bool:
     """True when the maker must reply or act outside chat before the flow moves."""
-    result = {
-        key: item for key, item in result.items() if key != "checklistBlock"
-    }
     if result.get("status") == "error" or command in REALM_COMMANDS:
         return True
     explicit = result.get("waitsForMaker")
@@ -18559,7 +18368,7 @@ def _with_agent_rules(
         {
             key: item
             for key, item in result.items()
-            if key not in {"renderBlock", "ordinaryReply", "checklistBlock"}
+            if key not in {"renderBlock", "ordinaryReply"}
         }
     )
     if chat_message or cards:
@@ -18670,7 +18479,6 @@ def main(argv: list[str] | None = None) -> int:
         _hoist_global_options(sys.argv[1:] if argv is None else list(argv))
     )
     context: dict[str, Any] | None = None
-    checklist_snapshot: bytes | None = None
     try:
         profile = product_profile_for_provider(args.provider)
         if profile is None:  # pragma: no cover
@@ -18749,7 +18557,6 @@ def main(argv: list[str] | None = None) -> int:
             if args.maker_username:
                 context_kwargs["maker_username"] = args.maker_username
             context = load_context(**context_kwargs)
-            checklist_snapshot = _checklist_snapshot(context)
         if args.command == "inspect":
             result = inspect(context, offline=args.offline)
         elif args.command == "inspect-portal-url":
@@ -19075,9 +18882,7 @@ def main(argv: list[str] | None = None) -> int:
             error["details"] = details
         print(json.dumps(_with_agent_rules(error, None, args), indent=2))
         return 1
-    result = _with_state_checklist(context, result, args.command)
     output = _with_agent_rules(result, args.command, args)
-    _keep_checklist_only_when_turn_final(context, checklist_snapshot, output)
     print(json.dumps(output, indent=2))
     return 0
 

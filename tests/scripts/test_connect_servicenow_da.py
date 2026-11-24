@@ -14846,8 +14846,7 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             "question"
         ] is None
         plugin_guidance = plugin_yes["transport"]["internal"]["ordinaryReply"]["text"]
-        assert "**Current task**" not in plugin_guidance
-        assert "Set up ServiceNow HR" not in plugin_guidance
+        assert "Set up ServiceNow HR" in plugin_guidance
         assert "First, your ServiceNow administrator needs to confirm" in (
             plugin_guidance
         )
@@ -14887,7 +14886,7 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
         )
         entra_guidance = entra_yes["transport"]["internal"]["ordinaryReply"]["text"]
         # gate() already showed this unchanged checklist, so it is not repeated.
-        assert "Set up ServiceNow HR" not in entra_guidance
+        assert "Set up ServiceNow HR" in entra_guidance
         for technical in _TECHNICAL_CARD_BLOCKS[:4] + (
             "guide-entra-registration.md",
             "does not prove app configuration",
@@ -14939,7 +14938,7 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             availability_context_sha256=sso["contextIdentitySha256"],
         )
         sso_guidance = sso_yes["transport"]["internal"]["ordinaryReply"]["text"]
-        assert "Set up ServiceNow HR" not in sso_guidance
+        assert "Set up ServiceNow HR" in sso_guidance
         for technical in _TECHNICAL_CARD_BLOCKS[:4] + (
             "guide-servicenow-oidc.md",
             "Manual evidence does not prove a real employee token",
@@ -14982,7 +14981,7 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             availability_context_sha256=maker["contextIdentitySha256"],
         )
         maker_guidance = maker_yes["transport"]["internal"]["ordinaryReply"]["text"]
-        assert "Set up ServiceNow HR" not in maker_guidance
+        assert "Set up ServiceNow HR" in maker_guidance
         auth_index = maker_guidance.index("Authentication type")
         resource_index = maker_guidance.index("Resource URI")
         instance_index = maker_guidance.index("Instance name")
@@ -18165,40 +18164,29 @@ def test_setup_checklist_shows_on_every_resume(
         assert "✅" in again
 
 
-def test_checklist_due_always_shows_the_final_state(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _profile_context(
-        "hrsd", agent_id=AGENT_ID, agent_slug="employee-self-service-hr"
-    )
-    context["root"] = tmp_path
-    with snow.product_profile_context("hrsd"):
-        assert snow._checklist_due(context, "a") is True
-        assert snow._checklist_due(context, "a") is False
-        assert snow._checklist_due(context, "b") is True
-        assert snow._checklist_due(context, "b", force=True) is True
-        assert snow._checklist_due(context, "b") is False
-
-
-def test_record_command_embeds_the_checklist_in_its_chat_message() -> None:
+def test_record_commands_never_carry_a_checklist_block() -> None:
     result = {
         "status": "recorded",
         "ordinaryReply": {"text": "Saved."},
-        "checklistBlock": {
-            "kind": "checklist",
-            "text": "**Set up ServiceNow HR**\n\n- ✅ Confirm prerequisites",
-        },
     }
     wrapped = snow._with_agent_rules(
         result, "record-identity-direct", SimpleNamespace(
             provider=None, agent_slug=None, stage="servicenow"
         )
     )
-    assert wrapped["chatMessage"].startswith("**Set up ServiceNow HR**")
-    assert "Saved." in wrapped["chatMessage"]
+    assert wrapped["chatMessage"].startswith("Saved.")
+    assert "Set up ServiceNow" not in wrapped["chatMessage"]
+    assert "checklistBlock" not in wrapped
     assert "pendingCard" not in wrapped
     assert wrapped["endTurn"] is False
+    for removed in (
+        "_checklist_due",
+        "_checklist_snapshot",
+        "_keep_checklist_only_when_turn_final",
+        "_with_state_checklist",
+        "_CHECKLIST_RECORD_COMMANDS",
+    ):
+        assert not hasattr(snow, removed)
 
 
 def test_pasted_admin_reply_is_never_followed_by_an_availability_card() -> None:
@@ -18216,8 +18204,25 @@ def test_pasted_admin_reply_is_never_followed_by_an_availability_card() -> None:
         (root / "servicenow" / "entry.md").read_text(encoding="utf-8").split()
     )
     assert "never a trigger for availability" in entry
-    assert "every command that records a result carries it" in entry
-    assert "counts as shown only when the output ends the turn" in entry
+    assert (
+        "Every turn that shows a step update must include the latest "
+        "`renderBlock.text` verbatim"
+    ) in entry
+    assert "never deduplicated" in entry
+    assert "counts as shown only when the output ends the turn" not in entry
+    assert "every command that records a result carries it" not in entry
+    for provider in ("servicenow-da-hrsd", "servicenow-da-itsm"):
+        skill = " ".join(
+            (root / provider / "SKILL.md").read_text(encoding="utf-8").split()
+        )
+        assert "never deduplicated" in skill
+    runner = " ".join(
+        (root / "shared" / "lifecycle-runner.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "never deduplicated" in runner
+    assert "counts as shown only when the output ends the turn" not in runner
     for provider in ("servicenow-da-hrsd", "servicenow-da-itsm"):
         preflight = " ".join(
             (root / provider / "actions" / "admin-preflight.md")
@@ -18226,85 +18231,19 @@ def test_pasted_admin_reply_is_never_followed_by_an_availability_card() -> None:
         )
         assert "never repeats the instance question" in preflight
 
-def test_state_checklist_is_added_only_for_record_commands_that_change_state(
-    tmp_path: Path,
-) -> None:
-    context = _profile_context(
-        "hrsd", agent_id=AGENT_ID, agent_slug="employee-self-service-hr"
-    )
-    context["root"] = tmp_path
-    with snow.product_profile_context("hrsd"):
-        result = {"status": "recorded"}
-        assert snow._with_state_checklist(
-            context, result, "resume-handoff"
-        ) is result
-        assert snow._with_state_checklist(
-            context, result, "record-identity-direct"
-        ) is result
-        error = {"status": "error"}
-        assert snow._with_state_checklist(
-            context, error, "record-identity-direct"
-        ) is error
+def test_progress_bar_carriers_match_main_and_have_no_dedupe_parameters() -> None:
+    import inspect
 
-
-@pytest.mark.parametrize("end_turn", [True, False])
-def test_checklist_counts_as_shown_only_when_the_output_ends_the_turn(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, end_turn: bool
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _profile_context(
-        "hrsd", agent_id=AGENT_ID, agent_slug="employee-self-service-hr"
-    )
-    context["root"] = tmp_path
-    with snow.product_profile_context("hrsd"):
-        before = snow._checklist_snapshot(context)
-        assert snow._checklist_due(context, "a") is True
-        snow._keep_checklist_only_when_turn_final(
-            context, before, {"endTurn": end_turn}
-        )
-        # A skipped mid-turn message must not hide the checklist later.
-        assert snow._checklist_due(context, "a") is (not end_turn)
-
-
-def test_mid_turn_checklist_rolls_back_to_the_previous_shown_state(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    context = _profile_context(
-        "hrsd", agent_id=AGENT_ID, agent_slug="employee-self-service-hr"
-    )
-    context["root"] = tmp_path
-    with snow.product_profile_context("hrsd"):
-        assert snow._checklist_due(context, "a") is True
-        before = snow._checklist_snapshot(context)
-        assert snow._checklist_due(context, "b") is True
-        snow._keep_checklist_only_when_turn_final(
-            context, before, {"endTurn": False, "pendingCard": {}}
-        )
-        assert snow._checklist_due(context, "a") is False
-        assert snow._checklist_due(context, "b") is True
-
-
-def test_checklist_carriers_cover_dev_handoffs_and_skip_fixed_text_replies() -> None:
-    for command in (
-        "inspect-admin-setup",
-        "identity-direct-handoff",
-        "topic-action-handoff",
-        "test-failure-handoff",
-        "record-preflight",
-        "record-test",
-    ):
-        assert command in snow._CHECKLIST_RECORD_COMMANDS
-    fixed_text = (
-        "validation-notice",
-        "realm-reply-notice",
-        "redo-step-notice",
-        "agent-chooser",
-        "discover-realm-target",
-        "check-realm",
-        "realm-status",
-    )
-    assert not set(fixed_text) & snow._CHECKLIST_RECORD_COMMANDS
+    for name in ("_resume_render_block", "_checkpoint_render_block"):
+        assert "show_checklist" not in inspect.signature(
+            getattr(snow, name)
+        ).parameters
+    assert "dedupe_checklist" not in inspect.signature(
+        snow.resume_handoff
+    ).parameters
+    assert "show_checklist" not in inspect.signature(
+        snow._business_group_transport
+    ).parameters
 
 
 def test_record_preflight_output_does_not_repeat_the_saved_instance_question(

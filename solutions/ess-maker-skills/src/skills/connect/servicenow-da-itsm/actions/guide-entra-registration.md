@@ -108,8 +108,8 @@ An Entra administrator reply the maker has already pasted or typed (in whole
 or in part) is evidence, never a reason to ask availability. Do not run the
 availability gate and never write your own "Are you available…" card: run the
 `record-identity-direct --stage entra` command in this guide with the supplied
-values right away and send its `chatMessage` verbatim (it already carries the
-updated checklist when a step changed).
+values right away and send its `chatMessage` verbatim; then run `resume-handoff`
+and send its `renderBlock.text` so the checklist shows the new step.
 
 After that acknowledgement, return the controller-built first-agent Entra administrator message, which follows the PM spec's step structure and shares its underlying steps with
 [the shared Entra administrator source](../../shared/runtime-instructions/entra-administrator.md)
