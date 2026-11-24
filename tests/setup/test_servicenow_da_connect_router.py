@@ -1618,6 +1618,8 @@ def test_redo_step_fallback_is_routed_and_never_replaces_spec_text() -> None:
         text = " ".join(path.read_text(encoding="utf-8").split())
         assert "redo-step-notice --step" in text, name
         assert "Controller messages always win" in text, name
+        assert "explicit failure" in text, name
+        assert "never after" in text.casefold(), name
         assert "never shorten it" in text or "Never cut the steps" in text, name
     realms = " ".join(
         (root / "servicenow" / "realms.md").read_text(encoding="utf-8").split()

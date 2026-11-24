@@ -133,7 +133,8 @@ or checklist step (see **More than one agent in one request** in
 whole reply; no run starts.
 
 **A step failed with no controller message.** Controller messages always win.
-When none covers the failure, run
+Only after a command returned an explicit failure (never after a confirmed or
+successful step), and when none covers the failure, run
 `redo-step-notice --step {connection|portal-url|topics|test}` and send
 `renderBlock.text` verbatim; it repeats the step with its non-secret values and
 never asks for or echoes a secret (see **A step failed and no controller
