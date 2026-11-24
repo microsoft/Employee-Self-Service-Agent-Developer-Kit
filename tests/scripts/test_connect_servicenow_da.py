@@ -4977,6 +4977,99 @@ def test_resolve_credential_names_the_field_that_did_not_match(
         )
 
 
+def test_agent_can_switch_to_another_agents_app_and_share_its_connection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    placeholder_app = "00000000-0000-4000-8000-000000007777"
+    monkeypatch.chdir(tmp_path)
+    context = _context_at(tmp_path)
+    state = snow._state_base(context, _components())
+    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
+    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
+    snow.record_identity_direct(
+        context,
+        stage="entra",
+        client_id=placeholder_app,
+        claim_name="payrollid",
+        user_field=None,
+        confirmed=True,
+    )
+    snow.record_identity_direct(
+        context,
+        stage="servicenow",
+        client_id=None,
+        claim_name=None,
+        user_field="u_payroll_id",
+        confirmed=True,
+    )
+    old = snow._load_lifecycle_state(context)
+    assert old["adminSetup"]["phaseHandoffs"]["servicenow-oidc"][
+        "status"
+    ] == "completed"
+
+    snow.record_identity_direct(
+        context,
+        stage="entra",
+        client_id=APP_CLIENT_ID,
+        claim_name="payrollid",
+        user_field=None,
+        confirmed=True,
+    )
+    switched = snow._load_lifecycle_state(context)
+    handoffs = switched["adminSetup"]["phaseHandoffs"]
+    assert handoffs["entra-registration"]["evidence"]["clientId"] == (
+        APP_CLIENT_ID
+    )
+    assert handoffs["entra-registration"]["evidence"][
+        "selectedClaimName"
+    ] == "payrollid"
+    assert handoffs["servicenow-oidc"] == {"status": "pending"}
+    assert handoffs["credential"] == {"status": "pending"}
+
+    snow.record_identity_direct(
+        context,
+        stage="servicenow",
+        client_id=None,
+        claim_name=None,
+        user_field="u_payroll_id",
+        confirmed=True,
+    )
+    shared = _connection_record(display_name="Shared ServiceNow")
+
+    class FakeConnectivity:
+        def list_connections(self) -> list[dict]:
+            return [shared]
+
+        def get_connection(self, connection_id: str) -> dict:
+            return shared
+
+    monkeypatch.setattr(
+        snow, "_connectivity_client", lambda _context: FakeConnectivity()
+    )
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: type(
+            "FakeAgentBuilder",
+            (),
+            {
+                "fetch_components": lambda self, _agent_id: _components(
+                    CONNECTION_ID
+                )
+            },
+        )(),
+    )
+
+    result = snow.resolve_credential_completion(context)
+
+    assert result["status"] == "selected"
+    final = snow._load_lifecycle_state(context)
+    assert final["adminSetup"]["phaseHandoffs"]["credential"]["status"] == (
+        "completed"
+    )
+
+
 def test_resolve_credential_says_when_no_connection_exists(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

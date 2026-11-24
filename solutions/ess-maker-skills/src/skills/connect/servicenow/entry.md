@@ -1055,6 +1055,22 @@ ID.
 
 **End message.**
 
+**Share another agent's Entra app.** When the maker wants this agent to use the
+same Entra app as another ServiceNow agent (for example IT sharing HR's app)
+but identifies employees by a different claim, this is the same path as a
+different registration, not shared-setup reuse: reuse only applies when the
+app and the claim both match. Never edit saved state by hand. Ask once, in
+plain chat, for the Entra administrator's confirmation that the shared app now
+sends the exact claim for this agent, together with that app's Client ID, then
+run `record-identity-direct --stage entra` with that Client ID and claim name
+(add `--claim-setup-confirmed` for a custom claim). The controller replaces the
+recorded Client ID, retires the earlier ServiceNow confirmation and connection
+evidence tied to the old Client ID, and the ServiceNow administrator must
+confirm the saved configuration for the shared app with this agent's User Claim
+and User Field (the other agent's claim and field do not apply). One existing
+Connected connection with the shared app's values can then serve both agents;
+the agent's own saved connection settings must still select it.
+
 **Maker selects the Knowledge connector.** When the maker asks whether to
 select the ServiceNow Knowledge connection for the ESS agent, show the first
 Message, substituting the agent, the confirmed Client ID, and the ServiceNow
