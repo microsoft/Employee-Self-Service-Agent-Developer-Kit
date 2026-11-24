@@ -1553,6 +1553,34 @@ def test_multi_agent_request_is_routed_before_any_command() -> None:
         assert "Check HR and IT in Prod" in text, name
 
 
+def test_named_destination_runs_discovery_first_and_never_asks_for_a_link() -> None:
+    root = _SOLUTION / "src" / "skills" / "connect"
+    for name, path in {
+        "entry": root / "servicenow" / "entry.md",
+        "realms": root / "servicenow" / "realms.md",
+        "router": root / "servicenow-da" / "SKILL.md",
+    }.items():
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert "discover-realm-target --realm {realmHint}" in text, name
+        assert "test the IT agent in Prod" in text, name
+    realms = " ".join(
+        (root / "servicenow" / "realms.md").read_text(encoding="utf-8").split()
+    )
+    assert "realm-target-not-found" in realms
+    assert 'Never write your own "please paste the URL"' in realms
+
+
+def test_redo_step_fallback_is_routed_and_never_replaces_spec_text() -> None:
+    root = _SOLUTION / "src" / "skills" / "connect"
+    for name, path in {
+        "entry": root / "servicenow" / "entry.md",
+        "router": root / "servicenow-da" / "SKILL.md",
+    }.items():
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert "redo-step-notice --step" in text, name
+        assert "Controller messages always win" in text, name
+
+
 def test_existing_identity_flag_is_routed_to_the_first_resume() -> None:
     root = _SOLUTION / "src" / "skills" / "connect"
     docs = {

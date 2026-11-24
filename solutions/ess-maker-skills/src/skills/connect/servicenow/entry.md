@@ -30,6 +30,8 @@ cannot import the kit's dependencies, stop and tell the maker to rerun
 
 **More than one agent in one request.** When a single request names both ESS agents or all of them (for example "Check HR and IT in Prod", "set up both", "all agents"), this skill validates one agent per run. Your first action, before any capability emit, `agent-chooser`, `realm-status`, preflight, or checklist, is `python scripts/connect_servicenow_da.py --provider {PROVIDER} validation-notice --situation multi-agent`. Send `chatMessage` verbatim as the whole reply with no preamble and no trailer, and end the turn. It starts no run and records nothing, and no choice is preselected. When the maker's reply names one agent, run `agent-chooser --agent-name "{NAME_AS_TYPED}"` and continue only that agent for the destination they originally named; the other agent is a separate run later. When the reply names both again or neither, send the same message again. Never write this question yourself.
 
+**A step failed and no controller message covers it.** Controller messages always win: when a command returns its own `chatMessage` or `renderBlock` for the failure (test failure, validation notices, realm replies, empty service areas, metadata URL, existing identity), send that text and nothing else. Only when no such message exists, send the step's instructions again by running `python scripts/connect_servicenow_da.py --provider {PROVIDER} --agent-slug {SLUG} redo-step-notice --step {connection|portal-url|topics|test}` and send `renderBlock.text` verbatim. It repeats the same steps the maker saw, with the non-secret values from recorded state (sign-in type, Resource URI, instance name), and records nothing. Never paste, ask for, or echo a password, client secret, or token; the notice says such values come from the administrator. For identity (Entra or ServiceNow single sign-on) problems, re-run `identity-direct-handoff --stage entra|servicenow` instead. Never write your own instructions.
+
 **Hard rules.** Read `src/skills/connect/shared/lifecycle-runner.md` before the first action. When `resume-handoff` returns `renderBlock`, emit `renderBlock.text` verbatim as an assistant message; terminal output does not count. Never edit `lifecycle.json` by hand; record results with `record-checkpoint-results`. Run every command with the launcher resolved by `/setup` (`py -3`, `python3`, then `python`), never assuming bare `python`.
 
 ## Admit the workspace
@@ -83,10 +85,14 @@ selected, attached, or prepared. Reuse it silently, without asking:
   Setup handoff, and `unsupported-agent` shows its `message` verbatim (see
   **Unsupported agent**). Never ask for a Copilot Studio link for a named agent
   and never start Setup for an unsupported one. When the maker also names a
-  destination (for example "test the IT agent in Prod"), pass only the agent
-  words. The result can resolve a promoted agent whose name differs from Dev;
-  use its `selectedAgent`, and its `realmHint` as the destination, without
-  asking again. See `realms.md` (**Agent names differ across environments**).
+  destination (for example "test the IT agent in Prod"), pass the words as
+  typed. The controller splits off the destination, resolves the Dev agent, and
+  returns it with a `realmHint`: use `selectedAgent`, then run
+  `discover-realm-target --realm {realmHint}` immediately. It finds the
+  promoted agent and its link through the API even when its name differs from
+  Dev. Do not ask the maker for the agent link or whether it was promoted, and
+  never write your own question. See `realms.md` (**Agent names differ across
+  environments**, **Discover the promoted agent**).
 - When the maker named no agent and wants a plain chat question instead of the
   card, get it from
   `python scripts/connect_servicenow_da.py --provider {PROVIDER} validation-notice --situation agent-chooser`

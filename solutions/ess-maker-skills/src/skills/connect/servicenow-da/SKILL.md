@@ -31,9 +31,11 @@ example "my Benefits agent"), run
 `agent-chooser --agent-name "{NAME_AS_TYPED}"`: an agent that is not an ESS HR
 or IT agent returns `unsupported-agent`; show its `message` verbatim, never ask
 for a link, and do not start Setup for it. When the maker also names a
-destination (for example "test the IT agent in Prod"), the same command can
-resolve a promoted agent whose name differs from Dev: continue with
-`selectedAgent` and use `realmHint` as the destination without asking again.
+destination (for example "test the IT agent in Prod"), pass the words as typed:
+continue with `selectedAgent`, then run
+`discover-realm-target --realm {realmHint}` at once. It finds the promoted
+agent and its link by itself through the API even when its name differs from
+Dev; never ask the maker for a link or write your own question.
 Never match an agent by display name yourself.
 
 When the maker answers **Yes**, rerun with the returned `prepared:{ID}`
@@ -124,5 +126,11 @@ or all of them (for example "Check HR and IT in Prod"), first run
 `validation-notice --situation multi-agent`, send `chatMessage` verbatim with
 no preamble or trailer, and end the turn before any chooser, status, preflight,
 or checklist step (see **More than one agent in one request** in
-`src/skills/connect/servicenow/entry.md`). Nothing is recorded and no run
 starts.
+
+**A step failed with no controller message.** Controller messages always win.
+When none covers the failure, run
+`redo-step-notice --step {connection|portal-url|topics|test}` and send
+`renderBlock.text` verbatim; it repeats the step with its non-secret values and
+never asks for or echoes a secret (see **A step failed and no controller
+message covers it** in `src/skills/connect/servicenow/entry.md`).

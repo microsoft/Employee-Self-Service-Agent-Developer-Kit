@@ -87,6 +87,23 @@ class ServiceNowRealmError(RuntimeError):
             self.customer_remediation = remediation
 
 
+class ServiceNowRealmNotUniqueError(ServiceNowRealmError):
+    """Discovery found no promoted agent, or more than one environment."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: str,
+        searched: tuple[str, ...] = (),
+        matched: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.searched = searched
+        self.matched = matched
+
+
 def _access_failure(
     exc: Exception,
     realm: str | None,
@@ -278,10 +295,13 @@ def discover_realm_target(
         and _matches_realm(sibling.get("realm"), realm_value)
     ]
     if not matches:
-        raise ServiceNowRealmError(f"The {label} promotion is not visible yet.")
+        raise ServiceNowRealmNotUniqueError(
+            f"The {label} promotion is not visible yet.", kind="none"
+        )
     if len(matches) != 1:
-        raise ServiceNowRealmError(
-            f"Agent realm discovery returned multiple {label} targets."
+        raise ServiceNowRealmNotUniqueError(
+            f"Agent realm discovery returned multiple {label} targets.",
+            kind="multiple",
         )
     target_id = _guid(matches[0].get("botId"), f"Related {label} agent ID")
     if (
@@ -435,6 +455,9 @@ def discover_promoted_realm(
     """Find the one environment that holds the verified sibling realm."""
     candidates = _environment_candidates(environments, environment_selector)
     explicit = bool(str(environment_selector or "").strip())
+    searched = tuple(
+        sorted({name for _id, _url, name in candidates if name}, key=str.casefold)
+    )
     labels = ", ".join(
         sorted(
             {name or url for _id, url, name in candidates},
@@ -442,9 +465,10 @@ def discover_promoted_realm(
         )
     )
     if not candidates:
-        raise ServiceNowRealmError(
+        raise ServiceNowRealmNotUniqueError(
             "The promoted target environment is not visible. Confirm maker "
-            "access or select the environment by name or URL."
+            "access or select the environment by name or URL.",
+            kind="none",
         )
     discovered: list[dict[str, str]] = []
     try:
@@ -473,6 +497,9 @@ def discover_promoted_realm(
                 if not explicit and exc.status_code == 404:
                     continue
                 raise
+    except ServiceNowRealmNotUniqueError as exc:
+        exc.searched = searched
+        raise
     except AgentBuilderError as exc:
         raise _access_failure(
             exc,
@@ -487,10 +514,23 @@ def discover_promoted_realm(
             else " No matching promoted agent was found in the checked environments."
         )
         choices = f" Available environments: {labels}." if labels else ""
-        raise ServiceNowRealmError(
+        matched_ids = {item["environmentId"].casefold() for item in discovered}
+        raise ServiceNowRealmNotUniqueError(
             "Automatic promoted-target discovery could not identify one "
             f"{str(realm).title()} environment.{detail}{choices} Select the "
-            "environment by name or URL and retry."
+            "environment by name or URL and retry.",
+            kind="multiple" if discovered else "none",
+            searched=searched,
+            matched=tuple(
+                sorted(
+                    {
+                        name
+                        for cid, _url, name in candidates
+                        if name and cid.casefold() in matched_ids
+                    },
+                    key=str.casefold,
+                )
+            ),
         )
     return discovered[0]
 

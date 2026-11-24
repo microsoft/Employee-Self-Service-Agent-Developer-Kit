@@ -4929,12 +4929,12 @@ def test_resolve_credential_rejects_nonhealthy_or_nonexact_candidates(
                 resource_uri="00000000-0000-4000-8000-000000009999"
             ),
             ["resourceUri"],
-            "its Resource URI isn't the one in the card",
+            "its Resource URI isn't the one listed below",
         ),
         (
             _connection_record(instance_name="dev456"),
             ["instance"],
-            "its Instance Name isn't the one in the card",
+            "its Instance Name isn't the one listed below",
         ),
         (
             _connection_record(auth_mode="oauth2"),
@@ -4969,6 +4969,11 @@ def test_resolve_credential_names_the_field_that_did_not_match(
 
     assert result["status"] == "not-ready"
     assert phrase in result["remediation"]
+    assert "card" not in result["remediation"]
+    assert "**Instance name:** `dev123`" in result["remediation"]
+    assert "**Resource URI:** `00000000-0000-4000-8000-000000006666`" in (
+        result["remediation"]
+    )
     if differences is not None:
         assert result["closestDifferences"] == differences
         assert "We can see 1 ServiceNow connection" in result["remediation"]
@@ -16003,6 +16008,40 @@ def test_agent_chooser_resolves_a_bare_product_word_to_the_only_agent_of_that_ki
     assert other["status"] == "choice-required"
 
 
+@pytest.mark.parametrize(
+    ("typed", "realm"),
+    [
+        ("the IT agent in Prod", "prod"),
+        ("IT agent in Production", "prod"),
+        ("test the IT agent in Test", "test"),
+        ("the IT agent on the Test environment", "test"),
+    ],
+)
+def test_agent_chooser_splits_a_named_destination_and_points_to_discovery(
+    tmp_path: Path, typed: str, realm: str
+) -> None:
+    setup_path, _ = _seed_it_setup(tmp_path)
+    _rename_dev_agent(setup_path, "Contoso Dev Helpdesk")
+
+    ready = snow.agent_chooser_handoff(tmp_path, agent_name=typed)
+    assert ready["status"] == "ready"
+    assert ready["selectedAgent"]["id"] == AGENT_ID
+    assert ready["realmHint"] == realm
+    assert f"discover-realm-target --realm {realm}" in ready["nextStep"]
+    assert "Do not ask the maker" in ready["nextStep"]
+
+
+def test_agent_chooser_with_a_destination_never_reports_unsupported(
+    tmp_path: Path,
+) -> None:
+    _seed_it_setup(tmp_path)
+
+    for typed in ("the HR agent in Prod", "agent in Prod"):
+        result = snow.agent_chooser_handoff(tmp_path, agent_name=typed)
+        assert result["status"] != "unsupported-agent"
+        assert "realmHint" not in result or result["status"] == "ready"
+
+
 def test_agent_chooser_never_guesses_between_promoted_or_unknown_names(
     tmp_path: Path,
 ) -> None:
@@ -17914,6 +17953,44 @@ def test_hr_and_it_maker_messages_share_the_same_wording(
         ), key
     assert rendered["hrsd"]["title"] == "Set up ServiceNow HR"
     assert rendered["itsm"]["title"] == "Set up ServiceNow IT"
+
+
+@pytest.mark.parametrize("profile", ("hrsd", "itsm"))
+@pytest.mark.parametrize("step", snow.REDO_STEPS)
+def test_redo_step_notice_gives_safe_step_instructions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    step: str,
+) -> None:
+    monkeypatch.setattr(snow, "ACTIVE_AGENT_NAME", None)
+    monkeypatch.setattr(snow, "_other_agent_already_connected", lambda *_: False)
+    context = _context()
+    context["root"] = tmp_path
+    with snow.product_profile_context(profile):
+        result = snow.redo_step_notice(context, step)
+        wrapped = snow._with_agent_rules(result, "redo-step-notice")
+    assert result["status"] == "redo-step-notice"
+    assert result["recordsNothing"] is True
+    assert wrapped["endTurn"] is True
+    text = wrapped["chatMessage"]
+    assert text.startswith("That step didn't finish. Here's how to do it again.")
+    for forbidden in ("card", "secret:", "password:", "token:"):
+        assert forbidden not in text.lower()
+    if step == "connection":
+        assert "Microsoft Entra ID User Login" in text
+        assert "Resource URI" in text and "Instance name" in text
+        assert "stays out of this chat" in text
+    if step == "topics":
+        assert "Reply **Try again**" in text
+    assert not list(tmp_path.rglob("*.json"))
+
+
+def test_redo_step_notice_rejects_unknown_steps(tmp_path: Path) -> None:
+    context = _context()
+    context["root"] = tmp_path
+    with pytest.raises(snow.ServiceNowConnectError, match="Redo step"):
+        snow.redo_step_notice(context, "entra")
 
 
 @pytest.mark.parametrize(

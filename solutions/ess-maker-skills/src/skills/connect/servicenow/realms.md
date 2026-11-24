@@ -95,16 +95,23 @@ separate run later.
 **Agent names differ across environments.** The promoted agent can have a
 different display name in Test or Prod than in Dev. When the maker names an
 agent together with a destination (for example "test the IT agent in Prod"),
-pass only the agent words, as typed, to `agent-chooser --agent-name "{NAME_AS_TYPED}"`.
-The controller resolves it from stable evidence only: the Dev agent's name, a
-promoted agent that realm discovery already verified and recorded (its recorded
-name or its Copilot Studio link), or a single prepared agent of that kind (HR
-or IT). When the result is `ready`, continue with `selectedAgent` and use
-`realmHint`, when present, as the destination so the maker is not asked again.
+pass the words as typed to `agent-chooser --agent-name "{NAME_AS_TYPED}"`; the
+controller splits off the destination itself. It resolves the Dev agent from
+stable evidence only: the Dev agent's name, a promoted agent that realm
+discovery already verified and recorded (its recorded name or its Copilot
+Studio link), or a single prepared agent of that kind (HR or IT). When the
+result is `ready`, continue with `selectedAgent`, use `realmHint` as the
+destination, and **run `discover-realm-target --realm {realmHint}` next**
+without asking the maker anything. That command finds the promoted agent and
+its link by itself through the read-only ALM family check from the Dev agent,
+whatever its display name is, and records its name, ID, and link. A saved Dev
+target never means the promoted agent is unknown: always run discovery first.
 Never decide which agent a name belongs to yourself, never pick between
-candidates, and never infer the agent from a display name alone. When the
-result is a question, ask it as written; when it asks for the agent link, ask
-in chat and wait for a typed reply. Texts about the destination use the
+candidates, and never infer the agent from a display name alone. Never write
+your own "please paste the URL" or "the saved target is Dev" message. Only the
+controller asks, and only after discovery ran: when `discover-realm-target`
+returns `status: realm-target-not-found`, send its `chatMessage` verbatim and
+end the turn (it names what was searched). Texts about the destination use the
 destination agent's recorded name.
 
 On every invocation, run the status first and use the controller's
@@ -199,16 +206,30 @@ If promotion completion is unknown, ask once with `ask_user`:
 }
 ```
 
-An explicit statement that promotion completed, or a pasted agent link,
-already answers it. On **No**, give the Dev agent link and the deployment-owner
-handoff, then ask the maker to return after promotion. All progress is preserved.
+An explicit statement that promotion completed, a pasted agent link, or a
+request to check or test the agent in a named Test or Prod destination already
+answers it: run `discover-realm-target` (see **Discover the promoted agent**)
+instead of asking. Ask this question only when the maker's request leaves
+promotion genuinely open. On **No**, give the Dev agent link and the
+deployment-owner handoff, then ask the maker to return after promotion. All
+progress is preserved.
 
 ## Discover the promoted agent
 
 Test and Production can each be checked whenever the maker asks; neither
 waits for Dev to be Ready, and Production does not wait for Test.
 
-- Maker said the agent was promoted, with no link:
+**Discovery always runs first.** As soon as the maker names Test or Prod for HR
+or IT (for example "check IT in Prod", "test the IT agent in Prod", or "we
+promoted it"), and the recorded targets do not already include that realm, run
+`discover-realm-target --realm {test|prod}` before anything else. Do not ask
+"Has the agent already been promoted?", do not ask for an agent link, and do
+not tell the maker that only Dev is saved. The command reads the promoted agent
+from the Dev agent's ALM family through the API and finds it even when its
+display name or link is different in each environment. Ask the maker only when
+it returns `realm-target-not-found`, with its `chatMessage` verbatim.
+
+- Maker named the destination, or said the agent was promoted, with no link:
 
   ```text
   python scripts/connect_servicenow_da.py --provider {SELECTED_PROVIDER} --agent-slug {SELECTED_AGENT_SLUG} discover-realm-target --realm {test|prod}
@@ -235,11 +256,13 @@ the requested realm is rejected with a clear message; never trust it.
 Do not ask the maker for an environment ID, BotId, flow ID, ALM family, or
 deployed commit.
 
-If the controller cannot prove one environment, show the safe environment names
-or URLs it returns and ask the maker to choose one. Leave the choice unset,
-then rerun with `--environment "{ENVIRONMENT_NAME_OR_URL}"`.
+If the controller finds no promoted agent, or more than one, it returns
+`status: realm-target-not-found` with a fixed `chatMessage` that says what was
+searched and asks for the agent link. Send it verbatim as the whole reply and
+end the turn; follow its `afterReply` when the maker answers. It records
+nothing. This is the only case where the maker is asked for a link.
 
-If discovery fails, keep the active realm and all completed administrator work.
+If discovery fails any other way, keep the active realm and all completed administrator work.
 Show the observed failure and the returned remediation. Ask one Yes/No question with `ask_user`: "Should we check again?" Reuse a supplied
 environment selection on **Yes**. On **No**, ask in chat which environment to use, or
 stop and preserve all progress. Do not send the maker back to Dev.

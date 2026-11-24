@@ -3550,6 +3550,24 @@ def _normalize_agent_name(name: str) -> str:
 
 _PRODUCT_WORD_PROFILE = {"hr": "hrsd", "it": "itsm"}
 
+_DESTINATION_WORDS = {"test": "test", "prod": "prod", "production": "prod"}
+_DESTINATION_PHRASE = re.compile(
+    r"\b(?:(?:in|on|for|from|to)\s+)?(?:the\s+)?"
+    r"(test|prod|production)\b(?:\s+(?:environment|env|realm|version|copy))?",
+    re.IGNORECASE,
+)
+
+
+def _split_destination(agent_name: str) -> tuple[str | None, str]:
+    """Separate a typed destination ("in Prod") from the agent words."""
+    found = {
+        _DESTINATION_WORDS[match.group(1).casefold()]
+        for match in _DESTINATION_PHRASE.finditer(agent_name)
+    }
+    if len(found) != 1:
+        return None, agent_name
+    return next(iter(found)), _DESTINATION_PHRASE.sub(" ", agent_name).strip()
+
 
 def _promoted_agent_records(
     root: Path,
@@ -3608,7 +3626,53 @@ def _agent_name_result(
     unsupported_agents: list[dict[str, Any]],
     promoted_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
-    """Resolve an agent the maker named in chat; None means use the chooser."""
+    """Resolve an agent the maker named in chat; None means use the chooser.
+
+    A destination typed with the name ("the IT agent in Prod") is split off and
+    returned as `realmHint`; the promoted agent itself is then found by realm
+    discovery from the Dev agent, never by asking the maker for a link.
+    """
+    destination, agent_words = _split_destination(agent_name)
+    if destination is None:
+        return _agent_name_core(
+            agent_name,
+            prepared_choices,
+            incomplete_agents,
+            unsupported_agents,
+            promoted_records,
+            allow_unsupported=True,
+        )
+    for words in (agent_name, agent_words):
+        named = _agent_name_core(
+            words,
+            prepared_choices,
+            incomplete_agents,
+            unsupported_agents,
+            promoted_records,
+            allow_unsupported=False,
+        )
+        if named is not None:
+            if named.get("status") == "ready":
+                named.setdefault("realmHint", destination)
+                named["nextStep"] = (
+                    "Run discover-realm-target --realm "
+                    f"{named['realmHint']} for this agent now; it finds the "
+                    "promoted agent and its link by itself. Do not ask the "
+                    "maker for a link or write your own question."
+                )
+            return named
+    return None
+
+
+def _agent_name_core(
+    agent_name: str,
+    prepared_choices: list[dict[str, Any]],
+    incomplete_agents: list[dict[str, Any]],
+    unsupported_agents: list[dict[str, Any]],
+    promoted_records: list[dict[str, Any]] | None = None,
+    *,
+    allow_unsupported: bool,
+) -> dict[str, Any] | None:
     wanted = _normalize_agent_name(agent_name)
     if not wanted:
         return None
@@ -3655,6 +3719,8 @@ def _agent_name_result(
             result["resolvedBy"] = "product"
             return result
         # Several or no prepared agents of that kind: ask, never guess.
+        return None
+    if not allow_unsupported:
         return None
     return _unsupported_agent_result({"id": None, "name": agent_name.strip()})
 
@@ -6337,8 +6403,8 @@ def _connection_matches_expected_credential(
 
 _CONNECTION_DIFFERENCE_TEXT = {
     "signIn": "its sign-in type isn't Microsoft Entra ID User Login",
-    "instance": "its Instance Name isn't the one in the card",
-    "resourceUri": "its Resource URI isn't the one in the card",
+    "instance": "its Instance Name isn't the one listed below",
+    "resourceUri": "its Resource URI isn't the one listed below",
 }
 
 
@@ -6380,15 +6446,22 @@ def _no_matching_connection_message(
     expected_client_id: str | None,
 ) -> tuple[str, dict[str, Any]]:
     """Plain-language reason no listed connection matches, with details."""
+    expected_lines = (
+        "Use these values:\n"
+        "- **Authentication type:** Microsoft Entra ID User Login\n"
+        f"- **Resource URI:** `{expected_client_id or 'not yet confirmed'}`\n"
+        f"- **Instance name:** `{expected_instance or 'not yet confirmed'}`"
+        "—not the full URL\n"
+    )
     create_steps = (
         "In Copilot Studio, open Settings > Connection Settings > "
-        "ServiceNow > Connect > Create new connection, and enter exactly "
-        "the values in the card."
+        "ServiceNow > Connect > Create new connection. "
+        f"{expected_lines}"
     )
     if not connections:
         return (
             "We can't see any ServiceNow connection in this environment "
-            f"yet. {create_steps} Then tell me again.",
+            f"yet. {create_steps}\nThen tell me again.",
             {"connectionsSeen": 0, "closestDifferences": []},
         )
     closest = min(
@@ -6414,16 +6487,16 @@ def _no_matching_connection_message(
     lead = "The closest one differs because " if count > 1 else "It differs because "
     reason_text = f"{lead}{' and '.join(reasons)}. " if reasons else ""
     resource_hint = (
-        "If the Resource URI in the card isn't the Client ID your Entra "
+        "If the Resource URI above isn't the Client ID your Entra "
         "administrator gave you, send us the correct Client ID from them and "
         "we'll update this agent's setup. "
         if "resourceUri" in closest
         else ""
     )
     return (
-        f"{seen}. {reason_text}{create_steps} If you chose an existing "
+        f"{seen}. {reason_text}{create_steps}\nIf you chose an existing "
         "connection instead, its Resource URI, Instance Name, and sign-in "
-        f"type must be the same as in the card. {resource_hint}Then tell me "
+        f"type must match these values. {resource_hint}Then tell me "
         "again.",
         {"connectionsSeen": count, "closestDifferences": closest},
     )
@@ -7931,7 +8004,12 @@ def resolve_credential_completion(
                 "A ServiceNow connection with these settings exists, but it "
                 "doesn't show Connected. In Copilot Studio, open Settings > "
                 "Connection Settings > ServiceNow, sign in again so it shows "
-                "Connected, and save the agent settings. Then tell me again."
+                "Connected, and save the agent settings. These are the "
+                "values the connection should use:\n"
+                "- **Authentication type:** Microsoft Entra ID User Login\n"
+                f"- **Resource URI:** `{resolution['expected']['resourceUri']}`\n"
+                f"- **Instance name:** `{resolution['expected']['instanceName']}`\n"
+                "Then tell me again."
             )
             if unhealthy_exact
             else no_match_message
@@ -11433,6 +11511,63 @@ def _current_task_guidance(
     )
 
 
+REDO_STEPS = ("connection", "portal-url", "topics", "test")
+_REDO_STEP_PHASES = {
+    "connection": "credential",
+    "portal-url": "portal-url",
+    "topics": "topics",
+    "test": "test",
+}
+_REDO_LEAD = "That step didn't finish. Here's how to do it again."
+_REDO_CONNECTION_SAFETY = (
+    "You don't need to paste a password, client secret, or token here. If "
+    "anything like that is requested, it comes from your administrator and "
+    "stays out of this chat."
+)
+_REDO_TOPICS_CLOSER = (
+    "Reply **Try again** when you're ready and we'll run this step again."
+)
+
+
+def redo_step_notice(
+    context: dict[str, Any],
+    step: str,
+) -> dict[str, Any]:
+    """Fallback "how to redo this step" message for a failure with no spec text.
+
+    Reuses the step instructions the maker saw originally, built only from
+    recorded non-secret values (instance name, Client ID used as the Resource
+    URI, connection settings). Never replaces a spec-defined message and
+    records nothing.
+    """
+    if step not in _REDO_STEP_PHASES:
+        raise ServiceNowConnectError(
+            f"Redo step must be one of: {', '.join(REDO_STEPS)}."
+        )
+    state = _load_lifecycle_state(context) or {}
+    guidance = _current_task_guidance(
+        context,
+        state,
+        phase_id=_REDO_STEP_PHASES[step],
+        role="Maker",
+    )
+    parts = [_REDO_LEAD, guidance]
+    if step == "connection":
+        parts.append(_REDO_CONNECTION_SAFETY)
+    elif step == "topics":
+        parts.append(_REDO_TOPICS_CLOSER)
+    return {
+        "status": "redo-step-notice",
+        "decision": "redo-step-instructions",
+        "step": step,
+        "recordsNothing": True,
+        "renderBlock": {
+            "kind": "waiting",
+            "text": "\n\n".join(part for part in parts if part),
+        },
+    }
+
+
 def _setup_title() -> str:
     return (
         "Set up ServiceNow IT"
@@ -13714,12 +13849,84 @@ def _record_realm_admin(
     )
 
 
+def _realm_names_text(names: tuple[str, ...]) -> str:
+    quoted = [f"**{name}**" for name in names]
+    if len(quoted) <= 1:
+        return "".join(quoted)
+    return ", ".join(quoted[:-1]) + f" and {quoted[-1]}"
+
+
+def realm_target_not_unique_result(
+    context: dict[str, Any],
+    realm: str | None,
+    exc: realms.ServiceNowRealmNotUniqueError,
+) -> dict[str, Any]:
+    """Fixed reply when discovery finds no promoted agent or several environments.
+
+    Asking the maker is the last resort: it only happens after the read-only
+    search ran, and the reply says what was searched. Records nothing.
+    """
+    agent = _display_agent_name(context)
+    label = (realm or "promoted").title()
+    if exc.kind == "multiple" and exc.matched:
+        text = (
+            f"We found the promoted copy of **{agent}** in more than one "
+            f"{label} environment: {_realm_names_text(exc.matched)}. Reply "
+            "with the name of the one to use, and we'll continue with it."
+        )
+        after = (
+            "Send chatMessage verbatim and end your turn. When the maker "
+            "names one, rerun discover-realm-target with --environment "
+            "\"{NAME_AS_TYPED}\"."
+        )
+    else:
+        where = (
+            f" in the environments your account can see "
+            f"({_realm_names_text(exc.searched)})"
+            if exc.searched
+            else " in the environments your account can see"
+        )
+        found = (
+            f"We found more than one promoted copy of **{agent}** for {label}"
+            if exc.kind == "multiple"
+            else f"We searched for the promoted copy of **{agent}**{where} and "
+            f"didn't find one for {label}"
+        )
+        pick = (
+            "the link of the one to use"
+            if exc.kind == "multiple"
+            else "the link of the promoted agent"
+        )
+        text = (
+            f"{found}. Paste the Copilot Studio link of {pick} here, and "
+            "we'll continue with it. Your setup progress is saved."
+        )
+        after = (
+            "Send chatMessage verbatim and end your turn. When the maker "
+            "pastes the agent link, rerun discover-realm-target with "
+            "--agent-link \"{PASTED_AGENT_LINK}\"."
+        )
+    return {
+        "status": "realm-target-not-found",
+        "decision": "realm-discovery-needs-maker",
+        "realm": realm,
+        "discovery": exc.kind,
+        "recordsNothing": True,
+        "renderBlock": {"kind": "waiting", "text": text},
+        "afterReply": after,
+    }
+
+
 def run_realm_command(
     context: dict[str, Any],
     args: argparse.Namespace,
 ) -> dict[str, Any]:
     try:
         return _run_realm_command(context, args)
+    except realms.ServiceNowRealmNotUniqueError as exc:
+        return realm_target_not_unique_result(
+            context, getattr(args, "realm", None), exc
+        )
     except realms.ServiceNowRealmError as exc:
         raise ServiceNowConnectError(
             str(exc),
@@ -13920,6 +14127,17 @@ def build_parser() -> argparse.ArgumentParser:
     validation_parser.add_argument("--entra-claim")
     validation_parser.add_argument("--servicenow-claim")
     validation_parser.add_argument("--claim-name")
+    redo_step_parser = subparsers.add_parser(
+        "redo-step-notice",
+        help=(
+            "Fallback 'how to do this step again' instructions for a failure "
+            "that has no fixed spec message; non-secret values only; records "
+            "nothing."
+        ),
+    )
+    redo_step_parser.add_argument(
+        "--step", choices=REDO_STEPS, required=True
+    )
     realm_setup_parser = subparsers.add_parser(
         "realm-setup-handoff",
         help=(
@@ -18655,6 +18873,8 @@ def main(argv: list[str] | None = None) -> int:
                 connection_name=args.connection_name,
                 metadata_url=args.metadata_url,
             )
+        elif args.command == "redo-step-notice":
+            result = redo_step_notice(context, args.step)
         elif args.command == "test-failure-handoff":
             result = test_failure_handoff(
                 _load_lifecycle_state(context),

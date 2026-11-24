@@ -2034,6 +2034,84 @@ def test_destination_name_falls_back_to_the_dev_name_when_not_recorded(
     assert f"**{snow._spec_agent_name()} in Test**" in pause
 
 
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+@pytest.mark.parametrize("realm", ["test", "prod"])
+def test_dev_only_registry_discovers_the_promoted_agent_without_asking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: str, realm: str
+) -> None:
+    import connect_servicenow_da as snow
+
+    monkeypatch.setattr(snow, "ACTIVE_PROFILE", snow.PRODUCT_PROFILES[profile])
+    _prepare_controller(monkeypatch, dev_reference=DEV_RECORD)
+    calls: list[str] = []
+
+    def discover(**kwargs: Any):
+        calls.append(kwargs["realm"])
+        agent = TEST_AGENT if kwargs["realm"] == "test" else PROD_AGENT
+        return kwargs["realm"], {
+            **IDENTITY,
+            "agentId": agent,
+            "agentDisplayName": "Contoso Destination Helpdesk",
+        }
+
+    monkeypatch.setattr(realms, "discover_realm", discover)
+    context = _controller_context(tmp_path)
+    result = snow.run_realm_command(
+        context, _args("discover-realm-target", realm=realm)
+    )
+    assert calls == [realm]
+    assert result.get("status") != "realm-target-not-found"
+    registry = realms.load_registry(
+        tmp_path, snow.ACTIVE_PROFILE.provider_key, snow._agent_slug(context)
+    )
+    identity = registry["targets"][realm]["identity"]
+    assert identity["agentDisplayName"] == "Contoso Destination Helpdesk"
+    assert identity["agentId"] in {TEST_AGENT, PROD_AGENT}
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+@pytest.mark.parametrize("kind", ["none", "multiple"])
+def test_discovery_asks_only_when_no_unique_promoted_agent_is_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: str, kind: str
+) -> None:
+    import connect_servicenow_da as snow
+
+    monkeypatch.setattr(snow, "ACTIVE_PROFILE", snow.PRODUCT_PROFILES[profile])
+    _prepare_controller(monkeypatch, dev_reference=DEV_RECORD)
+
+    def discover(**_kwargs: Any):
+        raise realms.ServiceNowRealmNotUniqueError(
+            "internal detail",
+            kind=kind,
+            searched=("Contoso Dev", "Contoso Prod"),
+            matched=("Contoso Prod A", "Contoso Prod B") if kind == "multiple" else (),
+        )
+
+    monkeypatch.setattr(realms, "discover_realm", discover)
+    context = _controller_context(tmp_path)
+    result = snow._with_agent_rules(
+        snow.run_realm_command(context, _args("discover-realm-target", realm="prod")),
+        "discover-realm-target",
+    )
+    assert result["status"] == "realm-target-not-found"
+    assert result["endTurn"] is True
+    text = result["chatMessage"]
+    assert snow._spec_agent_name() in text
+    assert "Prod" in text
+    if kind == "multiple":
+        assert "**Contoso Prod A** and **Contoso Prod B**" in text
+        assert "--environment" in result["afterReply"]
+    else:
+        assert "**Contoso Dev** and **Contoso Prod**" in text
+        assert "Paste the Copilot Studio link" in text
+        assert "--agent-link" in result["afterReply"]
+    assert "internal detail" not in text
+    assert "http" not in text
+    assert not (tmp_path / ".local").exists() or not list(
+        (tmp_path / ".local").rglob("*realms*.json")
+    )
+
+
 @pytest.mark.parametrize(
     ("word", "profile", "other"),
     [("HR", "hrsd", "itsm"), ("IT", "itsm", "hrsd")],
