@@ -24,6 +24,8 @@ cannot import the kit's dependencies, stop and tell the maker to rerun
 
 **Controller output rules.** Every `connect_servicenow_da.py` output starts with `chatMessage`: send it verbatim as plain chat text before any other tool call. When a step's status changed or a phase completed, `chatMessage` already begins with the setup checklist (every command that records a result carries it, not only `resume-handoff`); never drop it, never write your own checklist, and show an identical checklist only once per turn. If `endTurn` is `true`, end your turn right after sending it (the message asks the Maker to reply, return, paste, send or act outside chat); do not read the next document or run another command until the Maker replies, then follow `afterReply` when present. If `endTurn` is `false`, do not stop or wait: run `nextCommand` in the same turn. Wording such as "Return here", "tell us", "reply", "paste", "send" or "let us know" always means wait for the Maker. When `pendingCard` is present, ask it with one `ask_user` call using `pendingCard.askUserArguments` exactly as given: the card title is the question and the card has no body, so add no examples, warnings or notes to it; all explanation belongs in `chatMessage`. Option labels are Yes/No or very short; never rebuild them. A question that needs a typed answer (a Copilot Studio link, an instance URL, IDs) is never a card: it is part of `chatMessage` with `endTurn: true`, so the Maker answers in the normal chat box. Outputs that only carry a reply to the Maker (for example `unsupported-agent` or an unclear Test pane answer) also arrive as `chatMessage` with `endTurn: true`. `setup-required` and `setup-incomplete` are automatic Setup handoffs, not stops. When an output sets `waitsForMaker`, it overrides the wording cues above.
 
+**Follow the controller, not the request wording.** After `resume-handoff`, run only the command that `nextCommand` names. Do not call `claim-confirmation-handoff` or any identity handoff on your own because the maker mentioned an identifier such as a payroll ID: the controller already knows what is recorded for this agent and never asks again for a Client ID, claim, instance, or User Field it has saved. Put the target options (`--provider`, `--agent-slug`) before the subcommand, as in every `nextCommand`; the controller also accepts them after it.
+
 **Hard rules.** Read `src/skills/connect/shared/lifecycle-runner.md` before the first action. When `resume-handoff` returns `renderBlock`, emit `renderBlock.text` verbatim as an assistant message; terminal output does not count. Never edit `lifecycle.json` by hand; record results with `record-checkpoint-results`. Run every command with the launcher resolved by `/setup` (`py -3`, `python3`, then `python`), never assuming bare `python`.
 
 ## Admit the workspace
@@ -512,7 +514,8 @@ the stored marker does. The existing-identity (Knowledge, SSO, Graph) wording
 takes precedence when both apply. Render the returned text verbatim.
 
 **Custom claim not confirmed.** Only when the maker says a custom claim (or
-custom field) is wanted and the Entra administrator has not confirmed it, show
+custom field) is wanted and the Entra administrator has not confirmed it, and
+only when no `nextCommand` is pending, show
 the following Message verbatim as the whole reply. Mentioning an employee ID or
 another field without saying a custom claim is wanted does not trigger it:
 never point the maker to Part 4 then; run the same command without

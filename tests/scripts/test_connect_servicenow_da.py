@@ -17817,6 +17817,82 @@ def test_state_checklist_is_added_only_for_record_commands_that_change_state(
 @pytest.mark.parametrize(
     "provider", ["servicenow-da-hrsd", "servicenow-da-itsm"]
 )
+def test_claim_confirmation_skips_the_ask_when_entra_claim_is_recorded(
+    provider: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    context = {"agent": {"workspace_slug": "agent-one"}}
+    recorded = {
+        "adminSetup": {
+            "phaseHandoffs": {
+                "entra-registration": {
+                    "status": "completed",
+                    "evidence": {"selectedClaimName": "payrollid"},
+                }
+            }
+        }
+    }
+    monkeypatch.setattr(snow, "load_context", lambda **_: context)
+    monkeypatch.setattr(snow, "_load_lifecycle_state", lambda _ctx: recorded)
+    previous = snow.ACTIVE_PROFILE
+    try:
+        assert snow.main(
+            ["--provider", provider, "--agent-slug", "agent-one",
+             "claim-confirmation-handoff"]
+        ) == 0
+        skipped = json.loads(capsys.readouterr().out)
+        # A maker-stated changed claim still gets the custom-claim handoff.
+        assert snow.main(
+            ["--provider", provider, "--agent-slug", "agent-one",
+             "claim-confirmation-handoff", "--custom-claim"]
+        ) == 0
+        custom = json.loads(capsys.readouterr().out)
+        recorded["adminSetup"]["phaseHandoffs"]["entra-registration"][
+            "status"
+        ] = "pending"
+        assert snow.main(
+            ["--provider", provider, "--agent-slug", "agent-one",
+             "claim-confirmation-handoff"]
+        ) == 0
+        not_recorded = json.loads(capsys.readouterr().out)
+    finally:
+        snow.ACTIVE_PROFILE = previous
+
+    assert skipped["status"] == "claim-already-recorded"
+    assert skipped["endTurn"] is False
+    assert "resume-handoff" in skipped["nextCommand"]
+    assert "--agent-slug agent-one" in skipped["nextCommand"]
+    assert "administrator to confirm" not in skipped["chatMessage"]
+    assert custom["endTurn"] is True
+    assert not_recorded["status"] == "claim-confirmation-required"
+    assert not_recorded["endTurn"] is True
+
+
+def test_target_options_are_accepted_after_the_subcommand() -> None:
+    assert snow._hoist_global_options(
+        ["resume-handoff", "--agent-slug", "ess-it", "--verified-phase", "preflight"]
+    ) == [
+        "--agent-slug", "ess-it", "resume-handoff",
+        "--verified-phase", "preflight",
+    ]
+    assert snow._hoist_global_options(
+        ["--provider", "servicenow-da-itsm", "resume-handoff", "--agent-slug=ess-it"]
+    ) == ["--provider", "servicenow-da-itsm", "--agent-slug=ess-it", "resume-handoff"]
+    args = snow.build_parser().parse_args(
+        snow._hoist_global_options(
+            ["resume-handoff", "--provider", "servicenow-da-itsm",
+             "--agent-slug", "ess-it"]
+        )
+    )
+    assert (args.provider, args.agent_slug, args.command) == (
+        "servicenow-da-itsm", "ess-it", "resume-handoff",
+    )
+
+
+@pytest.mark.parametrize(
+    "provider", ["servicenow-da-hrsd", "servicenow-da-itsm"]
+)
 def test_claim_confirmation_handoff_is_fixed_and_only_custom_claims_get_part_four(
     provider: str,
     capsys: pytest.CaptureFixture[str],

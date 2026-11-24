@@ -14631,6 +14631,45 @@ _CLAIM_CONFIRMATION_AFTER_REPLY = (
 )
 
 
+def _recorded_entra_claim_reply(
+    context: dict[str, Any],
+    state: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Reply that skips the claim ask when this agent already has the answer.
+
+    Returns None unless the Entra administrator's confirmation, with a claim
+    name, is already recorded for this agent. A changed claim is handled by
+    ``--custom-claim`` and never reaches this check.
+    """
+    admin = state.get("adminSetup")
+    handoffs = admin.get("phaseHandoffs") if isinstance(admin, dict) else None
+    entra = handoffs.get("entra-registration") if isinstance(handoffs, dict) else None
+    evidence = entra.get("evidence") if isinstance(entra, dict) else None
+    if not (
+        isinstance(entra, dict)
+        and entra.get("status") == "completed"
+        and isinstance(evidence, dict)
+        and evidence.get("selectedClaimName")
+    ):
+        return None
+    return {
+        "status": "claim-already-recorded",
+        "decision": "claim-already-recorded",
+        "recordsNothing": True,
+        "waitsForMaker": False,
+        "provider": PROVIDER_KEY,
+        "agentSlug": _agent_slug(context),
+        "renderBlock": {
+            "kind": "progress",
+            "text": (
+                "Your Entra administrator's confirmation for this agent is "
+                "already saved, so we won't ask for it again. We'll continue "
+                "from where setup left off."
+            ),
+        },
+    }
+
+
 def claim_confirmation_handoff(
     *,
     custom_claim: bool = False,
@@ -17728,8 +17767,44 @@ def _with_agent_rules(
     return ordered
 
 
+_GLOBAL_OPTIONS = ("--provider", "--maker-username", "--agent-id", "--agent-slug")
+
+
+def _hoist_global_options(argv: list[str]) -> list[str]:
+    """Accept the target options on either side of the subcommand.
+
+    argparse only reads these options before the subcommand, and a model that
+    writes them after it otherwise hits an "unrecognized arguments" error.
+    """
+    leading: list[str] = []
+    rest: list[str] = []
+    seen_command = False
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        name = token.split("=", 1)[0]
+        if name in _GLOBAL_OPTIONS:
+            if "=" in token:
+                leading.append(token)
+                index += 1
+            elif index + 1 < len(argv):
+                leading.extend(argv[index : index + 2])
+                index += 2
+            else:
+                rest.append(token)
+                index += 1
+            continue
+        if not seen_command and not token.startswith("-"):
+            seen_command = True
+        rest.append(token)
+        index += 1
+    return leading + rest if seen_command else list(argv)
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    args = build_parser().parse_args(
+        _hoist_global_options(sys.argv[1:] if argv is None else list(argv))
+    )
     context: dict[str, Any] | None = None
     try:
         profile = product_profile_for_provider(args.provider)
@@ -17762,12 +17837,28 @@ def main(argv: list[str] | None = None) -> int:
                 agent_name=args.agent_name,
             )
         elif args.command == "claim-confirmation-handoff":
-            result = claim_confirmation_handoff(
-                custom_claim=args.custom_claim,
-                claim_name_given=args.claim_name_given,
-                servicenow_confirmed=args.servicenow_confirmed,
-                second_agent=args.second_agent,
-            )
+            result = None
+            if (
+                not args.custom_claim
+                and (args.agent_id is not None or args.agent_slug is not None)
+            ):
+                try:
+                    claim_context = load_context(
+                        agent_id=args.agent_id, agent_slug=args.agent_slug
+                    )
+                    claim_state = _load_lifecycle_state(claim_context)
+                    result = _recorded_entra_claim_reply(
+                        claim_context, claim_state
+                    )
+                except Exception:  # noqa: BLE001 - fall back to the generic reply
+                    result = None
+            if result is None:
+                result = claim_confirmation_handoff(
+                    custom_claim=args.custom_claim,
+                    claim_name_given=args.claim_name_given,
+                    servicenow_confirmed=args.servicenow_confirmed,
+                    second_agent=args.second_agent,
+                )
         elif args.command == "metadata-url-handoff":
             result = metadata_url_handoff(args.metadata_url)
         elif args.command == "empty-service-areas-handoff":
