@@ -28,6 +28,8 @@ cannot import the kit's dependencies, stop and tell the maker to rerun
 
 **Existing sign-in setup disclosed in the request.** When the maker says the organization already uses ServiceNow Knowledge, single sign-on, or the Microsoft Graph connector (for example "Our company already uses ServiceNow Knowledge"), in the first message or at any point before the first `resume-handoff`, remember it through the agent chooser and add `--existing knowledge` (or `sso`, `graph`) to the first `resume-handoff`: `python scripts/connect_servicenow_da.py --provider {PROVIDER} --agent-slug {SLUG} resume-handoff --existing knowledge`. That one command records the marker and puts the fixed compatibility opening at the start of `renderBlock.text`; send it verbatim as with every `resume-handoff`. Never skip the flag because the checklist looks complete, never write the opening yourself, and never detect, ask about, or inspect existing Entra or OIDC configuration: the maker's statement is the only source. The administrator handoffs are not skipped because Knowledge already works; the controller sends them with the compatibility-review wording. Later `resume-handoff` calls do not need the flag. Details are in **Existing sign-in setup** below.
 
+**More than one agent in one request.** When a single request names both ESS agents or all of them (for example "Check HR and IT in Prod", "set up both", "all agents"), this skill validates one agent per run. Your first action, before any capability emit, `agent-chooser`, `realm-status`, preflight, or checklist, is `python scripts/connect_servicenow_da.py --provider {PROVIDER} validation-notice --situation multi-agent`. Send `chatMessage` verbatim as the whole reply with no preamble and no trailer, and end the turn. It starts no run and records nothing, and no choice is preselected. When the maker's reply names one agent, run `agent-chooser --agent-name "{NAME_AS_TYPED}"` and continue only that agent for the destination they originally named; the other agent is a separate run later. When the reply names both again or neither, send the same message again. Never write this question yourself.
+
 **Hard rules.** Read `src/skills/connect/shared/lifecycle-runner.md` before the first action. When `resume-handoff` returns `renderBlock`, emit `renderBlock.text` verbatim as an assistant message; terminal output does not count. Never edit `lifecycle.json` by hand; record results with `record-checkpoint-results`. Run every command with the launcher resolved by `/setup` (`py -3`, `python3`, then `python`), never assuming bare `python`.
 
 ## Admit the workspace
@@ -1172,6 +1174,12 @@ context-free situations below are shared.
   agent, ask the plain question instead of the Yes/No agent card, then map the
   reply to `agent-chooser --selection-key "prepared:{AGENT_ID}"` (or
   `another-agent --agent-link`).
+- `multi-agent`: no saved state is needed. Use it as the very first action when
+  one request names both ESS agents or all of them (for example "Check HR and
+  IT in Prod"). It is the plain question "This skill validates one ESS agent
+  per run. Which should we check first ...?" with no preselected choice. Send
+  it verbatim with no preamble or trailer and end the turn; start no run and
+  record nothing. Map the reply to `agent-chooser --agent-name`.
 - `instance-question` (first agent only): the plain question for the
   ServiceNow instance URL; never accept credentials.
 - `knowledge-only-exit`: when the maker only wants ServiceNow Knowledge and no

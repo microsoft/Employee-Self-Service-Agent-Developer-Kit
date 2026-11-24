@@ -79,6 +79,19 @@ step is expected to change.
 
 ## Resolve the realm
 
+**Request names both agents.** When one request names both ESS agents or all
+of them (for example "Check HR and IT in Prod"), do not run `realm-status` or
+any other command first. Run `validation-notice --situation multi-agent`, send
+`chatMessage` verbatim as the whole reply (no preamble, no trailer, no
+checklist), and end the turn. It says:
+
+> This skill validates one ESS agent per run. Which should we check first—**Employee Self-Service HR** or **Employee Self-Service IT**?
+
+No choice is preselected, no run starts, and nothing is recorded. When the
+maker names one agent, select it with `agent-chooser --agent-name` and continue
+only that agent for the destination they originally named; the other agent is a
+separate run later.
+
 On every invocation, run the status first and use the controller's
 `activeTargetRealm` and `targets`. Never infer the realm from conversation
 text. A bare `/connect` after Dev is Ready does not activate Test or
@@ -643,5 +656,6 @@ replies from this guide.
 | Maker says "Finish without testing" and no setup blocker remains | `record-realm-test --result untested` saves it as untested (not a pass) and we show the untested-finish message. A later pass or fail replaces it. |
 | Maker says "Finish without testing" while a setup blocker remains | `record-realm-test --result untested` saves it as untested when a connection or runtime step is blocked, and we show the validation-paused message plus "This destination remains untested; its setup isn't complete." |
 | Maker tested the Dev agent instead of the promoted one | We ask for a result from the promoted environment and record nothing. |
+| One request names both agents ("Check HR and IT in Prod") | `validation-notice --situation multi-agent` is the first action: "This skill validates one ESS agent per run. Which should we check first—**Employee Self-Service HR** or **Employee Self-Service IT**?" Plain chat, no preselected choice, no run, nothing recorded. |
 | Maker's expected data came back empty | We check setup first, then ask whether the Test pane showed an error or only an empty result. |
 | Pass is recorded in Test or Prod | The completion message says what was verified and what was not, and does not mention publishing. |

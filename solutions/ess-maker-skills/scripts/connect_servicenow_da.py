@@ -17465,6 +17465,7 @@ _VALIDATION_SCENARIOS = (
 )
 _VALIDATION_SITUATIONS = (
     "agent-chooser",
+    "multi-agent",
     "instance-question",
     "knowledge-only-exit",
     "sso-conflict",
@@ -17478,7 +17479,9 @@ _VALIDATION_SITUATIONS = (
     "retry-request",
     "missing-consent",
 )
-_VALIDATION_CONTEXT_FREE = frozenset({"agent-chooser", "knowledge-only-exit"})
+_VALIDATION_CONTEXT_FREE = frozenset(
+    {"agent-chooser", "multi-agent", "knowledge-only-exit"}
+)
 _VALIDATION_WAITING_FOR = ("servicenow", "entra-claim")
 
 _VALIDATION_AFTER_PLAIN_QUESTION = (
@@ -17492,6 +17495,16 @@ _VALIDATION_AFTER_CHOOSER = (
     '"{LINK}" when they paste a Copilot Studio link). When the reply names '
     "no agent or several, ask this question again. Do not show the Choose "
     "agent card."
+)
+_VALIDATION_AFTER_MULTI_AGENT = (
+    "End your turn after sending the message. This is a plain chat "
+    "question with no preselected choice; start no run, run no other "
+    "ServiceNow Connect command, record nothing, and add no checklist, "
+    "preamble, or trailer. When the maker names one agent, run "
+    '`agent-chooser --agent-name "{NAME_AS_TYPED}"` and continue that '
+    "agent's run for the destination they originally named (the other "
+    "agent is a separate run later). When the reply names both again or "
+    "neither, ask this question again."
 )
 _VALIDATION_AFTER_INSTANCE = (
     f"{_VALIDATION_AFTER_PLAIN_QUESTION} When the maker replies with the "
@@ -17627,6 +17640,13 @@ def validation_notice(
             "to ServiceNow?",
         )
         text, after_reply = question, _VALIDATION_AFTER_CHOOSER
+    elif situation == "multi-agent":
+        text = (
+            "This skill validates one ESS agent per run. Which should we "
+            "check first\u2014**Employee Self-Service HR** or **Employee "
+            "Self-Service IT**?"
+        )
+        after_reply = _VALIDATION_AFTER_MULTI_AGENT
     elif situation == "instance-question":
         if scenario != "first-agent":
             raise unsupported()

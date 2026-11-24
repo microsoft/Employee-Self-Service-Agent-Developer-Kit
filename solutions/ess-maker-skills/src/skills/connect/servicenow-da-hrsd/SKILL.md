@@ -68,6 +68,8 @@ the ordinary Message-block silence rule.
 
 **Existing sign-in setup.** When the maker said the organization already uses ServiceNow Knowledge, single sign-on, or the Microsoft Graph connector, the first `resume-handoff` must carry `--existing knowledge` (or `sso`, `graph`). Its `renderBlock.text` then starts with the fixed compatibility opening; send it verbatim, never write it yourself, never inspect existing Entra or OIDC configuration, and never skip the administrator handoffs because Knowledge already works.
 
+**More than one agent.** A request naming both ESS agents or all of them (for example "Check HR and IT in Prod") is answered only by `validation-notice --situation multi-agent`: send `chatMessage` verbatim with no preamble or trailer, end the turn, start no run, and record nothing. This is the first action, before any capability emit, `realm-status`, preflight, or checklist.
+
 On every first run and resume, show the controller's HR collaboration groups
 and nested internal-step statuses as an ordinary response. Preflight and
 instance input run without an availability question. When the controller

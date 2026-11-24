@@ -1500,6 +1500,7 @@ def test_validation_notice_is_routed_in_entry_docs() -> None:
     assert "validation-notice --situation" in entry
     for situation in (
         "agent-chooser",
+        "multi-agent",
         "knowledge-only-exit",
         "sso-conflict",
         "claim-contradiction",
@@ -1525,6 +1526,22 @@ def test_existing_identity_handoff_is_routed_in_shared_docs() -> None:
             )
             assert "existingIdentity" in text, (profile, name)
             assert "existing-identity-handoff" in text, (profile, name)
+
+
+def test_multi_agent_request_is_routed_before_any_command() -> None:
+    root = _SOLUTION / "src" / "skills" / "connect"
+    docs = {
+        "entry": root / "servicenow" / "entry.md",
+        "realms": root / "servicenow" / "realms.md",
+        "router": root / "servicenow-da" / "SKILL.md",
+        "hrsd": root / "servicenow-da-hrsd" / "SKILL.md",
+        "itsm": root / "servicenow-da-itsm" / "SKILL.md",
+        "runner": root / "shared" / "lifecycle-runner.md",
+    }
+    for name, path in docs.items():
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert "validation-notice --situation multi-agent" in text, name
+        assert "Check HR and IT in Prod" in text, name
 
 
 def test_existing_identity_flag_is_routed_to_the_first_resume() -> None:

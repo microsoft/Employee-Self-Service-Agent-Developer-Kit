@@ -114,3 +114,11 @@ opening yourself, and never inspect existing Entra or OIDC configuration (see
 `src/skills/connect/servicenow/entry.md`). Local state may label a choice
 `connected-revalidation-required`, but the provider must still perform normal
 live lifecycle re-verification before reporting it connected.
+
+**More than one agent in one request.** When one request names both ESS agents
+or all of them (for example "Check HR and IT in Prod"), first run
+`validation-notice --situation multi-agent`, send `chatMessage` verbatim with
+no preamble or trailer, and end the turn before any chooser, status, preflight,
+or checklist step (see **More than one agent in one request** in
+`src/skills/connect/servicenow/entry.md`). Nothing is recorded and no run
+starts.

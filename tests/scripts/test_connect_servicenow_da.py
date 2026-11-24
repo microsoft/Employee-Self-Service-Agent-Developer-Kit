@@ -18677,6 +18677,49 @@ def test_validation_notice_topic_link_retry_and_consent() -> None:
         _notice("hrsd", "missing-consent", "payroll")
 
 
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_validation_notice_multi_agent_is_the_spec_question(
+    profile: str,
+) -> None:
+    result = _notice(profile, "multi-agent", context=None)
+    assert result["renderBlock"]["text"] == (
+        "This skill validates one ESS agent per run. Which should we check "
+        "first\u2014**Employee Self-Service HR** or **Employee Self-Service "
+        "IT**?"
+    )
+    assert result["recordsNothing"] is True
+    wrapped = snow._with_agent_rules(result, "validation-notice")
+    assert wrapped["endTurn"] is True
+    assert wrapped["chatMessage"] == result["renderBlock"]["text"]
+    assert "pendingCard" not in wrapped and "nextCommand" not in wrapped
+    assert "no preselected choice" in result["afterReply"]
+    assert "start no run" in result["afterReply"]
+
+
+def test_validation_notice_multi_agent_cli_needs_no_agent(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    previous = snow.ACTIVE_PROFILE
+    try:
+        assert snow.main(
+            [
+                "--provider", "servicenow-da-hrsd", "validation-notice",
+                "--situation", "multi-agent",
+            ]
+        ) == 0
+        out = json.loads(capsys.readouterr().out)
+    finally:
+        snow.ACTIVE_PROFILE = previous
+    assert out["endTurn"] is True and out["recordsNothing"] is True
+    assert out["chatMessage"].startswith(
+        "This skill validates one ESS agent per run."
+    )
+    assert not (tmp_path / ".local").exists()
+
+
 def test_validation_notice_existing_identity_uses_its_own_command() -> None:
     state = {"existingIdentity": {"kind": "knowledge"}}
     with pytest.raises(snow.ServiceNowConnectError, match="existing-identity"):
