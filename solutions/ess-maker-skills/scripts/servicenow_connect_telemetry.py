@@ -107,7 +107,7 @@ def _remediation_id(
 
 
 def _event(
-    telemetry: Mapping[str, Any],
+    telemetry: dict[str, Any],
     name: str,
     *,
     phase_id: str = "",
@@ -116,6 +116,13 @@ def _event(
     blocker_category: str = "",
     remediation_id: str = "",
 ) -> dict[str, Any]:
+    telemetry["eventSequence"] = int(telemetry.get("eventSequence") or 0) + 1
+    attempts = telemetry.setdefault("stepAttempts", {})
+    if phase_id and name in {"phase-started", "phase-resumed"}:
+        previous = attempts.get(phase_id)
+        # A migrated in-flight journey has no trustworthy attempt baseline.
+        if previous is not None or not telemetry.get("backfillSuppressed"):
+            attempts[phase_id] = int(previous or 0) + 1
     return {
         "event": name,
         "phase": PHASE_MAP.get(phase_id, ""),
@@ -126,6 +133,13 @@ def _event(
         "blockerCategory": blocker_category,
         "remediationId": remediation_id,
         "correlationId": str(telemetry.get("correlationId") or ""),
+        "sequence": telemetry["eventSequence"],
+        "timestamp": telemetry.get("eventTimestamp", ""),
+        "stepId": phase_id,
+        "stepIndex": int((telemetry.get("stepIndexes") or {}).get(phase_id) or 0),
+        "stepAttempt": int(attempts.get(phase_id) or 0),
+        "flowVersion": int(telemetry.get("flowVersion") or 0),
+        "journeyStartedAt": telemetry.get("startedAt", ""),
     }
 
 
@@ -138,6 +152,7 @@ def prepare_lifecycle_projection(
     required_phase_ids: tuple[str, ...] | None = None,
     completion_ready_phase_ids: frozenset[str] | None = None,
     allowed_remediation_ids: frozenset[str] = frozenset(),
+    flow_version: int = 0,
 ) -> list[dict[str, Any]]:
     """Update projection metadata and return newly persisted transition events."""
     now = timestamp or _utc_now()
@@ -169,11 +184,23 @@ def prepare_lifecycle_projection(
             ),
             "backfillSuppressed": not new_lifecycle,
             "updatedAt": now,
+            "eventTimestamp": now,
+            "eventSequence": 0,
+            "stepAttempts": {},
+            "stepIndexes": {phase: index + 1 for index, phase in enumerate(required)},
+            "flowVersion": flow_version,
         }
         current["telemetry"] = telemetry
-        return [_event(telemetry, "invoked")] if new_lifecycle else []
+        events = [_event(telemetry, "invoked")] if new_lifecycle else []
+        telemetry.pop("eventTimestamp", None)
+        return events
 
     telemetry = copy.deepcopy(dict(previous_telemetry))
+    telemetry["eventTimestamp"] = now
+    telemetry["flowVersion"] = flow_version
+    telemetry["stepIndexes"] = {
+        phase: index + 1 for index, phase in enumerate(required_phase_ids or ())
+    }
     telemetry["schemaVersion"] = TELEMETRY_SCHEMA_VERSION
     projected = telemetry.get("projectedPhaseStatuses")
     if not isinstance(projected, dict):
@@ -316,6 +343,7 @@ def prepare_lifecycle_projection(
     telemetry["projectedPhaseStatuses"] = projected
     if projection_changed or events:
         telemetry["updatedAt"] = now
+    telemetry.pop("eventTimestamp", None)
     current["telemetry"] = telemetry
     return events
 
@@ -340,6 +368,17 @@ def emit_lifecycle_event(
             remediation_id=str(event.get("remediationId") or ""),
             correlation_id=str(event.get("correlationId") or ""),
             agent_id=str(state.get("agentId") or ""),
+            environment_id=str(state.get("environmentId") or ""),
+            validation_realm=str(state.get("activeTargetRealm") or ""),
+            target_ring=str(state.get("ring") or ""),
+            step_id=str(event.get("stepId") or ""),
+            step_index=int(event.get("stepIndex") or 0),
+            step_attempt=int(event.get("stepAttempt") or 0),
+            flow_version=int(event.get("flowVersion") or 0),
+            event_sequence=int(event.get("sequence") or 0),
+            event_timestamp=str(event.get("timestamp") or ""),
+            journey_started_at=str(event.get("journeyStartedAt") or ""),
+            tenant_id=str(state.get("tenantId") or ""),
         )
     except Exception:  # noqa: BLE001 - telemetry cannot break /connect
         return

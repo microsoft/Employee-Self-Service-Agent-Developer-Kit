@@ -5746,6 +5746,7 @@ def _prepare_lifecycle_telemetry(
             allowed_remediation_ids=frozenset(
                 allowed_remediation_ids
             ),
+            flow_version=int(contract.get("contractRevision") or 0),
         )
     except Exception as exc:  # noqa: BLE001 - telemetry cannot break Connect
         print(

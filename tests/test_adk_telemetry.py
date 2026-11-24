@@ -1884,6 +1884,68 @@ def test_connect_lifecycle_event_normalizes_unbounded_values(captured_post):
     assert data["agent_id"] == ""
 
 
+def test_journey_identity_chronology_and_unknown_dimensions(captured_post):
+    kwargs = {
+        "correlation_id": "6f7c8f9c-1234-4abc-9def-0123456789ab",
+        "event_sequence": 9,
+        "event_timestamp": "2026-11-24T08:00:00Z",
+        "journey_started_at": "2026-11-23T08:00:00Z",
+        "environment_id": "7f7c8f9c-1234-4abc-9def-0123456789ab",
+        "validation_realm": "dev",
+        "target_ring": "preprod",
+        "step_id": "servicenow-oidc",
+        "step_index": 4,
+        "step_attempt": 2,
+        "flow_version": 17,
+        "block": True,
+    }
+    adk.emit_connect_lifecycle("phase-completed", **kwargs)
+    first = _last_activity(captured_post)["data"]
+    adk.emit_connect_lifecycle("phase-completed", **kwargs)
+    second = _last_activity(captured_post)["data"]
+    assert first["event_id"] == second["event_id"]
+    assert first["event_timestamp"].startswith("2026-11-24T08:00:00")
+    assert first["journey_started_at"].startswith("2026-11-23T08:00:00")
+    assert first["environment_id"] == kwargs["environment_id"]
+    assert first["step_id"] == "servicenow-oidc"
+    assert first["step_attempt"] == 2
+    assert first["validation_realm"] == "dev"
+    assert first["target_ring"] == "preprod"
+    assert "platform_realm" not in first
+    adk.emit_connect_lifecycle(
+        "blocked", environment_id="secret", step_id="customer input",
+        event_timestamp="2026-11-24", validation_realm="preprod", target_ring="dev", block=True,
+    )
+    unknown = _last_activity(captured_post)["data"]
+    for field in ("environment_id", "step_id", "event_timestamp", "validation_realm", "target_ring", "event_id"):
+        assert unknown[field] == ""
+
+
+def test_auth_emission_does_not_inherit_another_tenant(captured_post):
+    adk.set_identity(tenant_id="7f7c8f9c-1234-4abc-9def-0123456789ab", tenant_name="Cached tenant")
+    adk.emit_auth_attempt(
+        service="agentbuilder", method="interactive", outcome="failure",
+        tenant_id="organizations", error_category="secret text", block=True,
+    )
+    data = _last_activity(captured_post)["data"]
+    assert data["tenant_id"] == ""
+    assert data["tenant_name"] == ""
+    assert data["error_category"] == ""
+    assert data["auth_service"] == "agentbuilder"
+    assert data["outcome"] == "failure"
+    assert data["auth_attempt_id"]
+
+
+def test_historical_connect_target_does_not_inherit_cached_tenant(captured_post):
+    adk.set_identity(tenant_id="7f7c8f9c-1234-4abc-9def-0123456789ab", tenant_name="Current tenant")
+    adk.emit_connect_lifecycle("abandoned", tenant_id="", block=True)
+    data = _last_activity(captured_post)["data"]
+    assert data["tenant_id"] == ""
+    assert data["tenant_name"] == ""
+    adk.emit_connect_lifecycle("invoked", block=True)
+    assert _last_activity(captured_post)["data"]["tenant_id"] == "7f7c8f9c-1234-4abc-9def-0123456789ab"
+
+
 def test_connect_lifecycle_accepts_bounded_servicenow_remediation(
     captured_post,
 ):
@@ -3588,8 +3650,8 @@ def test_emit_flightcheck_error_carries_connector(captured_post, monkeypatch):
 
 
 def test_schema_version_bump_records_agent_type_dim():
-    # 1.8 adds script errors; retain 1.7's agent_type dimension for the CA/DA split.
-    assert adk.SCHEMA_VERSION == "1.8.0"
+    # Retain agent_type and script errors alongside the additive journey/auth fields.
+    assert adk.SCHEMA_VERSION == "1.9.0"
 
 
 # --- emit_capability.py shim --connector plumbing -------------------------

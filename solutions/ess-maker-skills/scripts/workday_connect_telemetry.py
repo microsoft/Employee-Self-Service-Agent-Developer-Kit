@@ -20,6 +20,9 @@ def emit_lifecycle_event(
         lifecycle = state.get("lifecycle") or {}
         event_correlation = str(event.get("correlationId") or "")
         current_correlation = str(lifecycle.get("correlationId") or "")
+        current_target = not event_correlation or event_correlation == current_correlation
+        phase = str(event.get("phase") or "")
+        steps = ("preflight", "entra", "workday-admin", "connections", "runtime", "maker-validation")
         adk_telemetry.emit_connect_lifecycle(
             str(event.get("event") or ""),
             connector="workday",
@@ -38,10 +41,20 @@ def emit_lifecycle_event(
             # Historical events must not inherit the current target's agent.
             agent_id=(
                 str(agent.get("botId") or "")
-                if not event_correlation
-                or event_correlation == current_correlation
+                if current_target
                 else ""
             ),
+            environment_id=str(scope.get("environmentId") or "") if current_target else "",
+            validation_realm=str(scope.get("validationRealm") or "") if current_target else "",
+            target_ring=str(scope.get("ring") or "") if current_target else "",
+            step_id=phase,
+            step_index=steps.index(phase) + 1 if phase in steps else 0,
+            step_attempt=int(event.get("stepAttempt") or 0),
+            flow_version=1,
+            event_sequence=int(event.get("sequence") or 0),
+            event_timestamp=str(event.get("timestamp") or ""),
+            journey_started_at=str(lifecycle.get("startedAt") or "") if current_target else "",
+            tenant_id=str(scope.get("tenantId") or "") if current_target else "",
         )
     except Exception:  # noqa: BLE001 - telemetry cannot break /connect
         return

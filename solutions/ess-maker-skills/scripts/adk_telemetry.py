@@ -85,7 +85,8 @@ from flightcheck import telemetry as _fc  # noqa: E402
 # 1.7.0: added derived ``agent_type`` common dimension (custom_agent |
 #        declarative_agent | unknown) — ADO 7830949.
 # 1.8.0: privacy-safe DA script crash diagnostics (ADO 8169047).
-SCHEMA_VERSION = "1.8.0"
+# 1.9.0: durable Connect step attribution and bounded shared auth outcomes.
+SCHEMA_VERSION = "1.9.0"
 
 # Surfaces the ADK emits from (spec enum: sdk | cli | studio | docs). The
 # Python skill scripts are the CLI surface.
@@ -104,6 +105,7 @@ EVENT_FLIGHTCHECK_RUN = "adk.flightcheck.run"
 EVENT_FLIGHTCHECK_RESULT = "adk.flightcheck.result"
 EVENT_FLIGHTCHECK_ERROR = "adk.flightcheck.error"
 EVENT_CONNECT_LIFECYCLE = "adk.connect.lifecycle"
+EVENT_AUTH_ATTEMPT = "adk.auth.attempt"
 EVENT_CLIENT = "adk.client.event"
 EVENT_SCRIPT_ERROR = "adk.script.error"
 
@@ -2459,11 +2461,26 @@ def emit_connect_lifecycle(
     remediation_id: str = "",
     correlation_id: str = "",
     agent_id: str = "",
+    environment_id: str = "",
+    validation_realm: str = "",
+    target_ring: str = "",
+    step_id: str = "",
+    step_index: int = 0,
+    step_attempt: int = 0,
+    flow_version: int = 0,
+    event_sequence: int = 0,
+    event_timestamp: str = "",
+    journey_started_at: str = "",
+    tenant_id: str | None = None,
     surface: str = SURFACE_CLI,
     block: bool = False,
 ) -> dict[str, Any]:
     sid, _ = get_session(surface)
-    data = common_dimensions(surface, session_id=sid)
+    target = {} if tenant_id is None else {
+        "tenant_id": _sanitize_tenant_id(tenant_id),
+        "tenant_name": _IDENTITY["tenant_name"] if tenant_id == _IDENTITY["tenant_id"] else "",
+    }
+    data = common_dimensions(surface, session_id=sid, **target)
     normalized_correlation = str(correlation_id or "").strip().lower()
     if not _CONNECT_LIFECYCLE_CORRELATION_RE.fullmatch(normalized_correlation):
         normalized_correlation = ""
@@ -2494,9 +2511,81 @@ def emit_connect_lifecycle(
             ),
             "remediation_id": normalized_remediation_id,
             "correlation_id": normalized_correlation,
+            "journey_schema_version": 1,
+            "environment_id": _telemetry_guid(environment_id),
+            "validation_realm": _bounded_value(validation_realm, {"dev", "test", "prod"}),
+            "target_ring": _bounded_value(target_ring, {"test", "preprod", "prod"}),
+            "step_id": _bounded_value(step_id, {
+                "preflight", "entra", "workday-admin", "connections", "runtime", "maker-validation",
+                "plugin-prerequisites", "entra-registration", "servicenow-oidc", "credential",
+                "topics", "portal-url", "agent-connection", "test",
+            }),
+            "step_index": max(0, int(step_index)),
+            "step_attempt": max(0, int(step_attempt)),
+            "flow_version": max(0, int(flow_version)),
+            "event_sequence": max(0, int(event_sequence)),
+            "event_timestamp": _telemetry_timestamp(event_timestamp),
+            "journey_started_at": _telemetry_timestamp(journey_started_at),
+            "duration_kind": (
+                "unpaused_step_elapsed" if normalize_connect_lifecycle_event(lifecycle_event)
+                in {"phase_completed", "phase_paused"} else "unspecified"
+            ),
+            "event_id": (
+                str(uuid.uuid5(uuid.UUID(normalized_correlation), str(event_sequence)))
+                if normalized_correlation and event_sequence > 0 else ""
+            ),
         }
     )
     return _emit(EVENT_CONNECT_LIFECYCLE, data, block=block)
+
+
+def _bounded_value(value: str, allowed: set[str]) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in allowed else ""
+
+
+def _telemetry_guid(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if _CONNECT_LIFECYCLE_CORRELATION_RE.fullmatch(normalized) else ""
+
+
+def _telemetry_timestamp(value: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed.isoformat() if parsed.utcoffset() is not None else ""
+    except (TypeError, ValueError):
+        return ""
+
+
+def emit_auth_attempt(
+    *,
+    service: str,
+    method: str = "",
+    outcome: str,
+    error_category: str = "",
+    duration_ms: int = 0,
+    tenant_id: str = "",
+    block: bool = False,
+) -> dict[str, Any]:
+    """One terminal outcome per acquisition; never accept tokens or error text."""
+    sid, _ = get_session(SURFACE_CLI)
+    # A failed sign-in may target a different tenant than the cached ADK session.
+    target_tenant = _sanitize_tenant_id(tenant_id)
+    data = common_dimensions(
+        SURFACE_CLI, session_id=sid, tenant_id=target_tenant,
+        tenant_name=_IDENTITY["tenant_name"] if target_tenant == _IDENTITY["tenant_id"] else "",
+    )
+    data.update({
+        "auth_attempt_id": str(uuid.uuid4()),
+        "auth_service": _bounded_value(service, {"dataverse", "flow", "agentbuilder"}),
+        "auth_method": _bounded_value(method, {"silent", "interactive"}),
+        "outcome": _bounded_value(outcome, {"success", "failure", "cancelled", "timeout"}),
+        "error_category": _bounded_value(error_category, {
+            "authentication", "consent", "permissions", "account_mismatch", "network", "unknown",
+        }),
+        "duration_ms": max(0, int(duration_ms)),
+    })
+    return _emit(EVENT_AUTH_ATTEMPT, data, block=block)
 
 
 def emit_flightcheck_run(

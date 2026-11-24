@@ -16,6 +16,19 @@ def _config_path(root: Path) -> Path:
     return root / ".local" / "connect" / "workday-da" / "config.json"
 
 
+def test_step_attempts_survive_reload_and_do_not_use_global_retries(tmp_path: Path):
+    import workday_connect_store as module
+
+    store = module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.record_lifecycle_event("phase-started", phase="preflight")
+    store.record_lifecycle_event("phase-resumed", phase="preflight")
+    store = module.WorkdayConnectStore(tmp_path)
+    state = store.record_lifecycle_event("phase-started", phase="entra")
+    assert [event["stepAttempt"] for event in state["lifecycle"]["journal"]] == [1, 2, 1]
+    assert state["lifecycle"]["stepAttempts"] == {"preflight": 2, "entra": 1}
+
+
 def test_initialize_creates_only_json_state(tmp_path: Path) -> None:
     import workday_connect_store as store_module
 
@@ -29,6 +42,34 @@ def test_initialize_creates_only_json_state(tmp_path: Path) -> None:
     assert _config_path(tmp_path).exists()
     assert not (tmp_path / ".local/connect/workday-da/tasks.md").exists()
     assert not (tmp_path / ".local/setup/workday-da/tasks.md").exists()
+
+
+def test_new_journey_does_not_inherit_step_attempts(tmp_path: Path):
+    import workday_connect_store as module
+
+    store = module.WorkdayConnectStore(tmp_path)
+    state = store.initialize()
+    module._append_lifecycle_event(state, "phase-started", phase="preflight")
+    module._append_lifecycle_event(state, "phase-resumed", phase="preflight")
+    original = state["lifecycle"]["correlationId"]
+    module._rotate_lifecycle(state)
+    event = module._append_lifecycle_event(state, "phase-started", phase="preflight")
+    assert event["correlationId"] != original
+    assert event["stepAttempt"] == 1
+
+
+def test_truncated_legacy_attempt_history_stays_unknown(tmp_path: Path):
+    import workday_connect_store as module
+
+    store = module.WorkdayConnectStore(tmp_path)
+    state = store.initialize()
+    module._append_lifecycle_event(state, "phase-started", phase="preflight")
+    state["lifecycle"]["journal"][0]["sequence"] = 50
+    state["lifecycle"].pop("stepAttempts")
+    event = module._append_lifecycle_event(state, "phase-resumed", phase="preflight")
+    assert event["stepAttempt"] == 0
+    event = module._append_lifecycle_event(state, "phase-resumed", phase="preflight")
+    assert event["stepAttempt"] == 0
 
 
 def test_migrates_legacy_rows_without_using_app_uri_as_saml_id(

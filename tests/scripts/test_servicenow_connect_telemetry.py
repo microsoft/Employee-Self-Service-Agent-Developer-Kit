@@ -538,6 +538,17 @@ def test_emitter_projects_only_bounded_existing_fields(
         "remediation_id": "SN-DA-ITSM-TOPICS-001",
         "correlation_id": "00000000-0000-4000-8000-000000003333",
         "agent_id": "00000000-0000-4000-8000-000000002222",
+        "environment_id": "",
+        "validation_realm": "",
+        "target_ring": "",
+        "step_id": "",
+        "step_index": 0,
+        "step_attempt": 0,
+        "flow_version": 0,
+        "event_sequence": 0,
+        "event_timestamp": "",
+        "journey_started_at": "",
+        "tenant_id": "",
     }
 
 
@@ -557,3 +568,31 @@ def test_emitter_is_fail_open(monkeypatch) -> None:
             "correlationId": "00000000-0000-4000-8000-000000003333",
         },
     )
+
+
+def test_original_steps_remain_distinct_and_sequences_are_durable():
+    state = _state()
+    required = _required(state)
+    invoked = telemetry.prepare_lifecycle_projection(
+        None, state, new_lifecycle=True, required_phase_ids=required, flow_version=17,
+        timestamp="2026-11-24T08:00:00Z",
+    )
+    previous = copy.deepcopy(state)
+    state["phases"]["credential"]["status"] = "in-progress"
+    first = telemetry.prepare_lifecycle_projection(
+        previous, state, required_phase_ids=required, flow_version=17,
+        timestamp="2026-11-24T08:01:00Z",
+    )
+    assert invoked[0]["sequence"] == 1
+    assert first[0]["sequence"] == 2
+    assert first[0]["stepId"] == "credential"
+    assert first[0]["stepIndex"] == 3
+    assert first[0]["stepAttempt"] == 1
+    assert first[0]["flowVersion"] == 17
+    assert first[0]["timestamp"] == "2026-11-24T08:01:00Z"
+    before = copy.deepcopy(state)
+    assert telemetry.prepare_lifecycle_projection(
+        before, state, required_phase_ids=required, flow_version=17,
+        timestamp="2026-11-24T08:02:00Z",
+    ) == []
+    assert state == before
