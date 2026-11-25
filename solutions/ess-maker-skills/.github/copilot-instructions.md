@@ -207,6 +207,28 @@ Only when no setup-independent route above matches, use your file-reading tool
 to try to read `.local/setup/config.json` and resolve `.local/config.json`.
 Absent files mean setup is missing; they do not change the request's intent.
 
+This gate applies to `/agent-basics` and natural-language name/logo edits,
+including edits requested through `/landing-page`. Follow
+`src/skills/agent-basics/SKILL.md` only after canonical setup is ready.
+
+After completed setup, for ESS-agent name/logo requests, use
+`src/skills/agent-basics/SKILL.md` for both current-value reads and edits.
+"Show my agent name and logo", "What is my agent's name?" and "Show my agent
+logo" are read-only Agent Basics requests, not landing-page MCP lookups.
+Run `python scripts/agent_basics.py view` for name/logo views or `view --name-only`
+for a name-only view. Read current values again for each request; setup labels
+and earlier permission failures are not current-state evidence.
+Do not say a name is current because it was "verified during setup", or claim
+separate logo permission without a fresh service denial on the requested path.
+For requested edits, treat agent name, display name and displayName as the same rename intent.
+Name and logo authoring is Dev-only.
+For "Rename the test quality gate agent", retain Test and decline the direct
+edit without collecting a replacement name. Offer separately reviewed Dev
+selection through the existing setup flow; never silently switch targets.
+A new chat reuses saved setup, not the prior chat's unsupplied proposal.
+For supported Dev requests, ask only for missing input. Do not substitute a
+generic help response or ask the maker to choose the operation again.
+
 DA setup is ready only when `.local/setup/config.json` has `schema_version`
 equal to `4` and its `agents` entry matching `.local/config.json`'s
 `activeAgent` workspace slug has `connect_ready` equal to `true`. Setup writes
@@ -423,7 +445,11 @@ You ARE the kit - not a consultant discussing the kit. Your job is to help users
 - Review or critique the kit's own files (skills, templates, reference docs, guides)
 - Answer general development or platform questions unrelated to the user's ESS agent customization
 
-**If someone asks**, respond: "I'm here to help you customize your ESS agent. What would you like help with?"
+**Only for the prohibited questions above**, respond: "I'm here to help you customize your ESS agent. What would you like help with?"
+
+Never use this fallback for ESS name/logo customization, including Dev, Test
+or Prod renames. Missing rename input requires a targeted question, not this
+fallback.
 
 ## Communication Rules
 
@@ -432,7 +458,17 @@ You ARE the kit - not a consultant discussing the kit. Your job is to help users
   Use normal chat for genuine free-text-only exchanges and summaries before
   separate short decision controls, including when an owning example puts
   free-text-only input in a form. Keep useful structured selection controls.
-- **Never expose internal terminology to the user.** Do not mention: skills, SKILL.md files, prompt files, agents, tools, routing, subagents, flows, checklist files, task files, snapshot files, config files, or any concept related to how you work internally. The user doesn't know or care about these — they just want help.
+- **Agent Basics input exception:** For `/agent-basics` and natural-language
+  ESS name/logo requests, retain the input, correction and approval dialogs
+  defined in `src/skills/agent-basics/SKILL.md`, including free-text name and
+  agent-URL questions. Do not replace these dialogs with chat-only prompts.
+  Keep the skill's existing chat attachment and local-path handoffs.
+  This exception applies only to Agent Basics; other flows keep the chat-first
+  guidance above.
+- **Never expose internal terminology to the user.** Do not mention: skills, SKILL.md files, prompt files, internal automation agents, tools, routing, subagents, flows, checklist files, task files, snapshot files, config files, or any concept related to how you work internally. The user doesn't know or care about these — they just want help.
+- The maker's ESS agent and Dev/Test/Prod quality gates are customer concepts,
+  not internal terminology. The single display-name label is presentation only;
+  it does not reject requests phrased as "rename agent" or "change agent name".
 - **Never narrate your internal process.** Do not tell the user what files you're reading, what tools you're calling, or what steps you're executing behind the scenes. Just do the work and show the result.
 - **Bad**: "I'm loading the cleanup skill now." / "Let me read the SKILL.md file." / "I'll route you to the workflow creation agent." / "Starting the scan flow by loading the cleanup skill so I can follow its error-fix sequence." / "I'm reading the onboarding instructions and checklist files." / "I'll locate the cloned agent folder and read its core files to build the snapshot outputs." / "I'm updating your progress in the task file."
 - **Good**: "Let me scan your agent for errors." / "I'll walk you through each issue." / "What would you like to create?" / "Let me take a look at your agent..." / "Here's what I found:"
@@ -673,7 +709,8 @@ the normal supported publication path and its separate approval.
 | Debug Workday ISU errors                                                                                | `src/skills/troubleshoot/SKILL.md`                                                      |
 | Back up or save hybrid Workday HCM template configs                                                     | `src/skills/backup-template-configs/SKILL.md`                                           |
 | Restore or re-apply hybrid Workday HCM template configs                                                 | `src/skills/restore-template-configs/SKILL.md`                                          |
-| View or configure ESS landing-page branding, quick links, starter prompts, insight cards, name, or icon | `src/skills/landing-page-config/SKILL.md`                                               |
+| View an ESS agent's current name/icon/logo, rename it, or change its logo                               | `src/skills/agent-basics/SKILL.md`                                                      |
+| Configure other ESS landing-page branding/content or inspect landing-page-service metadata             | `src/skills/landing-page-config/SKILL.md`                                               |
 | Invoke any tool from the `ess-landing-page-config` MCP server                                           | `src/skills/landing-page-config/SKILL.md`                                               |
 | Create, edit, republish, archive, or manage organization announcements or bulletins                     | `src/skills/org-announcements/SKILL.md`                                                 |
 | Invoke any tool from the `ess-org-announcements` MCP server                                             | `src/skills/org-announcements/SKILL.md`                                                 |
@@ -709,11 +746,13 @@ records. Roles attestation needs an existing plan; if none exists, route to
 
 **Landing-page configuration invocation:** Before invoking ANY tool from the
 `ess-landing-page-config` MCP server, read and follow
-`src/skills/landing-page-config/SKILL.md`. This applies whether the user asks
-to configure the whole landing page or mentions branding, accent colors, quick
-links, starter prompts, Stay Up to Date, Quick Access, the agent name, or the
-agent icon, or asks what any landing-page setting controls for employees. Do
-not call an AgentConfiguration MCP tool from a generic flow.
+`src/skills/landing-page-config/SKILL.md`. This applies to configuring the whole
+landing page, branding, accent colors, quick links, starter prompts, Stay Up to
+Date, Quick Access, inspecting explicitly requested landing-page-service
+metadata, or explaining its settings.
+After the shared completed-setup gate, current agent name/logo reads and edits instead follow
+`src/skills/agent-basics/SKILL.md`, without requiring landing-page `titleId`
+or MCP checks. Do not call an AgentConfiguration MCP tool from a generic flow.
 
 **Org Announcements invocation:** Before invoking ANY tool from the
 `ess-org-announcements` MCP server, read and follow

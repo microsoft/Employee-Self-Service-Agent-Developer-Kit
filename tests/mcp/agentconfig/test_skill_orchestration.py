@@ -991,9 +991,14 @@ def test_current_saved_value_answers_require_a_fresh_read_for_the_request() -> N
         "**Read current canonical values** -> answer from the fresh server result |"
     ) in route
     assert (
-        "| View the agent name | Resolve the target and establish existence -> "
-        "fresh `get_agent_config` for this request -> report the read-only name |"
+        "| View the current agent name, icon or logo | Hand off to "
+        "`src/skills/agent-basics/SKILL.md`; use a fresh native view, not "
+        "AgentConfiguration metadata |"
     ) in route
+    assert (
+        "Only explicitly requested AgentConfiguration metadata inspection uses "
+        "this server's name/icon tools"
+    ) in " ".join(text.split())
 
 
 def test_current_accent_lookup_uses_the_openers_read_without_an_extra_get() -> None:

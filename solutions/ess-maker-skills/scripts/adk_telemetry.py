@@ -263,6 +263,7 @@ _CLIENT_EVENTS_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 #                              (emitted per scripts/planner/cli.py call, so one
 #                              /planner conversation counts several times)
 ADK_CAPABILITIES = (
+    "agent_basics",
     "setup",
     "connect",
     "discover",
