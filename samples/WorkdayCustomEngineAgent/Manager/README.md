@@ -6,7 +6,7 @@ search_exclude: false
 
 Add read-only Workday topics to your existing Employee Self-Service (ESS) **Custom Engine Agent (CEA)** so managers can view information about their direct reports. These samples cover company codes, cost centers, job information, service anniversaries, and time in position. They retrieve Workday data; they do not update employee records.
 
-Each scenario folder contains a Copilot Studio `topic.yaml` and an ESS Template Configuration XML file. These samples extend an installed Workday integration; they do not install an agent, connections, or system topics. For the other sample areas, see the [Workday CA overview](../), [employee scenarios](../Employee/), and [REST-based extended scenarios](../Extended/).
+Each scenario folder contains a Copilot Studio `topic.yaml` and an ESS Template Configuration XML file. These samples extend an installed Workday integration; they do not install an agent, connections, or system topics. For the other sample areas, see the [Workday CEA overview](../), [employee scenarios](../Employee/), and [REST-based extended scenarios](../Extended/).
 
 ## Contents
 
