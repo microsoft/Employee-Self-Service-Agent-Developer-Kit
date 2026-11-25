@@ -39,10 +39,9 @@ Before you start, make sure you have:
 - The Dataverse-backed Workday reference-data components included in these
   solution baselines:
 
-| Surface           | Solution               | Minimum version |
-| ----------------- | ---------------------- | --------------- |
-| Classic           | `msdyn_EssHRWorkday`   | `1.1.0.5`       |
-| Declarative Agent | `msdyn_EssDAHRWorkday` | `1.1.0.2`       |
+| Surface | Solution | Minimum version |
+|---|---|---|
+| Custom Engine Agent (Classic) | `msdyn_EssHRWorkday` | `1.1.0.5` |
 
 ## What's in this folder
 
@@ -51,13 +50,13 @@ Before you start, make sure you have:
   and response mapping
 - `README.md`: setup and configuration guidance
 
-The corresponding Workday DA scenario contains the Declarative Agent variant
-with the same Workday data contract.
-
 ## Import the template
 
-Add `msdyn_HRWorkdayHCMEmployeeGetJobTaxonomy.xml` to your agent's ESS Template
-Configuration before importing and testing the topic.
+Follow the [CEA prerequisites](../#before-you-start) and
+[register the template configuration](../#register-the-template-configurations)
+with **Unique name** `msdyn_HRWorkdayHCMEmployeeGetJobTaxonomy` and the complete
+`msdyn_HRWorkdayHCMEmployeeGetJobTaxonomy.xml` in **Value**. Preserve the inner
+scenario name `GetJobTaxonomy`; it is not the record's lookup key.
 
 The template makes a requester-scoped Workday `Get_Workers` request and
 extracts:
@@ -66,6 +65,9 @@ extracts:
 - `Business_Title`
 - `Job_Profile_Name`
 - `Job_Family_ID`
+
+{: .important }
+> The supplied XML sets the Human_Resources endpoint to `v42.0` and the SOAP body to `v41.0`. Validate this existing combination with your Workday integration owner before rollout.
 
 ## Configure job-family display names
 
@@ -85,9 +87,10 @@ profile come directly from Workday.
 
 ## Import and test the topic
 
-1. In Copilot Studio, go to **Topics > + Add a topic > From file**.
-2. Select `topic.yaml` and import it.
-3. Open **Test your agent** and try these cases:
+1. Follow [Add a scenario](../#add-a-scenario): create a blank topic and paste
+   the complete `topic.yaml` into **More > Open code editor**.
+2. Resolve the CEA system-topic references, save, and enable the topic.
+3. Start a **new test conversation** and try these cases:
 
 - Ask "Tell me about my role." The response includes the employee's name, title,
   business title, job profile, and job family.
@@ -97,6 +100,8 @@ profile come directly from Workday.
   other job details remain available.
 - Test an employee without a job-family assignment. The job-family value is
   blank and the other job details remain available.
+- Ask for another person's job information and verify the response does not
+  disclose their records. Confirm Workday permissions as well as routing.
 
 ## Dependencies
 
@@ -111,6 +116,10 @@ This topic uses:
   ID-to-descriptor mappings
 
 The job-family reference-data lookup does not make a second Workday request.
+Both system-topic references use the
+`msdyn_copilotforemployeeselfservicehr.topic.` prefix. The response is returned
+through `jobFunctionData`; preserve that binding when customizing trigger
+wording or display labels.
 
 ## Troubleshooting
 
