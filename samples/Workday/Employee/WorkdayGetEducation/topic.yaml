@@ -14,18 +14,37 @@ beginDialog:
   actions:
     - kind: BeginDialog
       id: B7ae9T
-      displayName: Redirect to Get CommonExecution
+      displayName: Read employee education through the SOAP adapter
       input:
         binding:
-          parameters: ="{""params"":[{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """},{""key"":""{As_Of_Effective_Date}"",""value"":"""& Text(Today(), "yyyy-MM-dd") &"""}]}"
           scenarioName: msdyn_WorkdayHCMRuntimeEmployeeGetEducation
+          requestParametersJson: |-
+            =JSON({
+              Employee_ID: Global.ESS_UserContext_Employee_Id,
+              As_Of_Effective_Date: Text(Today(), "yyyy-MM-dd")
+            }, JSONFormat.Compact)
 
-      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemReadSOAPExecution
       output:
         binding:
-          errorResponse: Topic.errorResponse
+          connectorStatus: Topic.connectorStatus
+          errorMessage: Topic.errorResponse
+          failureReason: Topic.failureReason
           isSuccess: Topic.isSuccess
-          workdayResponse: Topic.workdayResponse
+          responseJson: Topic.workdayResponse
+
+    - kind: ConditionGroup
+      id: checkEducationSuccess
+      conditions:
+        - id: educationFailed
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendEducationError
+              activity: I encountered an error retrieving your education information. Please try again later or contact support.
+
+            - kind: EndDialog
+              id: endEducationOnError
 
     - kind: ParseValue
       id: yJ0sSR
@@ -38,80 +57,9 @@ beginDialog:
             type:
               kind: Table
               properties:
-                Education_Data:
+                Country_Reference:
                   type:
                     kind: Table
-                    properties:
-                      Country_Reference:
-                        type:
-                          kind: Record
-                          properties:
-                            "@Descriptor": String
-                            ID:
-                              type:
-                                kind: Table
-                                properties:
-                                  "@type": String
-                                  "#text": String
-
-                      Date_Degree_Received: String
-                      Degree_Completed_Reference:
-                        type:
-                          kind: Record
-                          properties:
-                            "@Descriptor": String
-                            ID:
-                              type:
-                                kind: Table
-                                properties:
-                                  "@type": String
-                                  "#text": String
-
-                      Degree_Reference:
-                        type:
-                          kind: Record
-                          properties:
-                            "@Descriptor": String
-                            ID:
-                              type:
-                                kind: Table
-                                properties:
-                                  "@type": String
-                                  "#text": String
-
-                      Education_ID: String
-                      Field_Of_Study_Reference:
-                        type:
-                          kind: Record
-                          properties:
-                            "@Descriptor": String
-                            ID:
-                              type:
-                                kind: Table
-                                properties:
-                                  "@type": String
-                                  "#text": String
-
-                      First_Year_Attended: String
-                      Is_Highest_Level_of_Education: String
-                      Last_Year_Attended: String
-                      Location: String
-                      School_Name: String
-                      School_Reference:
-                        type:
-                          kind: Record
-                          properties:
-                            "@Descriptor": String
-                            ID:
-                              type:
-                                kind: Table
-                                properties:
-                                  "@type": String
-                                  "#text": String
-
-                Education_Reference:
-                  type:
-                    kind: Record
                     properties:
                       "@Descriptor": String
                       ID:
@@ -120,6 +68,48 @@ beginDialog:
                           properties:
                             "@type": String
                             "#text": String
+
+                Degree_Reference:
+                  type:
+                    kind: Table
+                    properties:
+                      "@Descriptor": String
+                      ID:
+                        type:
+                          kind: Table
+                          properties:
+                            "@type": String
+                            "#text": String
+
+                Field_Of_Study_Reference:
+                  type:
+                    kind: Table
+                    properties:
+                      "@Descriptor": String
+                      ID:
+                        type:
+                          kind: Table
+                          properties:
+                            "@type": String
+                            "#text": String
+
+                First_Year_Attended:
+                  type:
+                    kind: Table
+                    properties:
+                      Value: String
+
+                Last_Year_Attended:
+                  type:
+                    kind: Table
+                    properties:
+                      Value: String
+
+                School_Name:
+                  type:
+                    kind: Table
+                    properties:
+                      Value: String
 
       value: =Topic.workdayResponse
 
@@ -158,39 +148,42 @@ beginDialog:
       displayName: Set final result data
       variable: Topic.FinalizedEducationData
       value: |
-        =ForAll(
-            Topic.parsedWorkdayResponse.EducationData,
-                ForAll(
-                    ThisRecord.Education_Data,
-                    With(
-                        {currentRecord: ThisRecord},
-                        {
-                            EmployeeName: Global.ESS_UserContext_Employee_Firstname & " " & Global.ESS_UserContext_Employee_Lastname,
-                            Country: LookUp(
-                                Global.CountryNameLookupTable,
-                                ID = LookUp(
-                                    currentRecord.Country_Reference.ID,
-                                    '@type' = First(Global.CountryNameLookupTable).Reference_ID_Type
-                                ).'#text'
-                            ).Referenced_Object_Descriptor,
-                            School: currentRecord.School_Name,
-                            Degree: LookUp(
-                                Global.DegreeTypeLookupTable,
-                                ID = LookUp(
-                                    currentRecord.Degree_Reference.ID,
-                                    '@type' = First(Global.DegreeTypeLookupTable).Reference_ID_Type
-                                ).'#text'
-                            ).Referenced_Object_Descriptor,
-                            FieldOfStudy: LookUp(
-                                Global.FieldOfStudyLookupTable,
-                                ID = LookUp(
-                                    currentRecord.Field_Of_Study_Reference.ID,
-                                    '@type' = First(Global.FieldOfStudyLookupTable).Reference_ID_Type
-                                ).'#text'
-                            ).Referenced_Object_Descriptor,
-                            FirstYearAttended: currentRecord.First_Year_Attended,
-                            LastYearAttended: currentRecord.Last_Year_Attended
-                        }
+        =Table(
+            ForAll(
+                Topic.parsedWorkdayResponse.EducationData As EducationRecord,
+                With(
+                    {
+                        countryReference: First(EducationRecord.Country_Reference),
+                        degreeReference: First(EducationRecord.Degree_Reference),
+                        fieldOfStudyReference: First(EducationRecord.Field_Of_Study_Reference)
+                    },
+                    {
+                        EmployeeName: Global.ESS_UserContext_Employee_Firstname & " " & Global.ESS_UserContext_Employee_Lastname,
+                        Country: LookUp(
+                            Global.CountryNameLookupTable,
+                            ID = LookUp(
+                                countryReference.ID,
+                                '@type' = First(Global.CountryNameLookupTable).Reference_ID_Type
+                            ).'#text'
+                        ).Referenced_Object_Descriptor,
+                        School: IfError(First(EducationRecord.School_Name).Value, ""),
+                        Degree: LookUp(
+                            Global.DegreeTypeLookupTable,
+                            ID = LookUp(
+                                degreeReference.ID,
+                                '@type' = First(Global.DegreeTypeLookupTable).Reference_ID_Type
+                            ).'#text'
+                        ).Referenced_Object_Descriptor,
+                        FieldOfStudy: LookUp(
+                            Global.FieldOfStudyLookupTable,
+                            ID = LookUp(
+                                fieldOfStudyReference.ID,
+                                '@type' = First(Global.FieldOfStudyLookupTable).Reference_ID_Type
+                            ).'#text'
+                        ).Referenced_Object_Descriptor,
+                        FirstYearAttended: IfError(First(EducationRecord.First_Year_Attended).Value, ""),
+                        LastYearAttended: IfError(First(EducationRecord.Last_Year_Attended).Value, "")
+                    }
                 )
             )
         )

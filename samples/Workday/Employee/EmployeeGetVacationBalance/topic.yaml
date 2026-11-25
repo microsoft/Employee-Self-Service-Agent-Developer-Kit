@@ -99,27 +99,51 @@ beginDialog:
       variable: Topic.AsOfEffectiveDate
       value: =If(IsBlank(Topic.AsOfEffectiveDate), DateTimeValue(Topic.asOfDate), Topic.AsOfEffectiveDate)
 
+    - kind: SetVariable
+      id: set_effective_date_text
+      variable: Topic.effectiveDateText
+      value: =Text(Topic.AsOfEffectiveDate, "yyyy-MM-dd")
+
     - kind: BeginDialog
       id: Y74Om43
-      displayName: Redirect to Workday Get Common Execution
+      displayName: Read vacation balances through the SOAP adapter
       input:
         binding:
-          parameters: ="{""params"":[{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """},{""key"":""{As_Of_Effective_Date}"",""value"":"""& Text(Topic.AsOfEffectiveDate, "yyyy-MM-dd") &"""}]}"
           scenarioName: msdyn_WorkdayHCMRuntimeEmployeeGetVacationBalance
+          requestParametersJson: |-
+            =JSON({
+              Employee_ID: Global.ESS_UserContext_Employee_Id,
+              As_Of_Effective_Date: Text(Topic.AsOfEffectiveDate, "yyyy-MM-dd")
+            }, JSONFormat.Compact)
 
-      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemReadSOAPExecution
       output:
         binding:
-          errorResponse: Topic.errorResponse
+          connectorStatus: Topic.connectorStatus
+          errorMessage: Topic.errorResponse
+          failureReason: Topic.failureReason
           isSuccess: Topic.isSuccess
-          workdayResponse: Topic.workdayResponse
+          responseJson: Topic.workdayResponse
+
+    - kind: ConditionGroup
+      id: checkVacationBalanceSuccess
+      conditions:
+        - id: vacationBalanceFailed
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendVacationBalanceError
+              activity: I encountered an error retrieving your vacation balance. Please try again later or contact support.
+
+            - kind: EndDialog
+              id: endVacationBalanceOnError
 
     - kind: AnswerQuestionWithAI
       id: igank32
       autoSend: false
       variable: Topic.VacationBalance
       userInput: =Topic.workdayResponse
-      additionalInstructions: Do not show citation. Display each vacation balances in a separate line and highlight vacation name. Only reply back with the Vacation Balance. Format the response in in friendly way and make sure to tie it back directly to the orginal question of the user. ({System.Activity.Text}). Display ({Topic.asOfDate}) with the message as of.  Never include the "Plan ID".
+      additionalInstructions: Do not show citations. Display each vacation balance on a separate line and highlight the vacation name. Reply only with the vacation balance in a friendly format tied directly to the user's original question ({System.Activity.Text}). Display the balance as of ({Topic.effectiveDateText}). Never include the Plan ID.
 
     - kind: SendActivity
       id: sendActivity_56apKp

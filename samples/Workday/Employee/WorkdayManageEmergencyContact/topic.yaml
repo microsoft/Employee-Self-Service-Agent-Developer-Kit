@@ -69,128 +69,130 @@ beginDialog:
       id: check_state_province_choices
       conditions:
         - id: state_choices_uninitialized
-          condition: =IsBlank(Global.StateProvinceChoices)
+          condition: =IsBlank(Global.StateProvinceChoices) || IsEmpty(Global.StateProvinceChoices) || Global.StateProvinceChoicesCacheVersion <> "workday-country-region-v1"
           displayName: If state/province choices are uninitialized
           actions:
+            - kind: BeginDialog
+              id: fetch_state_province_choices
+              displayName: Read Workday country-region reference data through the SOAP adapter
+              input:
+                binding:
+                  scenarioName: msdyn_WorkdayHCMEmployeeGetReferenceData
+                  requestParametersJson: |-
+                    =JSON({
+                      Reference_ID_Type: "Country_Region_ID",
+                      As_Of_Effective_Date: Text(Now(), "yyyy-MM-dd"),
+                      As_Of_Entry_DateTime: Text(Now(), "yyyy-MM-ddTHH:mm:ss")
+                    }, JSONFormat.Compact)
+
+              dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemReadSOAPExecution
+              output:
+                binding:
+                  connectorStatus: Topic.stateProvinceConnectorStatus
+                  errorMessage: Topic.stateProvinceErrorResponse
+                  failureReason: Topic.stateProvinceFailureReason
+                  isSuccess: Topic.stateProvinceIsSuccess
+                  responseJson: Topic.stateProvinceResponse
+
+            - kind: ConditionGroup
+              id: check_state_province_fetch_success
+              conditions:
+                - id: state_province_fetch_failed
+                  condition: =Topic.stateProvinceIsSuccess = false
+                  actions:
+                    - kind: EndDialog
+                      id: end_on_state_province_fetch_failure
+
+            - kind: ParseValue
+              id: parse_state_province_reference_data
+              displayName: Parse Workday country-region reference data
+              variable: Topic.parsedStateProvinceReferenceData
+              valueType:
+                kind: Record
+                properties:
+                  ReferenceData:
+                    type:
+                      kind: Table
+                      properties:
+                        Value: String
+
+                  ReferenceType:
+                    type:
+                      kind: Table
+                      properties:
+                        Value: String
+
+                  ReferenceDescriptor:
+                    type:
+                      kind: Table
+                      properties:
+                        Value: String
+
+              value: =Topic.stateProvinceResponse
+              errorPolicy: DefaultBlank
+
             - kind: SetVariable
-              id: init_state_province_choices
+              id: build_state_province_choices
+              displayName: Build state/province choices from Workday reference data
               variable: Global.StateProvinceChoices
-              value: |
-                =[
-                  { title: "Alabama", value: "USA-AL", country: "USA" },
-                  { title: "Alaska", value: "USA-AK", country: "USA" },
-                  { title: "Arizona", value: "USA-AZ", country: "USA" },
-                  { title: "Arkansas", value: "USA-AR", country: "USA" },
-                  { title: "California", value: "USA-CA", country: "USA" },
-                  { title: "Colorado", value: "USA-CO", country: "USA" },
-                  { title: "Connecticut", value: "USA-CT", country: "USA" },
-                  { title: "Delaware", value: "USA-DE", country: "USA" },
-                  { title: "Florida", value: "USA-FL", country: "USA" },
-                  { title: "Georgia", value: "USA-GA", country: "USA" },
-                  { title: "Hawaii", value: "USA-HI", country: "USA" },
-                  { title: "Idaho", value: "USA-ID", country: "USA" },
-                  { title: "Illinois", value: "USA-IL", country: "USA" },
-                  { title: "Indiana", value: "USA-IN", country: "USA" },
-                  { title: "Iowa", value: "USA-IA", country: "USA" },
-                  { title: "Kansas", value: "USA-KS", country: "USA" },
-                  { title: "Kentucky", value: "USA-KY", country: "USA" },
-                  { title: "Louisiana", value: "USA-LA", country: "USA" },
-                  { title: "Maine", value: "USA-ME", country: "USA" },
-                  { title: "Maryland", value: "USA-MD", country: "USA" },
-                  { title: "Massachusetts", value: "USA-MA", country: "USA" },
-                  { title: "Michigan", value: "USA-MI", country: "USA" },
-                  { title: "Minnesota", value: "USA-MN", country: "USA" },
-                  { title: "Mississippi", value: "USA-MS", country: "USA" },
-                  { title: "Missouri", value: "USA-MO", country: "USA" },
-                  { title: "Montana", value: "USA-MT", country: "USA" },
-                  { title: "Nebraska", value: "USA-NE", country: "USA" },
-                  { title: "Nevada", value: "USA-NV", country: "USA" },
-                  { title: "New Hampshire", value: "USA-NH", country: "USA" },
-                  { title: "New Jersey", value: "USA-NJ", country: "USA" },
-                  { title: "New Mexico", value: "USA-NM", country: "USA" },
-                  { title: "New York", value: "USA-NY", country: "USA" },
-                  { title: "North Carolina", value: "USA-NC", country: "USA" },
-                  { title: "North Dakota", value: "USA-ND", country: "USA" },
-                  { title: "Ohio", value: "USA-OH", country: "USA" },
-                  { title: "Oklahoma", value: "USA-OK", country: "USA" },
-                  { title: "Oregon", value: "USA-OR", country: "USA" },
-                  { title: "Pennsylvania", value: "USA-PA", country: "USA" },
-                  { title: "Rhode Island", value: "USA-RI", country: "USA" },
-                  { title: "South Carolina", value: "USA-SC", country: "USA" },
-                  { title: "South Dakota", value: "USA-SD", country: "USA" },
-                  { title: "Tennessee", value: "USA-TN", country: "USA" },
-                  { title: "Texas", value: "USA-TX", country: "USA" },
-                  { title: "Utah", value: "USA-UT", country: "USA" },
-                  { title: "Vermont", value: "USA-VT", country: "USA" },
-                  { title: "Virginia", value: "USA-VA", country: "USA" },
-                  { title: "Washington", value: "USA-WA", country: "USA" },
-                  { title: "West Virginia", value: "USA-WV", country: "USA" },
-                  { title: "Wisconsin", value: "USA-WI", country: "USA" },
-                  { title: "Wyoming", value: "USA-WY", country: "USA" },
-                  { title: "District of Columbia", value: "USA-DC", country: "USA" },
-                  { title: "Alberta", value: "CA-AB", country: "CAN" },
-                  { title: "British Columbia", value: "CA-BC", country: "CAN" },
-                  { title: "Manitoba", value: "CA-MB", country: "CAN" },
-                  { title: "New Brunswick", value: "CA-NB", country: "CAN" },
-                  { title: "Newfoundland and Labrador", value: "CA-NL", country: "CAN" },
-                  { title: "Northwest Territories", value: "CA-NT", country: "CAN" },
-                  { title: "Nova Scotia", value: "CA-NS", country: "CAN" },
-                  { title: "Nunavut", value: "CA-NU", country: "CAN" },
-                  { title: "Ontario", value: "CA-ON", country: "CAN" },
-                  { title: "Prince Edward Island", value: "CA-PE", country: "CAN" },
-                  { title: "Quebec", value: "CA-QC", country: "CAN" },
-                  { title: "Saskatchewan", value: "CA-SK", country: "CAN" },
-                  { title: "Yukon", value: "CA-YT", country: "CAN" },
-                  { title: "England", value: "GBR-ENG", country: "GBR" },
-                  { title: "Scotland", value: "GBR-SCT", country: "GBR" },
-                  { title: "Wales", value: "GBR-WLS", country: "GBR" },
-                  { title: "Northern Ireland", value: "GBR-NIR", country: "GBR" },
-                  { title: "Andaman and Nicobar Islands", value: "IN-AN", country: "IND" },
-                  { title: "Andhra Pradesh", value: "IN-AP", country: "IND" },
-                  { title: "Arunachal Pradesh", value: "IN-AR", country: "IND" },
-                  { title: "Assam", value: "IN-AS", country: "IND" },
-                  { title: "Bihar", value: "IN-BR", country: "IND" },
-                  { title: "Chandigarh", value: "IN-CH", country: "IND" },
-                  { title: "Chhattisgarh", value: "IN-CG", country: "IND" },
-                  { title: "Dadra and Nagar Haveli", value: "IN-DN", country: "IND" },
-                  { title: "Daman and Diu", value: "IN-DD", country: "IND" },
-                  { title: "Delhi", value: "IN-DL", country: "IND" },
-                  { title: "Goa", value: "IN-GA", country: "IND" },
-                  { title: "Gujarat", value: "IN-GJ", country: "IND" },
-                  { title: "Haryana", value: "IN-HR", country: "IND" },
-                  { title: "Himachal Pradesh", value: "IN-HP", country: "IND" },
-                  { title: "Jammu and Kashmir", value: "IN-JK", country: "IND" },
-                  { title: "Jharkhand", value: "IN-JH", country: "IND" },
-                  { title: "Karnataka", value: "IN-KA", country: "IND" },
-                  { title: "Kerala", value: "IN-KL", country: "IND" },
-                  { title: "Ladakh", value: "IN-LA", country: "IND" },
-                  { title: "Lakshadweep", value: "IN-LD", country: "IND" },
-                  { title: "Madhya Pradesh", value: "IN-MP", country: "IND" },
-                  { title: "Maharashtra", value: "IN-MH", country: "IND" },
-                  { title: "Manipur", value: "IN-MN", country: "IND" },
-                  { title: "Meghalaya", value: "IN-ML", country: "IND" },
-                  { title: "Mizoram", value: "IN-MZ", country: "IND" },
-                  { title: "Nagaland", value: "IN-NL", country: "IND" },
-                  { title: "Odisha", value: "IN-OD", country: "IND" },
-                  { title: "Puducherry", value: "IN-PY", country: "IND" },
-                  { title: "Punjab", value: "IN-PB", country: "IND" },
-                  { title: "Rajasthan", value: "IN-RJ", country: "IND" },
-                  { title: "Sikkim", value: "IN-SK", country: "IND" },
-                  { title: "Tamil Nadu", value: "IN-TN", country: "IND" },
-                  { title: "Telangana", value: "IN-TS", country: "IND" },
-                  { title: "Tripura", value: "IN-TR", country: "IND" },
-                  { title: "Uttar Pradesh", value: "IN-UP", country: "IND" },
-                  { title: "Uttarakhand", value: "IN-UK", country: "IND" },
-                  { title: "West Bengal", value: "IN-WB", country: "IND" },
-                  { title: "Australian Capital Territory", value: "AU-ACT", country: "AUS" },
-                  { title: "New South Wales", value: "AU-NSW", country: "AUS" },
-                  { title: "Northern Territory", value: "AU-NT", country: "AUS" },
-                  { title: "Queensland", value: "AU-QLD", country: "AUS" },
-                  { title: "South Australia", value: "AU-SA", country: "AUS" },
-                  { title: "Tasmania", value: "AU-TAS", country: "AUS" },
-                  { title: "Victoria", value: "AU-VIC", country: "AUS" },
-                  { title: "Western Australia", value: "AU-WA", country: "AUS" }
-                ]
+              value: |-
+                =With(
+                  {
+                    referenceIds: Topic.parsedStateProvinceReferenceData.ReferenceData,
+                    referenceTypes: Topic.parsedStateProvinceReferenceData.ReferenceType,
+                    referenceDescriptors: Topic.parsedStateProvinceReferenceData.ReferenceDescriptor
+                  },
+                  SortByColumns(
+                    Filter(
+                      ForAll(
+                        Sequence(CountRows(referenceIds)) As ReferenceIndex,
+                        With(
+                          {
+                            referenceId: IfError(Index(referenceIds, ReferenceIndex.Value).Value, ""),
+                            referenceType: IfError(Index(referenceTypes, ReferenceIndex.Value).Value, ""),
+                            referenceDescriptor: IfError(
+                              Index(
+                                referenceDescriptors,
+                                If(
+                                  CountRows(referenceIds) = CountRows(referenceDescriptors) * 2,
+                                  RoundUp(ReferenceIndex.Value / 2, 0),
+                                  ReferenceIndex.Value
+                                )
+                              ).Value,
+                              ""
+                            )
+                          },
+                          {
+                            title: If(IsBlank(referenceDescriptor), referenceId, referenceDescriptor),
+                            value: If(referenceType = "Country_Region_ID", referenceId, ""),
+                            country: If(referenceType = "Country_Region_ID", First(Split(referenceId, "-")).Value, "")
+                          }
+                        )
+                      ),
+                      !IsBlank(value) && !IsBlank(country)
+                    ),
+                    "title",
+                    SortOrder.Ascending
+                  )
+                )
+
+            - kind: ConditionGroup
+              id: validate_state_province_choices
+              conditions:
+                - id: state_province_choices_empty
+                  condition: =IsEmpty(Global.StateProvinceChoices)
+                  actions:
+                    - kind: SendActivity
+                      id: state_province_choices_empty_message
+                      activity: Workday did not return any state or province options. Please try again or contact support.
+
+                    - kind: EndDialog
+                      id: end_on_empty_state_province_choices
+
+            - kind: SetVariable
+              id: set_state_province_cache_version
+              variable: Global.StateProvinceChoicesCacheVersion
+              value: workday-country-region-v1
 
     # Detect if user wants to view contacts only (get/view/show/list)
     - kind: SetVariable
@@ -225,18 +227,33 @@ beginDialog:
 
     - kind: BeginDialog
       id: fetch_emergency_contacts
-      displayName: Fetch existing emergency contacts
+      displayName: Read existing emergency contacts through the SOAP adapter
       input:
         binding:
-          parameters: ="{""params"":[{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """},{""key"":""{As_Of_Effective_Date}"",""value"":"""& Text(Today(), "yyyy-MM-dd") &"""}]}"
           scenarioName: msdyn_WorkdayHCMRuntimeEmployeeGetEmergencyContactInfo
+          requestParametersJson: |-
+            =JSON({
+              Employee_ID: Global.ESS_UserContext_Employee_Id,
+              As_Of_Effective_Date: Text(Today(), "yyyy-MM-dd")
+            }, JSONFormat.Compact)
 
-      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemReadSOAPExecution
       output:
         binding:
-          errorResponse: Topic.fetchErrorResponse
+          connectorStatus: Topic.fetchConnectorStatus
+          errorMessage: Topic.fetchErrorResponse
+          failureReason: Topic.fetchFailureReason
           isSuccess: Topic.fetchIsSuccess
-          workdayResponse: Topic.existingContactsResponse
+          responseJson: Topic.existingContactsResponse
+
+    - kind: ConditionGroup
+      id: check_fetch_success
+      conditions:
+        - id: fetch_failed
+          condition: =Topic.fetchIsSuccess = false
+          actions:
+            - kind: EndDialog
+              id: end_on_fetch_failure
 
     - kind: ParseValue
       id: parse_contacts
@@ -1131,18 +1148,27 @@ beginDialog:
                       actions:
                         - kind: BeginDialog
                           id: execute_delete
-                          displayName: Execute Workday Delete
+                          displayName: Delete emergency contact through the SOAP adapter
                           input:
                             binding:
-                              parameters: ="{""params"":[{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """},{""key"":""{Emergency_Contact_WID}"",""value"":""" & Topic.selectedContactWID & """},{""key"":""{Priority}"",""value"":""" & Topic.selectedContactData.Priority & """},{""key"":""{Relationship_Type}"",""value"":""" & Topic.selectedContactData.RelationshipTypeID & """},{""key"":""{Comment}"",""value"":""Removing emergency contact via Copilot""}]}"
                               scenarioName: msdyn_WorkdayHCMRuntimeEmployeeDeleteEmergencyContact
+                              requestParametersJson: |-
+                                =JSON({
+                                  Employee_ID: Global.ESS_UserContext_Employee_Id,
+                                  Emergency_Contact_WID: Topic.selectedContactWID,
+                                  Priority: Topic.selectedContactData.Priority,
+                                  Relationship_Type: Topic.selectedContactData.RelationshipTypeID,
+                                  Comment: "Removing emergency contact via Copilot"
+                                }, JSONFormat.Compact)
 
-                          dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+                          dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemWriteSOAPExecution
                           output:
                             binding:
-                              errorResponse: Topic.errorResponse
+                              connectorStatus: Topic.connectorStatus
+                              errorMessage: Topic.errorResponse
+                              failureReason: Topic.failureReason
                               isSuccess: Topic.isSuccess
-                              workdayResponse: Topic.workdayResponse
+                              responseJson: Topic.workdayResponse
 
                         - kind: ConditionGroup
                           id: report_delete_result
@@ -1154,7 +1180,7 @@ beginDialog:
                                 - kind: SetVariable
                                   id: set_delete_error_raw
                                   variable: Topic.deleteErrorRaw
-                                  value: =Topic.errorResponse
+                                  value: =Coalesce(Topic.errorResponse, Topic.failureReason, If(Topic.connectorStatus <> 0, "HTTP status " & Text(Topic.connectorStatus), ""), "The SOAP adapter returned an unsuccessful result without error details.")
 
                                 - kind: SetVariable
                                   id: parse_delete_error
@@ -1164,7 +1190,17 @@ beginDialog:
                                 - kind: SetVariable
                                   id: set_delete_error_display
                                   variable: Topic.deleteErrorDisplay
-                                  value: =If(IsBlank(Topic.deleteErrorParsed), "An unknown error occurred.", Topic.deleteErrorParsed)
+                                  value: |-
+                                    =If(
+                                      IsBlank(Topic.deleteErrorParsed),
+                                      JSON({
+                                        IsSuccess: Text(Topic.isSuccess),
+                                        FailureReason: If(IsBlank(Topic.failureReason), "not returned", Topic.failureReason),
+                                        ConnectorStatus: Text(Topic.connectorStatus),
+                                        ErrorMessage: If(IsBlank(Topic.errorResponse), "not returned", Topic.errorResponse)
+                                      }, JSONFormat.Compact),
+                                      Topic.deleteErrorParsed
+                                    )
 
                                 - kind: SendActivity
                                   id: delete_failure_msg
@@ -1240,34 +1276,77 @@ beginDialog:
                   actions:
                     - kind: BeginDialog
                       id: execute_update
-                      displayName: Execute Workday Update
+                      displayName: Update emergency contact through the SOAP adapter
                       input:
                         binding:
-                          parameters: ="{""params"":[{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """},{""key"":""{Emergency_Contact_WID}"",""value"":""" & Topic.selectedContactWID & """},{""key"":""{Effective_Date}"",""value"":"""& Text(Today(), "yyyy-MM-dd") &"""},{""key"":""{First_Name}"",""value"":""" & Topic.firstName & """},{""key"":""{Last_Name}"",""value"":""" & Topic.lastName & """},{""key"":""{Primary}"",""value"":""" & Topic.isPrimaryContact & """},{""key"":""{Priority}"",""value"":""" & If(Topic.isPrimaryContact = "true", "1", Topic.priority) & """},{""key"":""{Relationship_Type}"",""value"":""" & Topic.relationshipType & """},{""key"":""{Phone_Number}"",""value"":""" & Topic.phoneNumber & """},{""key"":""{Phone_Device_Type}"",""value"":""" & Topic.phoneDeviceType & """},{""key"":""{Phone_Country_Code}"",""value"":""" & Last(Split(Topic.phoneCountryCode, "_")).Value & """},{""key"":""{Address_Line_1}"",""value"":""" & Topic.addressLine1 & """},{""key"":""{City}"",""value"":""" & Topic.city & """},{""key"":""{State_Province}"",""value"":""" & Topic.stateProvince & """},{""key"":""{Postal_Code}"",""value"":""" & Topic.postalCode & """},{""key"":""{Country_Code}"",""value"":""" & Topic.countryCode & """},{""key"":""{Address_Country_Code}"",""value"":""" & Topic.countryCode & """},{""key"":""{Comment}"",""value"":""Updating emergency contact""}]}"
                           scenarioName: msdyn_WorkdayHCMRuntimeEmployeeUpdateEmergencyContact
+                          requestParametersJson: |-
+                            =JSON({
+                              Employee_ID: Global.ESS_UserContext_Employee_Id,
+                              Emergency_Contact_WID: Topic.selectedContactWID,
+                              Effective_Date: Text(Today(), "yyyy-MM-dd"),
+                              First_Name: Topic.firstName,
+                              Last_Name: Topic.lastName,
+                              Primary: Topic.isPrimaryContact,
+                              Priority: If(Topic.isPrimaryContact = "true", "1", Topic.priority),
+                              Relationship_Type: Topic.relationshipType,
+                              Phone_Number: Topic.phoneNumber,
+                              Phone_Device_Type: Topic.phoneDeviceType,
+                              Phone_Country_Code: Last(Split(Topic.phoneCountryCode, "_")).Value,
+                              Address_Line_1: Topic.addressLine1,
+                              City: Topic.city,
+                              State_Province: Topic.stateProvince,
+                              Postal_Code: Topic.postalCode,
+                              Country_Code: Topic.countryCode,
+                              Address_Country_Code: Topic.countryCode,
+                              Comment: "Updating emergency contact"
+                            }, JSONFormat.Compact)
 
-                      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+                      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemWriteSOAPExecution
                       output:
                         binding:
-                          errorResponse: Topic.errorResponse
+                          connectorStatus: Topic.connectorStatus
+                          errorMessage: Topic.errorResponse
+                          failureReason: Topic.failureReason
                           isSuccess: Topic.isSuccess
-                          workdayResponse: Topic.workdayResponse
+                          responseJson: Topic.workdayResponse
 
               elseActions:
                 - kind: BeginDialog
                   id: execute_add
-                  displayName: Execute Workday Add
+                  displayName: Add emergency contact through the SOAP adapter
                   input:
                     binding:
-                      parameters: ="{""params"":[{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """},{""key"":""{Effective_Date}"",""value"":"""& Text(Today(), "yyyy-MM-dd") &"""},{""key"":""{First_Name}"",""value"":""" & Topic.firstName & """},{""key"":""{Last_Name}"",""value"":""" & Topic.lastName & """},{""key"":""{Primary}"",""value"":""" & Topic.isPrimaryContact & """},{""key"":""{Priority}"",""value"":""" & If(Topic.isPrimaryContact = "true", "1", Topic.priority) & """},{""key"":""{Relationship_Type}"",""value"":""" & Topic.relationshipType & """},{""key"":""{Phone_Number}"",""value"":""" & Topic.phoneNumber & """},{""key"":""{Phone_Device_Type}"",""value"":""" & Topic.phoneDeviceType & """},{""key"":""{Phone_Country_Code}"",""value"":""" & Last(Split(Topic.phoneCountryCode, "_")).Value & """},{""key"":""{Address_Line_1}"",""value"":""" & Topic.addressLine1 & """},{""key"":""{City}"",""value"":""" & Topic.city & """},{""key"":""{State_Province}"",""value"":""" & Topic.stateProvince & """},{""key"":""{Postal_Code}"",""value"":""" & Topic.postalCode & """},{""key"":""{Country_Code}"",""value"":""" & Topic.countryCode & """},{""key"":""{Address_Country_Code}"",""value"":""" & Topic.countryCode & """},{""key"":""{Comment}"",""value"":""Adding emergency contact""}]}"
                       scenarioName: msdyn_WorkdayHCMRuntimeEmployeeAddEmergencyContact
+                      requestParametersJson: |-
+                        =JSON({
+                          Employee_ID: Global.ESS_UserContext_Employee_Id,
+                          Effective_Date: Text(Today(), "yyyy-MM-dd"),
+                          First_Name: Topic.firstName,
+                          Last_Name: Topic.lastName,
+                          Primary: Topic.isPrimaryContact,
+                          Priority: If(Topic.isPrimaryContact = "true", "1", Topic.priority),
+                          Relationship_Type: Topic.relationshipType,
+                          Phone_Number: Topic.phoneNumber,
+                          Phone_Device_Type: Topic.phoneDeviceType,
+                          Phone_Country_Code: Last(Split(Topic.phoneCountryCode, "_")).Value,
+                          Address_Line_1: Topic.addressLine1,
+                          City: Topic.city,
+                          State_Province: Topic.stateProvince,
+                          Postal_Code: Topic.postalCode,
+                          Country_Code: Topic.countryCode,
+                          Address_Country_Code: Topic.countryCode,
+                          Comment: "Adding emergency contact"
+                        }, JSONFormat.Compact)
 
-                  dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+                  dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemWriteSOAPExecution
                   output:
                     binding:
-                      errorResponse: Topic.errorResponse
+                      connectorStatus: Topic.connectorStatus
+                      errorMessage: Topic.errorResponse
+                      failureReason: Topic.failureReason
                       isSuccess: Topic.isSuccess
-                      workdayResponse: Topic.workdayResponse
+                      responseJson: Topic.workdayResponse
 
             - kind: ConditionGroup
               id: report_result
@@ -1279,7 +1358,7 @@ beginDialog:
                     - kind: SetVariable
                       id: set_submit_error_raw
                       variable: Topic.submitErrorRaw
-                      value: =Topic.errorResponse
+                      value: =Coalesce(Topic.errorResponse, Topic.failureReason, If(Topic.connectorStatus <> 0, "HTTP status " & Text(Topic.connectorStatus), ""), "The SOAP adapter returned an unsuccessful result without error details.")
 
                     - kind: SetVariable
                       id: parse_submit_error
@@ -1289,7 +1368,17 @@ beginDialog:
                     - kind: SetVariable
                       id: set_submit_error_display
                       variable: Topic.submitErrorDisplay
-                      value: =If(IsBlank(Topic.submitErrorParsed), "An unknown error occurred.", Topic.submitErrorParsed)
+                      value: |-
+                        =If(
+                          IsBlank(Topic.submitErrorParsed),
+                          JSON({
+                            IsSuccess: Text(Topic.isSuccess),
+                            FailureReason: If(IsBlank(Topic.failureReason), "not returned", Topic.failureReason),
+                            ConnectorStatus: Text(Topic.connectorStatus),
+                            ErrorMessage: If(IsBlank(Topic.errorResponse), "not returned", Topic.errorResponse)
+                          }, JSONFormat.Compact),
+                          Topic.submitErrorParsed
+                        )
 
                     - kind: SetVariable
                       id: set_failure_msg_text

@@ -52,18 +52,37 @@ beginDialog:
   actions:
     - kind: BeginDialog
       id: dZAI4Y
-      displayName: Redirect to Workday Get Common Execution
+      displayName: Read employee profile through the SOAP adapter
       input:
         binding:
-          parameters: ="{""params"":[{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """},{""key"":""{As_Of_Effective_Date}"",""value"":"""& Text(Today(), "yyyy-MM-dd") &"""}]}"
           scenarioName: msdyn_WorkdayHCMRuntimeEmployeeGetUserProfile
+          requestParametersJson: |-
+            =JSON({
+              Employee_ID: Global.ESS_UserContext_Employee_Id,
+              As_Of_Effective_Date: Text(Today(), "yyyy-MM-dd")
+            }, JSONFormat.Compact)
 
-      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemReadSOAPExecution
       output:
         binding:
-          errorResponse: Topic.errorResponse
+          connectorStatus: Topic.connectorStatus
+          errorMessage: Topic.errorResponse
+          failureReason: Topic.failureReason
           isSuccess: Topic.isSuccess
-          workdayResponse: Topic.workdayResponse
+          responseJson: Topic.workdayResponse
+
+    - kind: ConditionGroup
+      id: checkUserProfileSuccess
+      conditions:
+        - id: userProfileFailed
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendUserProfileError
+              activity: I encountered an error retrieving your employee profile. Please try again later or contact support.
+
+            - kind: EndDialog
+              id: endUserProfileOnError
 
     - kind: ParseValue
       id: fP9fKn
@@ -117,31 +136,88 @@ beginDialog:
               kind: Table
               properties:
                 Value: String
-          WorkEmail:
+          EmailInformation:
             type:
               kind: Table
               properties:
-                Value: String
-          HomeAddress:
+                Email_Address:
+                  type:
+                    kind: Table
+                    properties:
+                      Value: String
+
+                Usage_Data:
+                  type:
+                    kind: Table
+                    properties:
+                      Type_Data:
+                        type:
+                          kind: Table
+                          properties:
+                            "@Primary": String
+                            Type_Reference:
+                              type:
+                                kind: Table
+                                properties:
+                                  ID:
+                                    type:
+                                      kind: Table
+                                      properties:
+                                        "@type": String
+                                        "#text": String
+
+          AddressInformation:
             type:
               kind: Table
               properties:
-                Value: String
-          HomeEmail:
+                "@Formatted_Address": String
+
+                Usage_Data:
+                  type:
+                    kind: Table
+                    properties:
+                      Type_Data:
+                        type:
+                          kind: Table
+                          properties:
+                            "@Primary": String
+                            Type_Reference:
+                              type:
+                                kind: Table
+                                properties:
+                                  ID:
+                                    type:
+                                      kind: Table
+                                      properties:
+                                        "@type": String
+                                        "#text": String
+
+          PhoneInformation:
             type:
               kind: Table
               properties:
-                Value: String
-          HomePhone:
-            type:
-              kind: Table
-              properties:
-                Value: String
-          WorkPhone:
-            type:
-              kind: Table
-              properties:
-                Value: String
+                "@Tenant_Formatted_Phone": String
+
+                Usage_Data:
+                  type:
+                    kind: Table
+                    properties:
+                      Type_Data:
+                        type:
+                          kind: Table
+                          properties:
+                            "@Primary": String
+                            Type_Reference:
+                              type:
+                                kind: Table
+                                properties:
+                                  ID:
+                                    type:
+                                      kind: Table
+                                      properties:
+                                        "@type": String
+                                        "#text": String
+
           Status:
             type:
               kind: Table
@@ -154,6 +230,121 @@ beginDialog:
                 Value: String
 
       value: =Topic.workdayResponse
+
+    - kind: SetVariable
+      id: setWorkEmail
+      variable: Topic.workEmail
+      value: |-
+        =With(
+          {
+            emailRecord: LookUp(
+              Topic.parsedWorkdayResponse.EmailInformation As EmailRecord,
+              With(
+                {typeData: First(First(EmailRecord.Usage_Data).Type_Data)},
+                IfError(
+                  LookUp(
+                    First(typeData.Type_Reference).ID,
+                    '@type' = "Communication_Usage_Type_ID"
+                  ).'#text',
+                  ""
+                ) = "WORK"
+              )
+            )
+          },
+          IfError(First(emailRecord.Email_Address).Value, "")
+        )
+
+    - kind: SetVariable
+      id: setHomeEmail
+      variable: Topic.homeEmail
+      value: |-
+        =With(
+          {
+            emailRecord: LookUp(
+              Topic.parsedWorkdayResponse.EmailInformation As EmailRecord,
+              With(
+                {typeData: First(First(EmailRecord.Usage_Data).Type_Data)},
+                IfError(
+                  LookUp(
+                    First(typeData.Type_Reference).ID,
+                    '@type' = "Communication_Usage_Type_ID"
+                  ).'#text',
+                  ""
+                ) = "HOME"
+              )
+            )
+          },
+          IfError(First(emailRecord.Email_Address).Value, "")
+        )
+
+    - kind: SetVariable
+      id: setHomeAddress
+      variable: Topic.homeAddress
+      value: |-
+        =With(
+          {
+            addressRecord: LookUp(
+              Topic.parsedWorkdayResponse.AddressInformation As AddressRecord,
+              With(
+                {typeData: First(First(AddressRecord.Usage_Data).Type_Data)},
+                IfError(
+                  LookUp(
+                    First(typeData.Type_Reference).ID,
+                    '@type' = "Communication_Usage_Type_ID"
+                  ).'#text',
+                  ""
+                ) = "HOME"
+              )
+            )
+          },
+          IfError(Substitute(Substitute(addressRecord.'@Formatted_Address', Char(10), ", "), Char(13), ""), "")
+        )
+
+    - kind: SetVariable
+      id: setHomePhone
+      variable: Topic.homePhone
+      value: |-
+        =With(
+          {
+            phoneRecord: LookUp(
+              Topic.parsedWorkdayResponse.PhoneInformation As PhoneRecord,
+              With(
+                {typeData: First(First(PhoneRecord.Usage_Data).Type_Data)},
+                IfError(
+                  LookUp(
+                    First(typeData.Type_Reference).ID,
+                    '@type' = "Communication_Usage_Type_ID"
+                  ).'#text',
+                  ""
+                ) = "HOME"
+              )
+            )
+          },
+          IfError(phoneRecord.'@Tenant_Formatted_Phone', "")
+        )
+
+    - kind: SetVariable
+      id: setWorkPhone
+      variable: Topic.workPhone
+      value: |-
+        =With(
+          {
+            phoneRecord: LookUp(
+              Topic.parsedWorkdayResponse.PhoneInformation As PhoneRecord,
+              With(
+                {typeData: First(First(PhoneRecord.Usage_Data).Type_Data)},
+                IfError(
+                  LookUp(
+                    First(typeData.Type_Reference).ID,
+                    '@type' = "Communication_Usage_Type_ID"
+                  ).'#text',
+                  ""
+                ) = "WORK"
+              )
+            )
+          },
+          IfError(phoneRecord.'@Tenant_Formatted_Phone', "")
+        )
 
     - kind: SetVariable
       id: setVariable_ServiceDate
@@ -194,11 +385,11 @@ beginDialog:
             Manager: First(Topic.parsedWorkdayResponse.Manager).Value,
             Location: First(Topic.parsedWorkdayResponse.Location).Value,
             HireDate: First(Topic.parsedWorkdayResponse.HireDate).Value,
-            WorkEmail: First(Topic.parsedWorkdayResponse.WorkEmail).Value,
-            HomeAddress: Substitute(Substitute(Concat(Topic.parsedWorkdayResponse.HomeAddress, Value, ", "), Char(10), ", "), Char(13), ""),
-            HomeEmail: First(Topic.parsedWorkdayResponse.HomeEmail).Value,
-            HomePhone: First(Topic.parsedWorkdayResponse.HomePhone).Value,
-            WorkPhone: First(Topic.parsedWorkdayResponse.WorkPhone).Value,
+            WorkEmail: Topic.workEmail,
+            HomeAddress: Topic.homeAddress,
+            HomeEmail: Topic.homeEmail,
+            HomePhone: Topic.homePhone,
+            WorkPhone: Topic.workPhone,
             Status: If(First(Topic.parsedWorkdayResponse.Status).Value = "1", "Active", "Inactive"),
             ContinuousServiceDate: First(Topic.parsedWorkdayResponse.ContinuousServiceDate).Value,
             LengthOfService: 

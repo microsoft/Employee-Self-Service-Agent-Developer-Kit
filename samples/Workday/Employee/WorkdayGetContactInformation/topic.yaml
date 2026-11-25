@@ -40,18 +40,37 @@ beginDialog:
   actions:
     - kind: BeginDialog
       id: Z6efSa
-      displayName: Fetch Work Contact Information from Workday
+      displayName: Read employee contact information through the SOAP adapter
       input:
         binding:
-          parameters: ="{""params"":[{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """},{""key"":""{As_Of_Effective_Date}"",""value"":"""& Text(Today(), "yyyy-MM-dd") &"""}]}"
-          scenarioName: ="msdyn_WorkdayHCMRuntimeEmployeeGetWorkContactInformation"
+          scenarioName: msdyn_WorkdayHCMRuntimeEmployeeGetHomeContactInformation
+          requestParametersJson: |-
+            =JSON({
+              Employee_ID: Global.ESS_UserContext_Employee_Id,
+              As_Of_Effective_Date: Text(Today(), "yyyy-MM-dd")
+            }, JSONFormat.Compact)
 
-      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemReadSOAPExecution
       output:
         binding:
-          errorResponse: Topic.errorResponse
+          connectorStatus: Topic.connectorStatus
+          errorMessage: Topic.errorResponse
+          failureReason: Topic.failureReason
           isSuccess: Topic.isSuccess
-          workdayResponse: Topic.workdayResponse
+          responseJson: Topic.workdayResponse
+
+    - kind: ConditionGroup
+      id: checkContactInformationSuccess
+      conditions:
+        - id: contactInformationFailed
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendContactInformationError
+              activity: I encountered an error retrieving your contact information. Please try again later or contact support.
+
+            - kind: EndDialog
+              id: endContactInformationOnError
 
     - kind: ParseValue
       id: b90ZAp
@@ -64,132 +83,39 @@ beginDialog:
             type:
               kind: Table
               properties:
-                Email_Data:
+                Email_Address:
                   type:
-                    kind: Record
+                    kind: Table
                     properties:
-                      Email_Address: String
-
-                Email_ID: String
-                Email_Reference:
-                  type:
-                    kind: Record
-                    properties:
-                      "@Descriptor": String
-                      ID:
-                        type:
-                          kind: Table
-                          properties:
-                            "@type": String
-                            "#text": String
-
-                Usage_Data:
-                  type:
-                    kind: Record
-                    properties:
-                      "@Public": String
-                      Type_Data:
-                        type:
-                          kind: Record
-                          properties:
-                            "@Primary": String
-                            Type_Reference:
-                              type:
-                                kind: Record
-                                properties:
-                                  "@Descriptor": String
-                                  ID:
-                                    type:
-                                      kind: Table
-                                      properties:
-                                        "@type": String
-                                        "#text": String
-
-          PhoneInformation:
-            type:
-              kind: Table
-              properties:
-                Phone_Data:
-                  type:
-                    kind: Record
-                    properties:
-                      "@Formatted_Phone": String
-                      Complete_Phone_Number: String
-                      Country_Code_Reference:
-                        type:
-                          kind: Record
-                          properties:
-                            "@Descriptor": String
-                            ID:
-                              type:
-                                kind: Table
-                                properties:
-                                  "@type": String
-                                  "#text": String
-
-                      Device_Type_Reference:
-                        type:
-                          kind: Record
-                          properties:
-                            "@Descriptor": String
-                            ID:
-                              type:
-                                kind: Table
-                                properties:
-                                  "@type": String
-                                  "#text": String
-
-                Phone_ID: String
-                Phone_Reference:
-                  type:
-                    kind: Record
-                    properties:
-                      "@Descriptor": String
-                      ID:
-                        type:
-                          kind: Table
-                          properties:
-                            "@type": String
-                            "#text": String
+                      Value: String
 
                 Usage_Data:
                   type:
                     kind: Table
                     properties:
-                      "@Public": String
                       Type_Data:
                         type:
-                          kind: Record
+                          kind: Table
                           properties:
                             "@Primary": String
-                            Type_Reference:
-                              type:
-                                kind: Record
-                                properties:
-                                  "@Descriptor": String
-                                  ID:
-                                    type:
-                                      kind: Table
-                                      properties:
-                                        "@type": String
-                                        "#text": String
+
+          PhoneInformation:
+            type:
+              kind: Table
+              properties:
+                "@Tenant_Formatted_Phone": String
+
+                Usage_Data:
+                  type:
+                    kind: Table
+                    properties:
+                      Type_Data:
+                        type:
+                          kind: Table
+                          properties:
+                            "@Primary": String
 
       value: =Topic.workdayResponse
-
-    - kind: BeginDialog
-      id: tZ3bkQ
-      displayName: Fetch Home Contact Information from Workday
-      input:
-        binding:
-          parameters: ="{""params"":[{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """},{""key"":""{As_Of_Effective_Date}"",""value"":"""& Text(Today(), "yyyy-MM-dd") &"""}]}"
-          scenarioName: ="msdyn_WorkdayHCMRuntimeEmployeeGetHomeContactInformation"
-
-      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
-      output:
-        binding:
-          errorResponse: Topic.errorResponse
-          isSuccess: Topic.isSuccess
-          workdayResponse: Topic.workdayResponse
 
     - kind: ParseValue
       id: D15SKZ
@@ -198,51 +124,25 @@ beginDialog:
       valueType:
         kind: Record
         properties:
-          EmailInformation:
+          HomeEmailInformation:
             type:
               kind: Table
               properties:
-                Email_Data:
+                Email_Address:
                   type:
-                    kind: Record
+                    kind: Table
                     properties:
-                      Email_Address: String
-                      Email_Comment: String
-
-                Email_ID: String
-                Email_Reference:
-                  type:
-                    kind: Record
-                    properties:
-                      "@Descriptor": String
-                      ID:
-                        type:
-                          kind: Table
-                          properties:
-                            "@type": String
-                            "#text": String
+                      Value: String
 
                 Usage_Data:
                   type:
-                    kind: Record
+                    kind: Table
                     properties:
-                      "@Public": String
                       Type_Data:
                         type:
-                          kind: Record
+                          kind: Table
                           properties:
                             "@Primary": String
-                            Type_Reference:
-                              type:
-                                kind: Record
-                                properties:
-                                  "@Descriptor": String
-                                  ID:
-                                    type:
-                                      kind: Table
-                                      properties:
-                                        "@type": String
-                                        "#text": String
 
           HomeAddress:
             type:
@@ -250,91 +150,23 @@ beginDialog:
               properties:
                 Value: String
 
-          PhoneInformation:
+          HomePhoneInformation:
             type:
               kind: Table
               properties:
-                Phone_Data:
-                  type:
-                    kind: Record
-                    properties:
-                      "@Formatted_Phone": String
-                      Complete_Phone_Number: String
-                      Country_Code_Reference:
-                        type:
-                          kind: Record
-                          properties:
-                            "@Descriptor": String
-                            ID:
-                              type:
-                                kind: Table
-                                properties:
-                                  "@type": String
-                                  "#text": String
-
-                      Device_Type_Reference:
-                        type:
-                          kind: Record
-                          properties:
-                            "@Descriptor": String
-                            ID:
-                              type:
-                                kind: Table
-                                properties:
-                                  "@type": String
-                                  "#text": String
-
-                Phone_ID: String
-                Phone_Reference:
-                  type:
-                    kind: Record
-                    properties:
-                      "@Descriptor": String
-                      ID:
-                        type:
-                          kind: Table
-                          properties:
-                            "@type": String
-                            "#text": String
+                "@Tenant_Formatted_Phone": String
 
                 Usage_Data:
                   type:
                     kind: Table
                     properties:
-                      "@Public": String
                       Type_Data:
                         type:
-                          kind: Record
+                          kind: Table
                           properties:
                             "@Primary": String
-                            Type_Reference:
-                              type:
-                                kind: Record
-                                properties:
-                                  "@Descriptor": String
-                                  ID:
-                                    type:
-                                      kind: Table
-                                      properties:
-                                        "@type": String
-                                        "#text": String
 
       value: =Topic.workdayResponse
-
-    - kind: BeginDialog
-      id: p2xAZU
-      displayName: Fetch Work Address
-      input:
-        binding:
-          parameters: ="{""params"":[{""key"":""{Employee_ID}"",""value"":""" & Global.ESS_UserContext_Employee_Id & """},{""key"":""{As_Of_Effective_Date}"",""value"":"""& Text(Today(), "yyyy-MM-dd") &"""}]}"
-          scenarioName: ="msdyn_WorkdayHCMRuntimeEmployeeGetWorkAddress"
-
-      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
-      output:
-        binding:
-          errorResponse: Topic.errorResponse
-          isSuccess: Topic.isSuccess
-          workdayResponse: Topic.workdayResponse
 
     - kind: ParseValue
       id: 3IdZeI
@@ -358,11 +190,11 @@ beginDialog:
       value: |-
         ={
             employeeName: Global.ESS_UserContext_Employee_Firstname & " " & Global.ESS_UserContext_Employee_Lastname,
-            workPhoneNumbers: ForAll(Topic.workContactData.PhoneInformation, {PhoneNumber: ThisRecord.Phone_Data.'@Formatted_Phone', IsPrimaryPhoneNumber: CountIf(ThisRecord.Usage_Data, Type_Data.'@Primary' = "1") > 0}),
-            workEmails: ForAll(Topic.workContactData.EmailInformation, {EmailAddress: ThisRecord.Email_Data.Email_Address, IsPrimaryEmailAddress: ThisRecord.Usage_Data.Type_Data.'@Primary'}),
+            workPhoneNumbers: ForAll(Topic.workContactData.PhoneInformation As PhoneRecord, With({usageData: First(PhoneRecord.Usage_Data)}, With({typeData: First(usageData.Type_Data)}, {PhoneNumber: IfError(PhoneRecord.'@Tenant_Formatted_Phone', ""), IsPrimaryPhoneNumber: Lower(IfError(typeData.'@Primary', "")) = "true" || IfError(typeData.'@Primary', "") = "1"}))),
+            workEmails: ForAll(Topic.workContactData.EmailInformation As EmailRecord, With({usageData: First(EmailRecord.Usage_Data)}, With({typeData: First(usageData.Type_Data)}, {EmailAddress: IfError(First(EmailRecord.Email_Address).Value, ""), IsPrimaryEmailAddress: IfError(typeData.'@Primary', "")}))),
             workAddress: First(Topic.workAddress.WorkAddress).Value,
-            homePhoneNumbers: ForAll(Topic.homeContactData.PhoneInformation, {PhoneNumber: ThisRecord.Phone_Data.'@Formatted_Phone', IsPrimaryPhoneNumber: CountIf(ThisRecord.Usage_Data, Type_Data.'@Primary' = "1") > 0}),
-            homeEmails: ForAll(Topic.homeContactData.EmailInformation, {EmailAddress: ThisRecord.Email_Data.Email_Address, IsPrimaryEmailAddress: ThisRecord.Usage_Data.Type_Data.'@Primary'}),
+            homePhoneNumbers: ForAll(Topic.homeContactData.HomePhoneInformation As PhoneRecord, With({usageData: First(PhoneRecord.Usage_Data)}, With({typeData: First(usageData.Type_Data)}, {PhoneNumber: IfError(PhoneRecord.'@Tenant_Formatted_Phone', ""), IsPrimaryPhoneNumber: Lower(IfError(typeData.'@Primary', "")) = "true" || IfError(typeData.'@Primary', "") = "1"}))),
+            homeEmails: ForAll(Topic.homeContactData.HomeEmailInformation As EmailRecord, With({usageData: First(EmailRecord.Usage_Data)}, With({typeData: First(usageData.Type_Data)}, {EmailAddress: IfError(First(EmailRecord.Email_Address).Value, ""), IsPrimaryEmailAddress: IfError(typeData.'@Primary', "")}))),
             homeAddress: First(Topic.homeContactData.HomeAddress).Value
         }
 

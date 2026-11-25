@@ -66,18 +66,37 @@ beginDialog:
 
     - kind: BeginDialog
       id: HZDypL
-      displayName: Redirect to Workday Get Common Execution
+      displayName: Read manager service anniversaries through the SOAP adapter
       input:
         binding:
-          parameters: ="{""params"":[{""key"":""{ManagerOrgId}"",""value"":""" & Global.ESS_UserContext_ManagerOrganizationId & """},{""key"":""{As_Of_Effective_Date}"",""value"":"""& Text(Today(), "yyyy-MM-dd") &"""}]}"
           scenarioName: msdyn_WorkdayHCMRuntimeManagerServiceAnniversary
+          requestParametersJson: |-
+            =JSON({
+              ManagerOrgId: Global.ESS_UserContext_ManagerOrganizationId,
+              As_Of_Effective_Date: Text(Today(), "yyyy-MM-dd")
+            }, JSONFormat.Compact)
 
-      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution
+      dialog: gptagent_copilotforemployeeselfservicehr.topic.WorkdaySystemReadSOAPExecution
       output:
         binding:
-          errorResponse: Topic.errorResponse
+          connectorStatus: Topic.connectorStatus
+          errorMessage: Topic.errorResponse
+          failureReason: Topic.failureReason
           isSuccess: Topic.isSuccess
-          workdayResponse: Topic.workdayResponse
+          responseJson: Topic.workdayResponse
+
+    - kind: ConditionGroup
+      id: checkManagerServiceAnniversarySuccess
+      conditions:
+        - id: managerServiceAnniversaryFailed
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendManagerServiceAnniversaryError
+              activity: I encountered an error retrieving your team's service anniversary information. Please try again later or contact support.
+
+            - kind: EndDialog
+              id: endManagerServiceAnniversaryOnError
 
     - kind: ParseValue
       id: Nh88X0
