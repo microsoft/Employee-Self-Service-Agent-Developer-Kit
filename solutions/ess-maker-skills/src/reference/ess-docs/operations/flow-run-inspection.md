@@ -13,7 +13,11 @@ This doc teaches you to read that cascade. The read is performed by `scripts/flo
 - `get_run_actions(environment, flow_id, run_id, token)` — the run's actions as `[{name, status, outputs}]`.
 - `summarize_actions(actions)` — reduces that to the `[{name, status, statusCode}]` cascade you interpret.
 
-`token` is a Flow Management API bearer token (resource `https://service.flow.microsoft.com/`). The CLI acquires one automatically via the kit's MSAL sign-in (Flow-scoped, using your active agent's environment for tenant discovery); set `FLOW_API_TOKEN` to supply your own instead (CI, or bring-your-own token).
+`token` is a Flow Management API bearer token (resource `https://service.flow.microsoft.com/`). The CLI explicitly requests the delegated scope `https://service.flow.microsoft.com//Flows.Read.All` in both silent and interactive MSAL acquisition, using the dedicated Flow public client `417219b4-3a7d-42a2-bdb1-972bd8281a02` (`FLOW_CLIENT_ID`) and your active agent's Dataverse environment for tenant discovery. Dataverse authentication retains client `51f81489-12ee-4a9e-aaae-a2591f45987d` (`CLIENT_ID`). The on-disk cache is shared, but MSAL selects access tokens by client ID, account, tenant, and scope; Dataverse sign-in alone does not guarantee silent Flow sign-in. Keep the double slash: the resource URI ends in `/`. Set `FLOW_API_TOKEN` to supply your own token instead (CI, or bring-your-own token); this bypasses acquisition, not service authorization.
+
+**Prerequisites:** the named delegated grant must be deployed and available to this client in the target tenant. The signed-in user also needs effective **Owner** access to the flow for run and action reads; the delegated `User` permission alone does not satisfy the action-read scope check. A successful mocked test or an approved resource permission change does not prove deployment, token issuance, or live API authorization. Release readiness requires grant availability and a separate controlled live verification.
+
+This inspector's explicit scope does not change Dataverse's `/user_impersonation` request or FlightCheck's separate Power Platform admin Flow request (`https://service.flow.microsoft.com//.default`), which uses the admin path's combined grant. Requesting `Flows.Read.All` does not guarantee an issued token contains only that permission.
 
 A summarized cascade looks like:
 
@@ -73,6 +77,6 @@ Conclusion: the user's "something went wrong (500)" is a **masked 400** from Ser
 
 ## Guardrails
 
-- **Read-only.** These helpers only GET. They never re-run, patch, or delete a flow.
+- **Read-only tooling, not a GET-only permission.** These helpers only GET. They never re-run, patch, or delete a flow. This describes the inspector's behavior, not every operation that `Flows.Read.All` or an issued token may authorize.
 - **Eventual consistency.** Run history can lag a few seconds after a turn; if the latest run isn't there yet, wait and re-read.
 - **Your own flow, your own env.** You are inspecting a flow you authored in an environment you have access to.
