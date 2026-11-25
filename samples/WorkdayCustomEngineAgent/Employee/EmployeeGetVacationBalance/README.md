@@ -41,6 +41,14 @@ The `EmployeeGetVacationBalance` topic allows employees to:
 | `topic.yaml` | Main topic definition with conversation flow and Adaptive Card |
 | `msdyn_HRWorkdayHCMEmployeeGetVacationBalance.xml` | XML template for the Get_Time_Off_Plan_Balances API request |
 
+## Setup
+
+Follow the [CEA prerequisites](../#before-you-start) and [register the template configuration](../#register-the-template-configurations) with **Unique name** `msdyn_HRWorkdayHCMEmployeeGetVacationBalance` and the complete XML in **Value**.
+
+Replace `<TENANT_NAME>` in `set_workday_url`, then [add this scenario](../#add-a-scenario) by pasting the entire `topic.yaml` into a blank topic's code editor, resolving the CEA common-execution reference, saving, and enabling it.
+
+Keep the `AsOfEffectiveDate` input, `{Employee_ID}`/`{As_Of_Effective_Date}` parameters, and `VacationBalance` output binding intact. You can customize the date-card labels, trigger wording, and `AnswerQuestionWithAI` formatting instructions without changing those contracts.
+
 ## Workday APIs Used
 
 | API | Service | Version | Purpose |
@@ -96,3 +104,9 @@ The `EmployeeGetVacationBalance` topic allows employees to:
 
 - `msdyn_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution` - For API execution
 - `Global.ESS_UserContext_Employee_Id` - Current user's employee ID
+
+## Test and troubleshoot
+
+In fresh conversations, test a request without a date (the date card defaults to today) and a request with an explicit date. Compare returned plans, units, and balances with the test employee's Workday data. Include an employee without a balance and a request about someone else's balance.
+
+The topic returns the AI-formatted text through `VacationBalance`. If no usable balance is returned, inspect the common-execution `isSuccess`/`errorResponse` and configuration record before treating it as a zero balance: the sample proceeds to AI formatting without an explicit success/error branch. Verify the as-of date displayed in both input paths. Use the [shared CEA troubleshooting checks](../#troubleshooting) before publishing.
