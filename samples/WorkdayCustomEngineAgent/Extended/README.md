@@ -19,7 +19,7 @@ These samples extend an installed Workday integration; they do not install an ag
 
 ## Before you start
 
-- Use an editable ESS Custom Engine Agent with its Workday integration installed and configured. Complete [Workday integration setup](https://learn.microsoft.com/en-us/copilot/employee-self-service/workday), including authenticated connections, and have maker access to the agent's environment.
+- Use an editable ESS Custom Engine Agent with its Workday integration installed and configured. Complete the [simplified Workday integration setup](https://learn.microsoft.com/en-us/copilot/employee-self-service/workday-simplified-setup), including authenticated connections, and have maker access to the agent's environment.
 - Confirm `Global.ESS_UserContext_Employee_Id` is initialized from the signed-in employee's context. The supplied topics use `Employee_ID=` followed by this value for the requesting worker; do not replace it with a hard-coded test identity.
 - Work with your Workday administrator to configure OAuth scopes, security-domain access, and business-process permissions for the operations you select. Payroll reads and feedback or transfer submissions need appropriate permissions; successful authentication alone is not sufficient.
 - Use approved test identities and a non-production environment. Feedback requests create Workday records, and transfers initiate job changes. Verify access controls, cancellation, and submission behavior before making them available to users.
