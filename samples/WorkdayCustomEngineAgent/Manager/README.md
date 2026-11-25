@@ -22,7 +22,7 @@ The time-in-position prompt is a suggested test utterance, not a configured trig
 
 ## Before you start
 
-- Use an editable ESS Custom Engine Agent with its HR Workday integration installed and configured. Complete [Workday integration setup](https://learn.microsoft.com/en-us/copilot/employee-self-service/workday), including authenticated connections, employee-context initialization, and permissions for the data you plan to read.
+- Use an editable ESS Custom Engine Agent with its HR Workday integration installed and configured. Complete the [simplified Workday integration setup](https://learn.microsoft.com/en-us/copilot/employee-self-service/workday-simplified-setup), including authenticated connections, employee-context initialization, and permissions for the data you plan to read.
 - Have maker access to the agent's environment and permission to create or update **Employee Self-Service Template Configuration** records.
 - Confirm `Global.ESS_UserContext_ManagerOrganizationId` is populated from the signed-in user's Workday manager context. It must identify the appropriate Workday organization, not an employee ID or a display name. Do not hard-code another manager's organization.
 - Work with your Workday administrator to validate organization scope and security-domain access. All five supplied XML files use **User** authentication and the `Human_Resources` service's `Get_Workers` operation.
