@@ -2635,14 +2635,13 @@ def test_generated_question_families_have_distinct_headers_and_bodies() -> None:
         assert adapted["askUserArguments"]["requestedSchema"]["required"] == [
             "response"
         ], family
+        assert field["title"] == question["header"], family
         if options:
-            assert field["title"] == "Selection", family
             assert [item["title"] for item in field["oneOf"]] == [
                 option["label"] for option in options
             ], family
             assert adapted["knownHostLimitation"], family
         else:
-            assert field["title"] == "Input", family
             assert "oneOf" not in field, family
             assert adapted["knownHostLimitation"] is None, family
 
@@ -2672,7 +2671,7 @@ def test_ask_user_adapter_preserves_selection_values_and_freeform() -> None:
     assert adapted["askUserArguments"]["message"] == "Choose agent"
     assert field == {
         "type": "string",
-        "title": "Selection",
+        "title": "Choose agent",
         "oneOf": [
             {
                 "const": "prepared:hr",
@@ -2699,7 +2698,7 @@ def test_ask_user_adapter_preserves_selection_values_and_freeform() -> None:
             "properties": {
                 "response": {
                     "type": "string",
-                    "title": "Input",
+                    "title": "ServiceNow instance URL",
                 }
             },
             "required": ["response"],
@@ -2738,7 +2737,7 @@ def test_adapt_question_cli_reads_canonical_json_from_stdin(
     field = result["askUserArguments"]["requestedSchema"]["properties"][
         "response"
     ]
-    assert field["title"] == "Selection"
+    assert field["title"] == "HR prerequisite"
     assert "description" not in field
     assert [item["title"] for item in field["oneOf"]] == [
         option["label"] for option in question["options"]
@@ -7703,7 +7702,7 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
         "Is your Microsoft Entra administrator available to complete this "
         "step?"
     )
-    assert gated_field["title"] == "Selection"
+    assert gated_field["title"] == gated_arguments["message"]
     assert "description" not in gated_field
     assert [option["title"] for option in gated_field["oneOf"]] == [
         "Yes",
@@ -7749,7 +7748,7 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
         field = arguments["requestedSchema"]["properties"]["response"]
         assert arguments["message"] == canonical["header"]
         assert "description" not in field
-        assert field["title"] in {"Selection", "Input"}
+        assert field["title"] == canonical["header"]
         assert arguments["requestedSchema"]["required"] == ["response"]
 
     with snow.product_profile_context(profile_key):
@@ -14986,6 +14985,22 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
         resource_index = maker_guidance.index("Resource URI")
         instance_index = maker_guidance.index("Instance name")
         assert auth_index < resource_index < instance_index
+
+        wrapped = snow._with_agent_rules(maker_yes, "resume-handoff", None)
+        completion_title = (
+            "Did you create the connection, and does Copilot Studio show it "
+            "as Connected for this agent?"
+        )
+        card = wrapped["pendingCard"]["askUserArguments"]
+        field = card["requestedSchema"]["properties"]["response"]
+        assert card["message"] == completion_title
+        assert field["title"] == completion_title
+        assert [item["title"] for item in field["oneOf"]] == ["Yes", "No"]
+        assert wrapped["endTurn"] is False
+        assert "prepare-credential.md" in wrapped["nextCommand"]
+        assert "Return here and tell us which connection you used" in (
+            wrapped["chatMessage"]
+        )
 
         for phase_id in (
             "credential",

@@ -946,11 +946,13 @@ def adapt_question_to_ask_user(
             "A canonical question without options must allow freeform input."
         )
 
-    # The card title is the question itself. The explanation (`question`) is
-    # sent as the agent's chat response, never repeated inside the card.
+    # The host renders the field title as the card's question (and in the
+    # answered summary), so it carries the question itself. The explanation
+    # (`question`) is sent as the agent's chat response, never repeated
+    # inside the card.
     field: dict[str, Any] = {
         "type": "string",
-        "title": "Selection" if normalized_options else "Input",
+        "title": header.strip(),
     }
     if normalized_options:
         field["oneOf"] = normalized_options
@@ -11465,6 +11467,39 @@ def _portal_url_ask_guidance(
     )
 
 
+def _new_connection_handoff_active(
+    context: dict[str, Any],
+    state: dict[str, Any],
+) -> bool:
+    """True when the credential step is the plain create-a-connection handoff."""
+    return not (
+        _existing_identity_kind(state)
+        or _custom_identifier_active(state)
+        or _second_agent_reuse(context, state)
+    )
+
+
+def _credential_completion_question() -> dict[str, Any]:
+    """Native Yes/No completion question for the new-connection handoff.
+
+    Mirrors the visible-handoff-question in the prepare-credential action docs
+    so the maker confirms with an option instead of typing a reply.
+    """
+    return {
+        "header": (
+            "Did you create the connection, and does Copilot Studio show it "
+            "as Connected for this agent?"
+        ),
+        "question": (
+            "Answering Yes triggers one fresh connection check and one check "
+            "of the agent's saved settings. You can also name the connection "
+            "you used, but the name is optional and is not a readiness gate."
+        ),
+        "options": [{"label": "Yes"}, {"label": "No"}],
+        "allowFreeformInput": False,
+    }
+
+
 def _current_task_guidance(
     context: dict[str, Any],
     state: dict[str, Any],
@@ -12360,6 +12395,10 @@ def resume_handoff(
             "decision": "read-action-doc",
             "actionDoc": action_doc,
         }
+        if phase.get("id") == "credential" and isinstance(state, dict) and (
+            _new_connection_handoff_active(context, state)
+        ):
+            result["question"] = _credential_completion_question()
     elif decision.get("decision") == "run-checkpoints":
         phase = decision.get("phase")
         checkpoints = (
@@ -18440,6 +18479,16 @@ def _with_agent_rules(
         if cards:
             ordered["endTurn"] = False
             ordered["nextCommand"] = _ASK_CARD_NEXT
+            action = result.get("action")
+            if isinstance(action, dict) and action.get("actionDoc"):
+                ordered["nextCommand"] += (
+                    f" When they answer, read {action['actionDoc']} and "
+                    "continue from its step that follows this question. "
+                    "Afterwards continue with: "
+                    + _resume_command(
+                        result, args, executed=_running_phase(result)
+                    )
+                )
             ordered["pendingCard"] = adapt_question_to_ask_user(cards[0])
         elif _output_waits_for_maker(result, command):
             ordered["endTurn"] = True
