@@ -171,7 +171,7 @@ def test_refresh_diagnostics_survive_mcp_serialization(
     result = asyncio.run(run())
     interactive.assert_not_called()
     if failure in {"cache-lock", "access-denied", "missing-resource", "unknown-value", "unknown-os", "network-os"}:
-        refresh_msal.assert_called_once_with(TENANT, OID)
+        refresh_msal.assert_called_once_with(TENANT, OID, login_hint=None)
     else:
         refresh_msal.assert_not_called()
     assert client.tenant_id == TENANT

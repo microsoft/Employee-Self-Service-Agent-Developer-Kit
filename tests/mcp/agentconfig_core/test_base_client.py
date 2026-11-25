@@ -68,7 +68,10 @@ def test_token_cache_uses_shared_local_state() -> None:
     )
 
 
-def test_interactive_auth_always_prompts_for_account_selection(monkeypatch, capsys) -> None:
+@pytest.mark.parametrize("login_hint", [None, "maker@example.test"])
+def test_interactive_auth_selects_an_account_only_without_a_hint(
+    monkeypatch, capsys, login_hint
+) -> None:
     captured: dict[str, object] = {}
 
     class FakeServer:
@@ -97,10 +100,17 @@ def test_interactive_auth_always_prompts_for_account_selection(monkeypatch, caps
     )
     monkeypatch.setattr(base_client.webbrowser, "open", lambda url: True)
 
-    result = base_client._acquire_token_interactive_form_post(FakeApp())
+    result = base_client._acquire_token_interactive_form_post(
+        FakeApp(), login_hint=login_hint
+    )
 
     assert result == {"access_token": "token"}
-    assert captured["prompt"] == "select_account"
+    if login_hint:
+        assert captured["login_hint"] == login_hint
+        assert "prompt" not in captured
+    else:
+        assert captured["prompt"] == "select_account"
+        assert "login_hint" not in captured
     output = capsys.readouterr()
     assert output.out == ""
     assert output.err == (
@@ -524,7 +534,7 @@ def test_shared_account_matching_uses_tenant_profile_not_grouped_local_id():
 
 
 @pytest.mark.parametrize("available", [True, False])
-def test_msal_refresh_is_silent_and_selects_only_original_identity(monkeypatch, available):
+def test_msal_refresh_selects_only_original_identity_before_interactive_fallback(monkeypatch, available):
     from types import SimpleNamespace
 
     account = {"home_account_id": "home"}
@@ -548,13 +558,19 @@ def test_msal_refresh_is_silent_and_selects_only_original_identity(monkeypatch, 
         )
 
     monkeypatch.setattr(base_client, "_create_msal_app", create_app)
+    sign_ins = []
+    def interactive(app, *, login_hint):
+        sign_ins.append(login_hint)
+        return {"access_token": _identity_token("replacement")}
+    monkeypatch.setattr(base_client, "_acquire_token_interactive_form_post", interactive)
     if available:
         assert base_client._refresh_msal_token(TENANT_ID, OBJECT_ID) == _identity_token("replacement")
         assert calls == [(base_client._SCOPE, {"account": account, "force_refresh": True})]
+        assert sign_ins == []
     else:
-        with pytest.raises(base_client.AgentConfigApiError, match="original account"):
-            base_client._refresh_msal_token(TENANT_ID, OBJECT_ID)
+        assert base_client._refresh_msal_token(TENANT_ID, OBJECT_ID) == _identity_token("replacement")
         assert calls == []
+        assert sign_ins == [None]
 
 
 def test_concurrent_401s_share_one_refresh_and_never_replay_a_second_401(monkeypatch):
