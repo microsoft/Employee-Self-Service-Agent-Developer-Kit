@@ -140,6 +140,10 @@ a combined request or the bare command's initial operation selection.
 The agent name may still identify the target in a logo-only request; that
 does not make the name a requested or changed property.
 
+Keep script commands, raw progress/result JSON and internal status labels out
+of routine chat narration. Use concise, property-specific progress and results.
+Host-owned tool-execution cards may still be visible; do not promise to hide them.
+
 Do not copy combined-example text into single-property responses. Use
 "Loading the current logo..." for logo-only reads and "Loading the current
 name..." for name-only reads. A shared service failure is reported for the
@@ -419,23 +423,28 @@ Never describe a preview-decode failure as a platform format rejection.
 
 Show name help below in the existing input dialog's plain-text description,
 after its target summary, only when asking for a missing name.
-When asking for a missing logo, use a simple file-selection question without
-upload requirements, format lists or recommendations in chat or the dialog.
-Show logo requirements and recommendations only after an uploaded image
-fails validation or the service rejects the upload. A valid logo proceeds
-to review without this guidance, including when a name is still missing.
+When asking for a missing logo, show the logo size recommendation below in
+the existing file-selection dialog's context, after its target summary.
+If the logo was already supplied, show that recommendation once beside the
+existing visual review instead; do not ask for the file again.
+Show the size recommendation only once per proposal and never in a name-only
+question. Other logo requirements, format lists and correction recommendations
+appear only after an uploaded image fails validation or the service rejects it.
 For values already supplied, proceed directly to validation and review;
-do not ask for those values again. Do not repeat their input help or
-recommendations in chat. Show only the requested property's help when
+do not ask for those values again. Apart from the logo size recommendation
+beside review, do not repeat their input help or recommendations in chat.
+Show only the requested property's help when
 it is needed. In a combined proposal, ask only for what is missing.
 Show correction guidance only for a relevant validation problem. Do not add
 a new screen, confirmation or consent step.
 
 - **Name requirements:** "Enter a nonblank name of 30 characters or fewer."
 - **Logo requirements:** "Choose a local image for the agent logo."
+- **Logo size recommendation:** "Recommended logo size: 192 x 192 pixels (not required)."
 - **Logo recommendation (not a restriction):** "A square 192x192 PNG matches
   the generated color icon. Other sizes and formats are subject to service
-  validation."
+  validation." Use this additional format guidance only for a relevant
+  validation or service rejection.
 
 For relevant correction guidance in chat, keep the logo recommendation
 visually separate from requirements. Explicitly label it "Recommended, not
@@ -496,6 +505,12 @@ target block into `question` or an unsupported question-level `description`
 field. The supported `message` body renders Markdown paragraphs; keep their
 content plain text, without tables, images or HTML.
 Keep existing helper-returned Studio confirmation dialogs verbatim.
+Preserve their wording and choices when adapting to the host's tool schema.
+In VS Code, map `logoConfirmation.dialog.title` to `header`,
+`logoConfirmation.dialog.question` to `question` and
+`logoConfirmation.dialog.description` to `message`, not an unsupported
+question-level `description`. Keep the exact returned agent URL in its own
+paragraph.
 
 Logo-only approval context template for `message`:
 
@@ -547,8 +562,9 @@ For input questions:
   Show the 30-character maximum when collecting a missing or corrected name
   for name-only or combined edits, not for logo-only edits or already supplied
   valid names.
-- New agent logo: "Provide a local image file or its path." Do not add logo
-  requirements, format lists or recommendations before an invalid upload.
+- New agent logo: "Provide a local image file or its path." Show the logo size
+  recommendation in the dialog context, after the target summary.
+  Do not add logo requirements or format lists before an invalid upload.
   Include short path-copy guidance only when needed in the current host.
 
 For combined edits, collect only the missing name and logo inputs in separate
@@ -966,8 +982,10 @@ image processing as rename validation.
   reviewed snapshot. It performs no service write or publication. Yes returns
   `logo_confirmed` / `confirmed_by_user`: the maker confirmed the result in
   Copilot Studio, not an automated exact-source match. Acknowledge
-  **Your DEV logo is confirmed.** or **Your DEV name and logo are confirmed.**
-  as appropriate. Do not keep presenting this resolved visual uncertainty as a
+  **Your logo was updated successfully.** or
+  **Your agent name and logo were updated successfully.**, as appropriate,
+  followed by **These changes are not published.**
+  Do not keep presenting this resolved visual uncertainty as a
   pending confirmation or show a resume dialog afterward.
   No returns `logo_not_confirmed`:
   ask only which requested setting needs correction, then use the ordinary
@@ -1054,6 +1072,11 @@ affected; do not route around the stop.
    corrective name/logo changes. Never delete marker files manually.
 
 Lead with the requested property's verified result and selected Dev target.
+Use the property-specific success sentence verbatim; do not shorten it to
+a generic confirmation.
+Use **Your agent name was updated successfully.** for name-only,
+**Your logo was updated successfully.** for logo-only, or
+**Your agent name and logo were updated successfully.** for combined success.
 A confirmed Dev draft save completes this authoring task; the maker may stop
 there. Report publication as a separate remaining action, not an unfinished
 rename or logo save. For combined changes, put recovery beside each failed or
@@ -1068,7 +1091,9 @@ An absent previous logo is **No logo has been set**, not an invented image.
 The **Current** column means the saved, read-back-confirmed DEV draft.
 
 ```markdown
-Saved and verified both changes in **<environment> · DEV**:
+Your agent name and logo were updated successfully.
+
+**<environment> · DEV**
 
 | Setting | Previous | Current |
 | --- | --- | --- |
@@ -1094,7 +1119,7 @@ Explain that this draft save does not publish or update the currently
 published version. Publication and
 promotion require separate release work and approval. Do not promise that
 publishing Dev alone makes a change visible to every employee.
-Use **Not published. The published version was not updated by this save.**
+Use **These changes are not published.**
 Do not say "published logo may differ" as a default warning: no comparison
 with the published logo was performed by this operation. If the maker asks,
 explain that employees may still see the prior published version until

@@ -159,8 +159,6 @@ def test_lifecycle_plan_display_preserves_approval_and_resume_boundaries() -> No
     assert "Preflight, chooser, and instance confirmation" in runner
     assert "`renderBlock.text`" in runner
     assert "`transport.businessGroupAvailability.question`" in runner
-    assert "exactly four HR or three IT" in runner
-    assert "Preflight, chooser, and instance confirmation" in runner
     assert "One acknowledgement unlocks every internal phase" in runner
     assert "question-only" in normalized
     assert (
@@ -249,13 +247,18 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert "must not persist or ask separate questions" in runner
     assert "`handoffMode: identity-requirement`" in runner
     assert "routing-only Maker question" in runner_normalized
-    assert "they are not `Completed`/`Not yet` admin evidence" in (
-        runner_normalized
+    entry_normalized = " ".join(
+        (_CONNECT / "servicenow" / "entry.md").read_text(encoding="utf-8").split()
     )
-    assert "options are label-only" in runner_normalized
+    assert "plain chat question with a typed answer, never a card" in (
+        entry_normalized
+    )
+    assert "never render Email/UPN/Pay ID options" in entry_normalized
     assert "`identityRequirementChoices`" in runner
     assert "never add `value`" in runner_normalized
-    assert "`Not sure` returns waiting, writes no receipt" in runner_normalized
+    assert "`Not sure`) returns waiting, writes no receipt" in (
+        entry_normalized
+    )
     assert "must not set `actionApplied`" in runner_normalized
     assert "`resumeActionWhenIncomplete` is `true`" in runner
     assert "historical facts,\nnot authorization" in runner
@@ -346,7 +349,7 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     assert contract["provider"] == "servicenow-da-hrsd"
     assert contract["checkpointResultMode"] == "compact-stdout-v1"
     assert contract["attestedRoleScope"] == "lifecycle"
-    assert contract["contractRevision"] == 16
+    assert contract["contractRevision"] == 17
     assert [
         (group["id"], group["role"], group["phaseIds"])
         for group in contract["businessGroups"]
@@ -367,7 +370,6 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
             "Maker",
             [
                 "credential",
-                "agent-connection",
                 "topics",
                 "portal-url",
                 "test",
@@ -405,7 +407,6 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
         "entra-registration",
         "servicenow-oidc",
         "credential",
-        "agent-connection",
         "topics",
         "portal-url",
         "test",
@@ -422,7 +423,8 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     ):
         assert by_id[phase_id]["actionExecution"] == "once"
     assert by_id["topics"]["resumeActionWhenIncomplete"] is True
-    assert by_id["agent-connection"]["actionExecution"] == "every-invocation"
+    assert "agent-connection" not in by_id
+    assert by_id["credential"]["mutates"] is True
     assert by_id["test"]["actionExecution"] == "every-invocation"
     assert by_id["test"]["mutates"] is False
     assert by_id["test"]["completionStatuses"] == ["Manual"]
@@ -438,7 +440,6 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
         "entra-registration",
         "servicenow-oidc",
         "topics",
-        "agent-connection",
         "test",
     ):
         acknowledgement = by_id[phase_id]["manualAcknowledgementEvidence"]
@@ -483,7 +484,7 @@ def test_servicenow_itsm_contract_uses_isolated_generic_lifecycle() -> None:
 
     assert contract["provider"] == "servicenow-da-itsm"
     assert contract["profile"] == "itsm"
-    assert contract["contractRevision"] == 11
+    assert contract["contractRevision"] == 12
     assert [group["id"] for group in contract["businessGroups"]] == [
         "entra-identity",
         "servicenow-sso",
@@ -508,7 +509,6 @@ def test_servicenow_itsm_contract_uses_isolated_generic_lifecycle() -> None:
         "entra-registration",
         "servicenow-oidc",
         "credential",
-        "agent-connection",
         "topics",
         "portal-url",
         "test",
@@ -827,7 +827,7 @@ def test_matching_maker_evidence_skips_only_current_bound_manual_ack() -> None:
         },
     }
 
-    for phase_id in ("agent-connection", "topics", "test"):
+    for phase_id in ("topics", "test"):
         assert _matching_action_evidence_acknowledges(
             phases[phase_id],
             "Manual",
@@ -845,12 +845,6 @@ def test_matching_maker_evidence_skips_only_current_bound_manual_ack() -> None:
         )
     state["componentHash"] = "component-hash"
     state["draftSemanticHash"] = "later-draft"
-    assert _matching_action_evidence_acknowledges(
-        phases["agent-connection"],
-        "Manual",
-        state,
-        action_succeeded_this_invocation=True,
-    )
     for phase_id in ("test",):
         assert not _matching_action_evidence_acknowledges(
             phases[phase_id],
@@ -860,12 +854,6 @@ def test_matching_maker_evidence_skips_only_current_bound_manual_ack() -> None:
         )
     state["draftSemanticHash"] = "draft-semantic-hash"
     state["agentBindingIdentitySha256"] = "later-binding"
-    assert not _matching_action_evidence_acknowledges(
-        phases["agent-connection"],
-        "Manual",
-        state,
-        action_succeeded_this_invocation=True,
-    )
     state["agentBindingIdentitySha256"] = "agent-binding-identity"
     state["connectionBindingHash"] = "later-connection"
     for phase_id in ("test",):

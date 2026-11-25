@@ -9,6 +9,17 @@ provider registration, metadata, claim mapping, and user checks.
 
 Never create or patch ServiceNow security objects.
 
+When the lifecycle state carries `existingIdentity` (the maker said ESS should
+reuse an existing Knowledge, single sign-on, or Microsoft Graph sign-in setup),
+`identity-direct-handoff` returns the compatibility-review handoff. Send it
+verbatim; the setup steps in it are reference only and ESS never changes the
+shared sign-in configuration. See `existing-identity-handoff` in `entry.md`.
+
+When the other ESS ServiceNow agent already completed sign-in setup here (and the
+marker is not set), `identity-direct-handoff` returns the second-agent
+reuse-review handoff instead; send it verbatim. See "Second ESS agent reusing
+this instance's sign-in setup" in `entry.md`.
+
 Read `adminSetup.phaseHandoffs.servicenow-oidc` first. If it is already
 `completed` or `reused` and stored checkpoint results are empty or all in the
 phase's `completionStatuses`, rerun
@@ -36,20 +47,64 @@ choose the first claim or apply a default.
 For direct capture, first use the current `resume-handoff` business-group
 availability gate. Do not run this command or render administrator instructions
 until the ServiceNow `security_admin` availability acknowledgement is current.
-A No answer pauses with the returned bring-admin reply and changes no state; a
+A No answer, or any answer other than a clear Yes, pauses through
+`resume-handoff --roles-available no`: send its returned `chatMessage` verbatim
+as plain chat, end the turn, and change no state. A
 Yes answer is recorded only by `resume-handoff --roles-available yes` with its
 exact group ID and context hash.
 
-After that acknowledgement, return the canonical runtime instructions from
+An administrator reply the maker has already pasted or typed (in whole or in
+part) is evidence, never a reason to ask availability. Do not run the
+availability gate and never write your own "Are you available…" card: run the
+`record-identity-direct` command in this guide with the supplied values right
+away, show its `chatMessage`, and follow its `endTurn` and `nextCommand`; the
+checklist comes from the next `resume-handoff` `renderBlock.text`, which you
+send verbatim. A mismatch comes
+back as plain chat; send it verbatim. Only `resume-handoff` ever asks an
+availability question, only when the next step needs an administrator, and
+its question already names who must act.
+
+After that acknowledgement, return the controller-built first-agent ServiceNow administrator message, which follows the PM spec's step structure and shares its underlying steps with
 [the shared ServiceNow administrator source](../../shared/runtime-instructions/servicenow-administrator.md)
-with the confirmed Client ID, tenant ID, and User Claim already locked:
+with the confirmed Client ID and User Claim already locked:
 
 ```text
 python scripts/connect_servicenow_da.py --provider servicenow-da-itsm --agent-slug {SELECTED_AGENT_SLUG} identity-direct-handoff --stage servicenow
 ```
 
+A maker message that says a custom claim is wanted but not confirmed by the
+Entra administrator is answered only with the "Custom claim not confirmed"
+Message from `claim-confirmation-handoff --custom-claim` (see `Clarification and recovery
+Messages` in `src/skills/connect/servicenow/entry.md`), verbatim; do not
+improvise steps, suggest email, or record anything.
+
+A maker message that only states a claim name (for example "it is X") is not a
+confirmation. Never ask a clarifying card and never record the name: run
+`record-identity-direct --stage entra` with the stated name and without the
+claim-setup confirmation option described in the Entra registration guide. It
+records nothing and returns the "We have the claim name" Message in
+`chatMessage`; send it verbatim and end the turn. Add that option only when the
+Entra administrator's reply confirms the claim setup is complete. The standard `email` and `upn` claims need no
+such confirmation. Only a recorded, confirmed claim makes the ServiceNow
+administrator message below necessary again.
+
+When the maker or an administrator reports the actual saved metadata URL and it
+contains `/v2.0`, run `metadata-url-handoff --metadata-url "<reported URL>"`
+and send its `chatMessage` verbatim (the "Metadata URL with `/v2.0` reported"
+Message in `servicenow/entry.md`). Use it only when the actual URL is given,
+never from a generic failure; it records nothing and never overwrites shared
+identity configuration.
+
+When the maker returns from a pause with an administrator reply outstanding,
+do not render the instructions again: follow the "Maker pauses for an
+administrator" messages in `servicenow/entry.md`, then record the reply below.
+
 Require `decision: instructions-required`. Render `ordinaryReply.text`
-verbatim, then pass the returned User Field `askUserArguments` object verbatim.
+verbatim; it already contains the plain-text lead-in before the
+Ready-to-send fenced block, so do not rewrap or edit either part. Then pass the returned User Field `askUserArguments` object verbatim. When the
+handoff is regenerated after a User Field was already captured, the returned
+`ordinaryReply.text` is only a short acknowledgement of the recorded field;
+render it verbatim and do not ask for the field again.
 The question list intentionally excludes availability because `resume-handoff`
 owns and deduplicates that gate. Record only the administrator-confirmed
 internal `sys_user` field; the command does not accept Client ID or User Claim

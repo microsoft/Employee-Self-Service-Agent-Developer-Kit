@@ -21,6 +21,10 @@ An agent name may identify the target of a logo request without implying a
 rename. Preserve accurate partial-save results and report actual unexpected
 changes or preservation failures; do not change internal safety checks.
 
+Keep script commands, raw progress/result JSON and internal status labels out
+of routine chat narration. Use concise, property-specific progress and results.
+Host-owned tool-execution cards may still be visible; do not promise to hide them.
+
 For "Show my agent name and logo" and equivalent current-value requests, run
 `python scripts/agent_basics.py view` and use that fresh result. A name-only
 view uses `view --name-only`. Do not answer from setup labels or route these
@@ -79,9 +83,10 @@ Render current-settings tables and current/proposed logo reviews in chat
 before opening input or approval dialogs. Keep dialogs text-only: no tables,
 images, HTML or manually aligned columns in questions, descriptions or options.
 For name/logo input, include a short target summary. Show name requirements
-only when asking for a missing name; do not add logo requirements or
-recommendations unless the uploaded image fails validation or the service
-rejects it. Do not put PNG guidance in a name question.
+only when asking for a missing name. Show the logo size recommendation in
+the logo-input context, not in a name question. Keep other logo requirements
+or format guidance for validation failures or service rejections.
+Do not put PNG guidance in a name question.
 For model-authored input, correction, gate-selection and approval descriptions,
 put Agent, Environment, Gate and any applicable Selected image or New name in
 separate paragraphs, with a blank line between every field. Single newlines
@@ -94,6 +99,12 @@ backslash text; omit irrelevant or unknown fields. Use plain-text paragraph
 content, not tables, images or HTML. Other hosts use their documented
 rich-text context equivalent.
 Keep helper-returned Studio confirmation dialogs verbatim.
+Preserve their wording and choices when adapting to the host's tool schema.
+In VS Code, map `logoConfirmation.dialog.title` to `header`,
+`logoConfirmation.dialog.question` to `question` and
+`logoConfirmation.dialog.description` to `message`, not an unsupported
+question-level `description`. Keep the exact returned agent URL in its own
+paragraph.
 For combined edits, ask separately for each missing value without repeating
 the visual table. Approval dialogs summarize the target, requested changes
 and Dev-draft-only consequence, referring to the visual review already in chat.
@@ -137,16 +148,20 @@ for a shorter name through the existing correction flow. Preserve any supplied
 logo, but do not save a combined proposal until its name is valid and it has
 fresh approval. Existing longer names remain viewable and can be retained
 during logo-only edits.
-For a missing logo, ask for the file without upload requirements, format
-lists or recommendations in chat or the dialog.
+For a missing logo, show "Recommended logo size: 192 x 192 pixels (not required)."
+in the existing file-selection dialog's context, after its target summary.
+If the logo was already supplied, show that recommendation once beside the
+existing visual review instead; do not ask for the file again.
+Show the size recommendation only once per proposal and never in a name-only
+question. Do not require 192x192 or add a new input or confirmation step.
 Show **Logo requirements** and **Logo recommendation (not a restriction)**
 only after an uploaded image fails validation or the service rejects the upload.
-A valid logo proceeds to review without this guidance.
 Label correction recommendations "Recommended, not required" in dialogs; never
 present the square 192x192 PNG recommendation as an upload restriction.
 If values were already supplied, proceed directly to validation and review
-without collecting the values again; do not repeat input help or
-recommendations in chat. For combined proposals, ask only for missing values.
+without collecting the values again. Apart from the logo size recommendation
+beside review, do not repeat input help or recommendations in chat.
+For combined proposals, ask only for missing values.
 Show correction guidance only for a relevant validation problem. Keep testing
 terminology and format lists out of routine chat;
 do not show unconfirmed-limits boilerplate in routine input or review.
@@ -199,8 +214,9 @@ mean the upload failed; platform processing is a possibility, not a confirmed
 cause. A failed latest recheck does not verify earlier images as current
 state. Do not add routine processing, exact-match, paused-save or maintainer
 paragraphs; explain them only when requested or needed for a real blocker.
-Do not claim "Logo updated successfully" without the existing saved-result
-verification, hide actual read/preservation failures or bypass reviewed recovery.
+Do not claim "Logo updated successfully" without a verified saved result or a
+successful review-bound Studio confirmation. A request acknowledgement alone
+is not enough. Do not hide actual read/preservation failures or bypass reviewed recovery.
 Replace the routine maintainer/resume dialog with the skill's single
 **Confirm update** check in Microsoft Copilot Studio. Run it immediately
 after save/recheck in the same update flow, not on the next change request.
@@ -221,6 +237,10 @@ On a submitted Yes/No, run `confirm-logo --decision yes|no --approval`
 with the nested `logoConfirmation.reviewId`. This is a local, review-bound
 resolution, not another upload or publication. Yes records the maker's
 Studio confirmation; No returns to ordinary correction/replacement review.
+After successful Studio confirmation, say "Your logo was updated successfully."
+or "Your agent name and logo were updated successfully.", matching the
+requested properties, followed by "These changes are not published."
+This acknowledges the maker's confirmation, not an automated exact-source match.
 Neither answer
 authorizes a new logo save. Preserve any already-supplied new request and
 require its ordinary fresh approval.
@@ -265,6 +285,11 @@ After a confirmed save, hand off to **Manage ESS releases from ADK** for any
 publication, promotion, deployment or approval. Do not invent a release command
 when that workflow is unavailable. Lead with the verified Dev draft result:
 publication is separate and does not block completion of the authoring task.
+Use the property-specific success sentence verbatim; do not shorten it to
+a generic confirmation.
+Use "Your agent name was updated successfully." for name-only,
+"Your logo was updated successfully." for logo-only, or
+"Your agent name and logo were updated successfully." for combined success.
 Show the confirmed changed properties in a final chat table with **Setting**,
 **Previous** and **Current** columns, using returned `comparison` values.
 Name-only shows the Agent name row; logo-only shows the Agent logo row; both
@@ -273,7 +298,7 @@ Keep completion preview copies until the next maker interaction, following
 `completionPreviewRetained` and the skill's cleanup rule. Unverified proposals
 must not appear as saved current values; explain partial outcomes separately.
 Explain that the save does not update the published version.
-Use "Not published. The published version was not updated by this save."
+Use "These changes are not published."
 For routine successful saves, omit Test/Prod reassurance and release-approval
 or employee-visibility verification disclaimers, including paraphrases.
 Do not turn internal release status fields into extra completion warnings.

@@ -6,12 +6,15 @@ from __future__ import annotations
 import copy
 import io
 import json
+import re
 import subprocess
 import sys
 import uuid
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
+from unittest import mock
 
 import pytest
 
@@ -160,10 +163,12 @@ def _add_current_agent_binding(
     )
     identity_sha256 = snow._canonical_json_hash(identity)
     state["evidence"]["agentConnection"] = {
-        "kind": "maker-attestation",
+        "kind": "binding-proof",
+        "mode": "adk-verified",
+        "verificationSource": "saved-draft-connection-reference",
+        "bindingVerified": True,
         "status": "completed",
         "recordedAt": "2026-10-01T00:00:00Z",
-        "makerAttested": True,
         "physicalStatus": "Connected",
         "authMode": snow.AUTH_MODE,
         "connectionId": CONNECTION_ID.replace("-", ""),
@@ -343,12 +348,14 @@ def _seed_passing_test(
     )
     identity_sha256 = snow._canonical_json_hash(identity)
     state["evidence"]["agentConnection"] = {
-        "kind": "maker-attestation",
+        "kind": "binding-proof",
+        "mode": "adk-verified",
+        "verificationSource": "saved-draft-connection-reference",
+        "bindingVerified": True,
         "status": "completed",
         "connectionId": normalized_connection_id,
         "physicalStatus": "Connected",
         "authMode": snow.AUTH_MODE,
-        "makerAttested": True,
         "recordedAt": "2026-10-01T00:00:00Z",
         "binding": {
             "bindingIdentity": identity,
@@ -459,10 +466,12 @@ def _seed_complete_dev_state(
             binding_identity
         )
         state["evidence"]["agentConnection"] = {
-            "kind": "maker-attestation",
+            "kind": "binding-proof",
+            "mode": "adk-verified",
+            "verificationSource": "saved-draft-connection-reference",
+            "bindingVerified": True,
             "status": "completed",
             "recordedAt": "2026-10-23T00:00:30Z",
-            "makerAttested": True,
             "physicalStatus": "Connected",
             "authMode": snow.AUTH_MODE,
             "connectionId": CONNECTION_ID.replace("-", ""),
@@ -661,6 +670,26 @@ def _seed_complete_dev_state(
         state_path.parent.mkdir(parents=True, exist_ok=True)
         state_path.write_text(json.dumps(state), encoding="utf-8")
     return context, state
+
+
+def _to_legacy_attested_shape(state: dict) -> dict:
+    """Rewrite current merged-phase evidence into the pre-v13 shape."""
+    record = state["evidence"]["agentConnection"]
+    for key in ("mode", "verificationSource", "bindingVerified"):
+        record.pop(key, None)
+    record["kind"] = "maker-attestation"
+    record["makerAttested"] = True
+    phases = {}
+    for phase_id, phase in state["phases"].items():
+        phases[phase_id] = phase
+        if phase_id == "credential":
+            phases["agent-connection"] = {
+                "status": "done",
+                "checkpointResults": {"legacy": "Manual"},
+                "checkpointAcknowledgements": {},
+            }
+    state["phases"] = phases
+    return state
 
 
 def _target_profile_components(
@@ -1192,7 +1221,6 @@ def _write_shared_target_state(
                 "credential",
                 "topics",
                 "portal-url",
-                "agent-connection",
                 "test",
             )
         }
@@ -1960,11 +1988,11 @@ def test_topic_activation_requires_current_agent_binding(
 
     with pytest.raises(
         snow.ServiceNowConnectError,
-        match="Confirm the exact current ServiceNow agent binding",
+        match="Create and connect ServiceNow first",
     ) as raised:
         snow.enable_all_servicenow_topics(_context(), confirmed=True)
 
-    assert raised.value.details["requiredPhase"] == "agent-connection"
+    assert raised.value.details["requiredPhase"] == "credential"
     assert update_calls == 0
 
 
@@ -2007,7 +2035,7 @@ def test_topic_and_portal_changes_preserve_binding_but_invalidate_final_test(
 
     loaded = snow._load_lifecycle_state(_context(), changed)
 
-    assert snow._agent_connection_attestation_current(loaded, changed) is True
+    assert snow._agent_binding_proof_current(loaded, changed) is True
     assert loaded["connectionBindingHash"] == old_binding_hash
     assert loaded["agentBindingIdentitySha256"] == state[
         "agentBindingIdentitySha256"
@@ -2063,7 +2091,7 @@ def test_binding_identity_changes_invalidate_agent_binding(
     assert current_hash != state["agentBindingIdentitySha256"]
     if change in {"connection", "reference-resource"}:
         assert (
-            snow._agent_connection_attestation_current(
+            snow._agent_binding_proof_current(
                 changed_state,
                 changed_components,
             )
@@ -2474,80 +2502,6 @@ def test_load_context_rejects_incomplete_foundation_step(
         snow.load_context(tmp_path)
 
 
-def test_record_agent_connection_validates_health_and_persists_attestation(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    state_path = (
-        tmp_path
-        / ".local"
-        / "connect"
-        / "servicenow"
-        / "agents"
-        / AGENT_ID
-        / "state.json"
-    )
-    state_path.parent.mkdir(parents=True)
-    state_path.write_text(
-        json.dumps(
-            {
-                "schemaVersion": 1,
-                "agentId": AGENT_ID,
-                "environmentId": ENVIRONMENT_ID,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    class FakeConnectivity:
-        def get_connection(self, connection_id: str) -> dict:
-            assert connection_id == CONNECTION_ID
-            return {
-                "name": CONNECTION_ID.replace("-", ""),
-                "properties": {
-                    "displayName": "ServiceNow",
-                    "statuses": [{"target": "token", "status": "Connected"}],
-                    "connectionParametersSet": {
-                        "name": "entraIDUserLogin",
-                    },
-                },
-            }
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(
-        snow,
-        "_connectivity_client",
-        lambda _context: FakeConnectivity(),
-    )
-    monkeypatch.setattr(
-        snow,
-        "_agentbuilder_client",
-        lambda _context: type(
-            "FakeAgentBuilder",
-            (),
-            {"fetch_components": lambda self, _agent_id: _components()},
-        )(),
-    )
-
-    result = snow.record_agent_connection_attestation(
-        _context(),
-        CONNECTION_ID,
-    )
-
-    assert result["connectionId"] == CONNECTION_ID.replace("-", "")
-    assert result["status"] == "completed"
-    assert result["binding"]["connectionId"] == result["connectionId"]
-    assert result["physicalStatus"] == "Connected"
-    assert result["makerAttested"] is True
-    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
-    assert state["evidence"]["agentConnection"]["makerAttested"] is True
-    assert (
-        state["evidence"]["agentConnection"]["binding"]["connectionId"]
-        == state["evidence"]["agentConnection"]["connectionId"]
-    )
-    assert state["migration"]["legacySourcePath"].endswith("state.json")
-
-
 @pytest.mark.parametrize("profile", ("hrsd", "itsm"))
 def test_publish_is_disabled_before_any_remote_client_or_write(
     monkeypatch: pytest.MonkeyPatch,
@@ -2664,8 +2618,7 @@ def test_generated_question_families_have_distinct_headers_and_bodies() -> None:
         options = question.get("options")
         if options:
             assert all(
-                option["label"].strip()
-                and option["label"].casefold() not in {"yes", "no"}
+                option["label"].strip() and len(option["label"]) <= 40
                 for option in options
             ), family
         else:
@@ -2678,7 +2631,7 @@ def test_generated_question_families_have_distinct_headers_and_bodies() -> None:
         field = adapted["askUserArguments"]["requestedSchema"][
             "properties"
         ]["response"]
-        assert field["description"] == question["question"], family
+        assert "description" not in field, family
         assert adapted["askUserArguments"]["requestedSchema"]["required"] == [
             "response"
         ], family
@@ -2720,7 +2673,6 @@ def test_ask_user_adapter_preserves_selection_values_and_freeform() -> None:
     assert field == {
         "type": "string",
         "title": "Selection",
-        "description": "Which prepared agent should be used?",
         "oneOf": [
             {
                 "const": "prepared:hr",
@@ -2748,9 +2700,6 @@ def test_ask_user_adapter_preserves_selection_values_and_freeform() -> None:
                 "response": {
                     "type": "string",
                     "title": "Input",
-                    "description": (
-                        "Enter the public ServiceNow HTTPS root URL."
-                    ),
                 }
             },
             "required": ["response"],
@@ -2790,7 +2739,7 @@ def test_adapt_question_cli_reads_canonical_json_from_stdin(
         "response"
     ]
     assert field["title"] == "Selection"
-    assert field["description"] == question["question"]
+    assert "description" not in field
     assert [item["title"] for item in field["oneOf"]] == [
         option["label"] for option in question["options"]
     ]
@@ -2808,6 +2757,7 @@ def test_schema_v7_retires_legacy_publish_without_resetting_test(
         profile="hrsd",
         legacy_publish_status=legacy_status,
     )
+    _to_legacy_attested_shape(state)
     state["schemaVersion"] = 6
     state["acceptedContractRevision"] = 8
     path = snow._lifecycle_state_path(context)
@@ -2817,7 +2767,7 @@ def test_schema_v7_retires_legacy_publish_without_resetting_test(
     with snow.product_profile_context("hrsd"):
         migrated = snow._load_lifecycle_state(context)
 
-    assert migrated["schemaVersion"] == 12
+    assert migrated["schemaVersion"] == snow.LIFECYCLE_SCHEMA_VERSION
     assert "publish" not in migrated["phases"]
     assert migrated["retiredPhases"]["publish"]["status"] == legacy_status
     assert migrated["evidence"]["publish"]["status"] == "completed"
@@ -2932,6 +2882,7 @@ def test_schema_v9_migrates_strict_binding_identity_and_final_test(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     context, state = _seed_complete_dev_state(tmp_path, profile="hrsd")
+    _to_legacy_attested_shape(state)
     state["schemaVersion"] = 9
     state["evidence"]["agentConnection"]["binding"] = {
         "provider": state["provider"],
@@ -2948,12 +2899,16 @@ def test_schema_v9_migrates_strict_binding_identity_and_final_test(
     with snow.product_profile_context("hrsd"):
         migrated = snow._load_lifecycle_state(context)
 
-    assert migrated["schemaVersion"] == 12
+    assert migrated["schemaVersion"] == snow.LIFECYCLE_SCHEMA_VERSION
     assert migrated["migration"]["schemaV10"]["bindingEvidenceMigrated"] is True
     assert migrated["migration"]["schemaV10"]["testEvidenceMigrated"] is True
-    assert list(migrated["phases"]).index("agent-connection") < list(
-        migrated["phases"]
-    ).index("topics")
+    assert "agent-connection" not in migrated["phases"]
+    assert migrated["retiredPhases"]["agent-connection"]["status"] == "done"
+    assert migrated["phases"]["credential"]["status"] == "done"
+    assert migrated["evidence"]["agentConnection"]["kind"] == "binding-proof"
+    assert migrated["evidence"]["agentConnection"]["verificationSource"] == (
+        "migrated-maker-attestation"
+    )
     assert migrated["evidence"]["agentConnection"]["binding"][
         "bindingIdentitySha256"
     ] == migrated["agentBindingIdentitySha256"]
@@ -2962,12 +2917,40 @@ def test_schema_v9_migrates_strict_binding_identity_and_final_test(
     ] == migrated["connectionBindingHash"]
 
 
+def test_schema_v12_pending_binding_resets_merged_phase_and_keeps_retired(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, state = _seed_complete_dev_state(tmp_path, profile="hrsd")
+    _to_legacy_attested_shape(state)
+    state["schemaVersion"] = 12
+    state["phases"]["agent-connection"]["status"] = "pending"
+    state["phases"]["agent-connection"]["checkpointResults"] = {}
+    state["evidence"]["agentConnection"]["makerAttested"] = False
+    path = snow._lifecycle_state_path(context)
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    with snow.product_profile_context("hrsd"):
+        migrated = snow._load_lifecycle_state(context)
+
+    assert migrated["schemaVersion"] == snow.LIFECYCLE_SCHEMA_VERSION
+    assert "agent-connection" not in migrated["phases"]
+    assert migrated["retiredPhases"]["agent-connection"]["status"] == "pending"
+    assert migrated["phases"]["credential"]["status"] == "pending"
+    assert "agentConnection" not in migrated["evidence"]
+    assert "agentConnectionSchemaV12" in migrated["retiredEvidence"]
+    assert "agentBindingIdentitySha256" not in migrated
+    assert "connectionBindingHash" not in migrated
+
+
 def test_schema_v9_untrusted_binding_resets_later_phases_without_remote_change(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     context, state = _seed_complete_dev_state(tmp_path, profile="itsm")
+    _to_legacy_attested_shape(state)
     state["schemaVersion"] = 9
     state["evidence"]["credential"].pop("resourceUri")
     state["phases"]["agent-connection-and-test"] = {
@@ -2979,7 +2962,7 @@ def test_schema_v9_untrusted_binding_resets_later_phases_without_remote_change(
         path.write_text(json.dumps(state), encoding="utf-8")
         migrated = snow._load_lifecycle_state(context)
 
-    assert migrated["schemaVersion"] == 12
+    assert migrated["schemaVersion"] == snow.LIFECYCLE_SCHEMA_VERSION
     migration = migrated["migration"]["schemaV10"]
     assert migration["bindingEvidenceMigrated"] is False
     assert migration["testEvidenceMigrated"] is False
@@ -2992,7 +2975,9 @@ def test_schema_v9_untrusted_binding_resets_later_phases_without_remote_change(
     assert migrated["retiredPhases"]["agent-connection-and-test"][
         "status"
     ] == "done"
-    for phase_id in ("agent-connection", "topics", "portal-url", "test"):
+    assert "agent-connection" not in migrated["phases"]
+    assert "agent-connection" in migrated["retiredPhases"]
+    for phase_id in ("topics", "portal-url", "test"):
         assert migrated["phases"][phase_id]["status"] == "pending"
     assert migrated["componentHash"] == state["componentHash"]
 
@@ -3158,39 +3143,6 @@ def test_reconcile_publish_receipt_rejects_revision_drift(
     assert unchanged["evidence"]["publish"]["componentHash"] == "a" * 64
 
 
-def test_record_agent_connection_rejects_unsupported_auth_mode(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FakeConnectivity:
-        def get_connection(self, _connection_id: str) -> dict:
-            return {
-                "name": CONNECTION_ID.replace("-", ""),
-                "properties": {
-                    "displayName": "ServiceNow",
-                    "statuses": [{"target": "token", "status": "Connected"}],
-                    "connectionParametersSet": {"name": "oauth2"},
-                },
-            }
-
-    monkeypatch.setattr(
-        snow,
-        "_connectivity_client",
-        lambda _context: FakeConnectivity(),
-    )
-
-    with pytest.raises(
-        snow.ServiceNowConnectError,
-        match="Microsoft Entra ID User Login",
-    ):
-        snow.record_agent_connection_attestation(
-            {
-                "agent": {"id": AGENT_ID},
-                "environment": {"id": ENVIRONMENT_ID},
-            },
-            CONNECTION_ID,
-        )
-
-
 def test_inspect_preserves_progress_and_reports_completed_steps(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3274,12 +3226,10 @@ def test_inspect_preserves_progress_and_reports_completed_steps(
         "maker-ui"
     )
     assert result["progress"]["topics"]["status"] == "done"
-    assert result["progress"]["credential"]["status"] == "done"
+    assert result["progress"]["credential"]["status"] == "pending"
+    assert "must be verified" in result["progress"]["credential"]["message"]
+    assert "agentConnection" not in result["progress"]
     assert result["progress"]["legacyPublish"]["status"] == "historical"
-    assert (
-        result["progress"]["agentConnection"]["status"]
-        == "confirmation-required"
-    )
     assert "parameterSharing" not in result["progress"]
     assert result["progress"]["test"]["status"] == "pending"
     state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
@@ -3584,7 +3534,8 @@ def test_inspect_live_uses_components_and_connection_list_only(
     assert result["connectivity"]["userConnectionBinding"]["mode"] == (
         "maker-ui"
     )
-    assert result["progress"]["credential"]["status"] == "done"
+    assert result["progress"]["credential"]["status"] == "pending"
+    assert "must be verified" in result["progress"]["credential"]["message"]
     assert persisted[-1]["evidence"]["lastInspection"] == result
     assert "connector" not in persisted[-1]["evidence"]["lastInspection"][
         "connectivity"
@@ -4472,36 +4423,38 @@ def test_preflight_requires_maker_confirmation_for_single_candidate(
         "https://dev123.service-now.com"
     ]
     assert discovery["instanceQuestion"]["options"] == [
-        {"label": "Use https://dev123.service-now.com"},
-        {"label": "Provide another ServiceNow instance URL"},
+        {"label": "Yes"},
+        {"label": "No"},
     ]
+    assert discovery["instanceQuestion"]["header"] == (
+        "Should Employee Self-Service HR use the ServiceNow instance "
+        "dev123?"
+    )
     candidate_body = discovery["instanceQuestion"]["question"]
-    assert "We found ServiceNow instance candidate" in candidate_body
-    assert "Employee Self-Service (HR)" in candidate_body
-    assert "employee-self-service-hr" in candidate_body
-    assert ENVIRONMENT_ID in candidate_body
-    assert "Dev realm" in candidate_body
-    assert "Which instance should this agent use" in candidate_body
+    assert "We found **dev123** in your existing connections." in (
+        candidate_body
+    )
+    assert ENVIRONMENT_ID not in candidate_body
     assert "**Problem**" not in candidate_body
     assert "**Category**" not in candidate_body
     assert "**Check again and resume**" not in candidate_body
     manual = discovery["manualInstanceQuestion"]
     assert manual["allowFreeformInput"] is True
-    assert "Employee Self-Service (HR)" in manual["question"]
-    assert ENVIRONMENT_ID in manual["question"]
+    assert manual["header"] == (
+        "Which ServiceNow instance should Employee Self-Service HR use?"
+    )
+    assert ENVIRONMENT_ID not in manual["question"]
     assert "`https://<your-instance>.service-now.com`" in manual["question"]
     assert "ask your ServiceNow administrator" in manual["question"]
     assert "/sp" in manual["question"]
-    assert "password" in manual["question"]
-    assert "token" in manual["question"]
-    assert discovery["instanceChoices"][
-        "Use https://dev123.service-now.com"
-    ] == "https://dev123.service-now.com"
+    assert "credentials" in manual["question"]
+    assert discovery["instanceChoices"]["Yes"] == (
+        "https://dev123.service-now.com"
+    )
+    assert discovery["instanceChoices"]["No"] == "manual"
     recorded = snow.record_preflight_instance(
         _context(),
-        instance_url=discovery["instanceChoices"][
-            "Use https://dev123.service-now.com"
-        ],
+        instance_url=discovery["instanceChoices"]["Yes"],
     )
     refreshed = snow.inspect_admin_setup(_context())
     _record_test_identity_mapping(tmp_path)
@@ -4564,13 +4517,14 @@ def test_preflight_requests_only_missing_instance_url(
         discovery["manualInstanceQuestion"]
     )
     manual_body = discovery["instanceQuestion"]["question"]
-    assert "employee-self-service-hr" in manual_body
-    assert ENVIRONMENT_ID in manual_body
-    assert "Dev realm" in manual_body
+    assert discovery["instanceQuestion"]["header"] == (
+        "Which ServiceNow instance should Employee Self-Service HR use?"
+    )
+    assert ENVIRONMENT_ID not in manual_body
     assert "`https://<your-instance>.service-now.com`" in manual_body
-    assert "public ServiceNow HTTPS root URL" in manual_body
-    assert "portal or module path" in manual_body
-    assert "credential" in manual_body
+    assert "public HTTPS URL, not credentials" in manual_body
+    assert "portal path" in manual_body
+    assert "ask your ServiceNow administrator" in manual_body
     assert recorded["instanceName"] == "dev123"
     assert refreshed["instanceInputRequired"] is False
     assert "scenario" not in recorded
@@ -4601,28 +4555,44 @@ def test_preflight_multiple_candidates_are_independent_normal_choices(
             discovery_error=None,
         )
 
+    assert question["header"] == (
+        f"Should {display_name.replace('(', '').replace(')', '')} use the "
+        "ServiceNow instance dev111?"
+    )
     assert [option["label"] for option in question["options"]] == [
-        "Use https://dev111.service-now.com",
-        "Use https://dev222.service-now.com",
-        "Provide another ServiceNow instance URL",
+        "Yes",
+        "No",
     ]
     assert not any(
         option.get("recommended") for option in question["options"]
     )
     assert choices == {
-        "Use https://dev111.service-now.com": (
-            "https://dev111.service-now.com"
-        ),
-        "Use https://dev222.service-now.com": (
-            "https://dev222.service-now.com"
-        ),
-        "Provide another ServiceNow instance URL": "manual",
+        "Yes": "https://dev111.service-now.com",
+        "No": "next",
     }
-    assert display_name in question["question"]
-    assert slug in question["question"]
+    assert slug not in question["question"]
     assert "**Problem**" not in question["question"]
-    assert manual["header"] == "ServiceNow instance URL"
     assert "`https://<your-instance>.service-now.com`" in manual["question"]
+    assert manual["allowFreeformInput"] is True
+    assert "options" not in manual
+    with snow.product_profile_context(profile):
+        follow_ups = snow._instance_follow_up_questions(
+            candidates=["dev111", "dev222"],
+            discovery_error=None,
+        )
+    assert len(follow_ups) == 1
+    assert follow_ups[0]["question"]["header"] == (
+        f"Should {display_name.replace('(', '').replace(')', '')} use the "
+        "ServiceNow instance dev222?"
+    )
+    assert [o["label"] for o in follow_ups[0]["question"]["options"]] == [
+        "Yes",
+        "No",
+    ]
+    assert follow_ups[0]["choiceValues"] == {
+        "Yes": "https://dev222.service-now.com",
+        "No": "manual",
+    }
 
 
 def test_preflight_keeps_confirmed_instance_when_new_connection_appears(
@@ -4714,6 +4684,114 @@ def test_resolve_credential_automatically_records_unique_healthy_exact(
     )
 
 
+@pytest.mark.parametrize(
+    ("scenario", "blocking_issue", "message_part"),
+    (
+        ("not-selected", "agent-not-bound", "don't use it yet"),
+        ("other-connection", "agent-bound-elsewhere", "different ServiceNow"),
+        ("other-instance", "agent-binding-mismatch", "instance name"),
+    ),
+)
+def test_credential_completion_blocks_without_saved_agent_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    scenario: str,
+    blocking_issue: str,
+    message_part: str,
+) -> None:
+    record = _connection_record(display_name="Existing ServiceNow")
+    components = _components(CONNECTION_ID)
+    reference_change = components["connectionReferenceChanges"][0]
+    reference = reference_change["connectionReference"]
+    if scenario == "not-selected":
+        reference["connectionId"] = None
+    elif scenario == "other-connection":
+        reference["connectionId"] = "00000000-0000-4000-8000-000000009999"
+    elif scenario == "other-instance":
+        parameters = json.loads(reference["sharedConnectionParameters"])
+        parameters["values"]["token:InstanceName"]["value"] = "other"
+        reference["sharedConnectionParameters"] = json.dumps(parameters)
+
+    class FakeConnectivity:
+        def list_connections(self) -> list[dict]:
+            return [record]
+
+        def get_connection(self, connection_id: str) -> dict:
+            return record
+
+    monkeypatch.chdir(tmp_path)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_connectivity_client",
+        lambda _context: FakeConnectivity(),
+    )
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: type(
+            "FakeAgentBuilder",
+            (),
+            {"fetch_components": lambda self, _agent_id: components},
+        )(),
+    )
+
+    with pytest.raises(snow.ServiceNowConnectError) as caught:
+        snow.resolve_credential_completion(_context())
+
+    assert message_part in str(caught.value)
+    assert caught.value.details["blockingIssue"] == blocking_issue
+    assert caught.value.details["requiredPhase"] == "credential"
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    assert "credential" not in state["evidence"]
+    assert "agentConnection" not in state["evidence"]
+    assert state["phases"].get("credential", {}).get("status") != "done"
+
+
+def test_credential_completion_records_both_proofs_together(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    record = _connection_record(display_name="Existing ServiceNow")
+
+    class FakeConnectivity:
+        def list_connections(self) -> list[dict]:
+            return [record]
+
+        def get_connection(self, connection_id: str) -> dict:
+            return record
+
+    components = _components(CONNECTION_ID)
+    monkeypatch.chdir(tmp_path)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_connectivity_client",
+        lambda _context: FakeConnectivity(),
+    )
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: type(
+            "FakeAgentBuilder",
+            (),
+            {"fetch_components": lambda self, _agent_id: components},
+        )(),
+    )
+
+    snow.resolve_credential_completion(_context())
+
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    proof = state["evidence"]["agentConnection"]
+    assert proof["kind"] == "binding-proof"
+    assert proof["verificationSource"] == "saved-draft-connection-reference"
+    assert state["agentBindingIdentitySha256"] == proof["binding"][
+        "bindingIdentitySha256"
+    ]
+    assert state["connectionBindingHash"]
+    assert snow._agent_binding_proof_current(state, components) is True
+
+
 def test_resolve_credential_requires_bounded_choice_for_multiple_exact(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -4751,7 +4829,7 @@ def test_resolve_credential_requires_bounded_choice_for_multiple_exact(
             (),
             {
                 "fetch_components": lambda self, _agent_id: _components(
-                    first_id
+                    second_id
                 )
             },
         )(),
@@ -4763,6 +4841,27 @@ def test_resolve_credential_requires_bounded_choice_for_multiple_exact(
     assert [candidate["label"] for candidate in choice["candidates"]] == [
         "ServiceNow A (Connected, option 1)",
         "ServiceNow B (Connected, option 2)",
+    ]
+    first_card = choice["question"]
+    assert first_card["header"] == (
+        "Use the ServiceNow connection ServiceNow A (Connected, option 1)?"
+    )
+    assert [option["label"] for option in first_card["options"]] == [
+        "Yes",
+        "No",
+    ]
+    assert choice["questionSelectionKey"] == (
+        choice["candidates"][0]["selectionKey"]
+    )
+    assert len(choice["followUpQuestions"]) == 1
+    follow_up = choice["followUpQuestions"][0]
+    assert follow_up["selectionKey"] == choice["candidates"][1]["selectionKey"]
+    assert follow_up["question"]["header"] == (
+        "Use the ServiceNow connection ServiceNow B (Connected, option 2)?"
+    )
+    assert [o["label"] for o in follow_up["question"]["options"]] == [
+        "Yes",
+        "No",
     ]
     serialized = json.dumps(choice)
     assert first_id not in serialized
@@ -4817,9 +4916,184 @@ def test_resolve_credential_rejects_nonhealthy_or_nonexact_candidates(
     result = snow.resolve_credential_completion(_context())
 
     assert result["status"] == "not-ready"
-    assert "No exact healthy Connected" in result["remediation"]
+    assert "Copilot Studio" in result["remediation"]
+    assert result["connectionsSeen"] == 1
     state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
     assert "credential" not in state["evidence"]
+
+
+@pytest.mark.parametrize(
+    ("record", "differences", "phrase"),
+    [
+        (
+            _connection_record(
+                resource_uri="00000000-0000-4000-8000-000000009999"
+            ),
+            ["resourceUri"],
+            "its Resource URI isn't the one listed below",
+        ),
+        (
+            _connection_record(instance_name="dev456"),
+            ["instance"],
+            "its Instance Name isn't the one listed below",
+        ),
+        (
+            _connection_record(auth_mode="oauth2"),
+            ["signIn"],
+            "its sign-in type isn't Microsoft Entra ID User Login",
+        ),
+        (
+            _connection_record(status="Disconnected"),
+            None,
+            "doesn't show Connected",
+        ),
+    ],
+)
+def test_resolve_credential_names_the_field_that_did_not_match(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    record: dict,
+    differences: list[str] | None,
+    phrase: str,
+) -> None:
+    class FakeConnectivity:
+        def list_connections(self) -> list[dict]:
+            return [record]
+
+    monkeypatch.chdir(tmp_path)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.setattr(
+        snow, "_connectivity_client", lambda _context: FakeConnectivity()
+    )
+
+    result = snow.resolve_credential_completion(_context())
+
+    assert result["status"] == "not-ready"
+    assert phrase in result["remediation"]
+    assert "card" not in result["remediation"]
+    assert "**Instance name:** `dev123`" in result["remediation"]
+    assert "**Resource URI:** `00000000-0000-4000-8000-000000006666`" in (
+        result["remediation"]
+    )
+    if differences is not None:
+        assert result["closestDifferences"] == differences
+        assert "We can see 1 ServiceNow connection" in result["remediation"]
+        assert ("Entra administrator" in result["remediation"]) == (
+            "resourceUri" in differences
+        )
+
+
+def test_agent_can_switch_to_another_agents_app_and_share_its_connection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    placeholder_app = "00000000-0000-4000-8000-000000007777"
+    monkeypatch.chdir(tmp_path)
+    context = _context_at(tmp_path)
+    state = snow._state_base(context, _components())
+    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
+    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
+    snow.record_identity_direct(
+        context,
+        stage="entra",
+        client_id=placeholder_app,
+        claim_name="payrollid",
+        user_field=None,
+        confirmed=True,
+    )
+    snow.record_identity_direct(
+        context,
+        stage="servicenow",
+        client_id=None,
+        claim_name=None,
+        user_field="u_payroll_id",
+        confirmed=True,
+    )
+    old = snow._load_lifecycle_state(context)
+    assert old["adminSetup"]["phaseHandoffs"]["servicenow-oidc"][
+        "status"
+    ] == "completed"
+
+    snow.record_identity_direct(
+        context,
+        stage="entra",
+        client_id=APP_CLIENT_ID,
+        claim_name="payrollid",
+        user_field=None,
+        confirmed=True,
+    )
+    switched = snow._load_lifecycle_state(context)
+    handoffs = switched["adminSetup"]["phaseHandoffs"]
+    assert handoffs["entra-registration"]["evidence"]["clientId"] == (
+        APP_CLIENT_ID
+    )
+    assert handoffs["entra-registration"]["evidence"][
+        "selectedClaimName"
+    ] == "payrollid"
+    assert handoffs["servicenow-oidc"] == {"status": "pending"}
+    assert handoffs["credential"] == {"status": "pending"}
+
+    snow.record_identity_direct(
+        context,
+        stage="servicenow",
+        client_id=None,
+        claim_name=None,
+        user_field="u_payroll_id",
+        confirmed=True,
+    )
+    shared = _connection_record(display_name="Shared ServiceNow")
+
+    class FakeConnectivity:
+        def list_connections(self) -> list[dict]:
+            return [shared]
+
+        def get_connection(self, connection_id: str) -> dict:
+            return shared
+
+    monkeypatch.setattr(
+        snow, "_connectivity_client", lambda _context: FakeConnectivity()
+    )
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: type(
+            "FakeAgentBuilder",
+            (),
+            {
+                "fetch_components": lambda self, _agent_id: _components(
+                    CONNECTION_ID
+                )
+            },
+        )(),
+    )
+
+    result = snow.resolve_credential_completion(context)
+
+    assert result["status"] == "selected"
+    final = snow._load_lifecycle_state(context)
+    assert final["adminSetup"]["phaseHandoffs"]["credential"]["status"] == (
+        "completed"
+    )
+
+
+def test_resolve_credential_says_when_no_connection_exists(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FakeConnectivity:
+        def list_connections(self) -> list[dict]:
+            return []
+
+    monkeypatch.chdir(tmp_path)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.setattr(
+        snow, "_connectivity_client", lambda _context: FakeConnectivity()
+    )
+
+    result = snow.resolve_credential_completion(_context())
+
+    assert result["connectionsSeen"] == 0
+    assert "can't see any ServiceNow connection" in result["remediation"]
 
 
 def test_resolve_credential_read_failure_is_explicit_nonzero(
@@ -4854,7 +5128,7 @@ def test_resolve_credential_read_failure_is_explicit_nonzero(
     recovery = error["details"]["recoveryHandoff"]
     _assert_recovery_handoff(recovery)
     assert recovery["category"] == "Read or network error"
-    assert recovery["owner"] == "Power Platform Maker/Admin"
+    assert recovery["owner"] == "ESS Maker / Agent Developer"
 
 
 def test_resolve_credential_rejects_stale_selection_key(
@@ -4949,30 +5223,26 @@ def test_shared_reuse_partial_hr_to_it_requires_one_maker_acceptance(
             "servicenow-oidc",
         ]
         assert handoff["question"]["options"] == [
-            {"label": "Reuse shared identity"},
-            {"label": "Configure separately"},
-            {"label": "Not now"},
+            {"label": "Yes"},
+            {"label": "No"},
         ]
-        assert handoff["question"]["header"] == "Reuse shared identity"
+        assert handoff["question"]["header"] == (
+            "Reuse the shared setup from your existing HR agent?"
+        )
         assert handoff["reuseDecisionChoices"] == [
-            {
-                "label": "Reuse shared identity",
-                "decision": "accept",
-            },
-            {"label": "Configure separately", "decision": "decline"},
-            {"label": "Not now", "decision": "not-now"},
+            {"label": "Yes", "decision": "accept"},
+            {"label": "No", "decision": "decline"},
         ]
         body = handoff["question"]["question"]
-        assert "Employee Self-Service (IT)" in body
-        assert "employee-self-service-it" in body
-        assert ENVIRONMENT_ID in body
-        assert "Confirmed ServiceNow instance: `dev123`" in body
-        assert "HRSD agent `employee-self-service-hr`" in body
+        for technical in ("Current target:", "Environment:", "Realm:", "Agent:"):
+            assert technical not in body
+        assert ENVIRONMENT_ID not in body
+        assert "employee-self-service-hr" not in body
         assert "Entra administrator-confirmed application" in body
         assert "Current target-bound ServiceNow user-field mapping" in body
         assert "Physical ServiceNow" not in body
         assert "fresh read of that exact connection" not in body
-        assert "each owning readiness check still runs" in body
+        assert "each readiness check still runs" in body
 
         result = snow.apply_shared_configuration_reuse(
             context,
@@ -5531,7 +5801,7 @@ def test_resume_offers_shared_reuse_before_entra_availability(
     assert saved["phases"]["credential"]["status"] == "pending"
     assert saved["phases"]["topics"]["status"] == "pending"
     assert saved["phases"]["portal-url"]["status"] == "pending"
-    assert saved["phases"]["agent-connection"]["status"] == "pending"
+    assert "agent-connection" not in saved["phases"]
     assert saved["phases"]["test"]["status"] == "pending"
 
 
@@ -5666,7 +5936,23 @@ def test_it_cli_resume_offers_compatible_hr_reuse_before_availability(
     if decision == "not-now":
         assert snow.main(resume) == 0
         repeated = json.loads(capsys.readouterr().out)
-        assert repeated == first
+
+        def stable(output: dict) -> dict:
+            # The checklist is shown once per change, so only the text differs.
+            kept = {
+                key: value
+                for key, value in output.items()
+                if key not in {"chatMessage", "renderBlock", "transport"}
+            }
+            internal = dict(output["transport"]["internal"])
+            internal.pop("ordinaryReply", None)
+            kept["transport"] = {
+                **output["transport"],
+                "internal": internal,
+            }
+            return kept
+
+        assert stable(repeated) == stable(first)
         assert target_path.read_bytes() == target_before
     else:
         assert snow.main(
@@ -5728,7 +6014,6 @@ def test_it_cli_resume_offers_compatible_hr_reuse_before_availability(
                 assert key not in saved["evidence"]
             for phase in (
                 "credential",
-                "agent-connection",
                 "topics",
                 "portal-url",
                 "test",
@@ -5832,6 +6117,50 @@ def test_declined_entra_does_not_offer_dependent_oidc(
         second = snow.shared_reuse_handoff(context)
 
     assert second["decision"] == "already-recorded"
+
+
+def test_shared_reuse_asks_yes_no_about_each_source_in_turn(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    for slug, agent_id in (
+        ("hr-source-a", AGENT_ID),
+        ("hr-source-b", "00000000-0000-4000-8000-000000002224"),
+    ):
+        _write_shared_source_state(
+            tmp_path,
+            profile="hrsd",
+            agent_id=agent_id,
+            agent_slug=slug,
+            include_oidc=False,
+            include_credential=False,
+        )
+    context, _target_path = _write_shared_target_state(
+        tmp_path,
+        profile="itsm",
+        agent_id=OTHER_AGENT_ID,
+        agent_slug="employee-self-service-it",
+        instance_name="dev123",
+    )
+    with snow.product_profile_context("itsm"):
+        first = snow.shared_reuse_handoff(context)
+        assert first["decision"] == "question-required"
+        assert first["moreCandidates"] is True
+        assert [o["label"] for o in first["question"]["options"]] == [
+            "Yes",
+            "No",
+        ]
+        snow.apply_shared_configuration_reuse(
+            context,
+            source_key=first["candidate"]["sourceKey"],
+            decision="decline",
+        )
+        second = snow.shared_reuse_handoff(context)
+
+    assert second["decision"] == "question-required"
+    assert second["moreCandidates"] is False
+    assert second["candidate"]["sourceKey"] != first["candidate"]["sourceKey"]
 
 
 def test_identity_item_decision_history_preserves_prior_acceptance(
@@ -6062,10 +6391,13 @@ def test_saved_portal_value_persists_and_reloads_for_future_agent(
         "https://dev123.service-now.com/employee"
     )
     assert offer["question"]["options"] == [
-        {"label": "Reuse saved portal URL"},
-        {"label": "Enter separately"},
-        {"label": "Not now"},
+        {"label": "Yes"},
+        {"label": "No"},
     ]
+    assert offer["question"]["header"] == (
+        "Reuse the saved employee portal URL "
+        "https://dev123.service-now.com/employee?"
+    )
     assert accepted["decision"] == "accepted"
     assert resumed["decision"] == "already-recorded"
     assert resumed["record"]["portalUrl"] == accepted["portalUrl"]
@@ -6258,15 +6590,24 @@ def test_saved_portal_value_deduplicates_and_requires_value_selection(
     with snow.product_profile_context("itsm"):
         handoff = snow.portal_value_reuse_handoff(context)
 
-    assert handoff["decision"] == "source-selection-required"
-    assert len(handoff["candidates"]) == 2
-    employee = next(
-        candidate
-        for candidate in handoff["candidates"]
-        if candidate["portalUrl"].endswith("/employee")
-    )
+    assert handoff["decision"] == "question-required"
+    assert handoff["candidate"]["portalUrl"].endswith("/employee")
+    assert handoff["nextSourceKey"] is not None
+    assert [choice["label"] for choice in handoff["portalDecisionChoices"]] == [
+        "Yes",
+        "No",
+    ]
+    employee = handoff["candidate"]
     assert len(employee["sources"]) == 2
     assert len(employee["sourceLabels"]) == 2
+    with snow.product_profile_context("itsm"):
+        second = snow.portal_value_reuse_handoff(
+            context,
+            source_key=handoff["nextSourceKey"],
+        )
+    assert second["decision"] == "question-required"
+    assert second["candidate"]["portalUrl"].endswith("/esc")
+    assert second["nextSourceKey"] is None
 
 
 @pytest.mark.parametrize(
@@ -6431,9 +6772,9 @@ def test_local_confirmed_instance_is_preflight_candidate_only(
     assert discovery["instanceCandidates"] == [
         "https://dev123.service-now.com"
     ]
-    assert discovery["instanceChoices"][
-        "Use https://dev123.service-now.com"
-    ] == "https://dev123.service-now.com"
+    assert discovery["instanceChoices"]["Yes"] == (
+        "https://dev123.service-now.com"
+    )
     saved = json.loads(target_path.read_text(encoding="utf-8"))
     assert saved["adminSetup"]["preflight"].get("instanceName") is None
     assert saved["adminSetup"]["phaseHandoffs"]["preflight"] == {
@@ -6809,7 +7150,6 @@ def test_legacy_candidate_receipt_does_not_replace_setup_confirmation(
                 "credential",
                 "topics",
                 "portal-url",
-                "agent-connection",
                 "test",
                 "publish",
             )
@@ -7123,7 +7463,7 @@ def test_historical_graph_pass_reapproval_advances_without_new_admin_handoff(
         )
 
     migrated = json.loads(state_path.read_text(encoding="utf-8"))
-    assert migrated["schemaVersion"] == 12
+    assert migrated["schemaVersion"] == snow.LIFECYCLE_SCHEMA_VERSION
     migrated_evidence = migrated["adminSetup"]["phaseHandoffs"][
         "entra-registration"
     ]["evidence"]
@@ -7176,6 +7516,148 @@ def test_historical_graph_pass_reapproval_advances_without_new_admin_handoff(
         )
 
 
+def _ready_to_send_body(ordinary: str) -> str:
+    assert ordinary.count("**Ready-to-send message**") == 1
+    match = re.search(
+        r"\*\*Ready-to-send message\*\*\n(`{3,})text\n(.*?)\n\1(?:\n|$)",
+        ordinary,
+        re.DOTALL,
+    )
+    assert match is not None
+    return match.group(2)
+
+
+@pytest.mark.parametrize("profile_key", ("hrsd", "itsm"))
+def test_ready_to_send_messages_are_wrapped_in_one_fenced_block(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile_key: str,
+) -> None:
+    scenario = tmp_path / profile_key
+    scenario.mkdir()
+    monkeypatch.chdir(scenario)
+    context = _profile_context(
+        profile_key,
+        agent_id=AGENT_ID if profile_key == "hrsd" else OTHER_AGENT_ID,
+        agent_slug=(
+            "employee-self-service-hr"
+            if profile_key == "hrsd"
+            else "employee-self-service-it"
+        ),
+    )
+    context["root"] = scenario
+    with snow.product_profile_context(profile_key):
+        state = snow._state_base(
+            context,
+            _components() if profile_key == "hrsd" else _itsm_components(),
+        )
+        state["adminSetup"]["preflight"]["instanceName"] = "dev123"
+        snow._write_json_atomic(snow._lifecycle_state_path(context), state)
+        _ack_identity_availability(context, stage="entra")
+        entra = snow.identity_direct_handoff(context, stage="entra")
+        snow.record_identity_direct(
+            context,
+            stage="entra",
+            client_id=APP_CLIENT_ID,
+            claim_name="employee_id",
+            user_field=None,
+            confirmed=True,
+        )
+        _ack_identity_availability(context, stage="servicenow")
+        service_now = snow.identity_direct_handoff(
+            context,
+            stage="servicenow",
+        )
+        expected_service_now = snow._first_agent_servicenow_packet(
+            instance_name="dev123",
+            client_id=APP_CLIENT_ID,
+            tenant_id=TENANT_ID,
+            claim_name="employee_id",
+        )
+        expected_entra = snow._first_agent_entra_packet("dev123")
+        plugin = (
+            snow._current_task_guidance(
+                context,
+                snow._load_lifecycle_state(context),
+                phase_id="plugin-prerequisites",
+                role="ServiceNow administrator",
+            )
+            if profile_key == "hrsd"
+            else None
+        )
+
+    assert _ready_to_send_body(entra["ordinaryReply"]["text"]) == (
+        expected_entra
+    )
+    assert _ready_to_send_body(service_now["ordinaryReply"]["text"]) == (
+        expected_service_now
+    )
+    if plugin is not None:
+        body = _ready_to_send_body(plugin)
+        instance_url = "https://dev123.service-now.com"
+        assert body == (
+            "We're connecting **Employee Self-Service HR** to ServiceNow HR "
+            f"Service Delivery on [**{instance_url}**]({instance_url}).\n\n"
+            "Please confirm that the **HR Service Delivery Core** plugin "
+            "(`com.sn_hr_core`) is installed and active:\n\n"
+            "1. In ServiceNow, go to **All > System Definition > Plugins**.\n"
+            "2. Search for **Human Resources Scoped App: Core**.\n"
+            "3. Confirm whether it is installed and active.\n\n"
+            "**Please send back:** confirmation that the plugin is "
+            "installed and active on this instance. If it isn't, tell us "
+            "what remains to be completed."
+        )
+        assert "src/skills" not in body
+        assert "timestamp" not in body
+        for technical in (
+            "**Current task**",
+            "**Where and how**",
+            "**Expected nonsecret evidence**",
+            "**Completion boundary**",
+        ):
+            assert technical not in plugin
+    assert "```" not in expected_entra + expected_service_now
+    entra_lead_in = entra["ordinaryReply"]["text"].split(
+        "**Ready-to-send message**"
+    )[0]
+    assert entra_lead_in.endswith(
+        (
+            "The HR prerequisite is confirmed. Next, send"
+            if profile_key == "hrsd"
+            else "Next, send"
+        )
+        + " this message to your Microsoft Entra administrator to prepare "
+        "ServiceNow sign-in.\n\n"
+        "When they reply, paste their response here without secrets. "
+        "We'll use it to prepare the ServiceNow handoff; you don't need to "
+        "interpret the settings.\n\n"
+    )
+    for technical in (
+        "Target agent:",
+        "Tenant:",
+        "ServiceNow instance:",
+        "Current contract boundary",
+    ):
+        assert technical not in entra["ordinaryReply"]["text"]
+        assert technical not in service_now["ordinaryReply"]["text"]
+    assert "contractBoundary" in entra and "target" in entra
+    assert service_now["ordinaryReply"]["text"].split(
+        "**Ready-to-send message**"
+    )[0].endswith(
+        "We have the Entra values. Send this message to your ServiceNow "
+        "administrator to set up employee matching.\n\n"
+        "It includes the values already supplied. When they reply, paste "
+        "their saved-configuration confirmation, **User Claim**, and "
+        "**User Field** here without secrets.\n\n"
+    )
+    if plugin is not None:
+        assert plugin.split("**Ready-to-send message**")[0].endswith(
+            "First, your ServiceNow administrator needs to confirm that this "
+            "instance supports the HR scenarios.\n\n"
+            "Send them this message. When they reply, paste their "
+            "confirmation here.\n\n"
+        )
+
 @pytest.mark.parametrize("profile_key", ("hrsd", "itsm"))
 def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     monkeypatch: pytest.MonkeyPatch,
@@ -7211,17 +7693,21 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     assert gated["decision"] == "availability-required"
     assert gated["ordinaryReply"] is None
     assert gated["questions"] == []
-    assert gated["availability"]["question"]["question"] == (
-        "Is your Microsoft Entra administrator available to complete this step?"
+    assert gated["availability"]["question"]["header"] == (
+        "Is your Microsoft Entra administrator available to complete this "
+        "step?"
     )
     gated_arguments = gated["availability"]["askUserArguments"]
     gated_field = gated_arguments["requestedSchema"]["properties"]["response"]
-    assert gated_arguments["message"] == "Entra identity"
+    assert gated_arguments["message"] == (
+        "Is your Microsoft Entra administrator available to complete this "
+        "step?"
+    )
     assert gated_field["title"] == "Selection"
-    assert gated_field["description"] == "Is your Microsoft Entra administrator available to complete this step?"
+    assert "description" not in gated_field
     assert [option["title"] for option in gated_field["oneOf"]] == [
-        "Yes, the Entra admin is available now",
-        "No, I need to bring the Entra admin in",
+        "Yes",
+        "No",
     ]
     assert gated_arguments["requestedSchema"]["required"] == ["response"]
     assert entra["decision"] == "instructions-required"
@@ -7230,34 +7716,39 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
         "runtime-instructions/entra-administrator.md"
     )
     assert entra["runtimeInstructionSha256"] == (
-        "3EFE09214DEFAE5889AF480E041EDF7CE3D5D2F8B8E82B83D83C4856A2D80CFD"
+        "0306CE216C696E56C02CBEC78DB152096867B2D26C7AC06BE8AD89D8B01B4D04"
     )
     assert "sourceWorkbookSha256" not in entra
     assert "sourceWorkbookRole" not in entra
     ordinary = entra["ordinaryReply"]["text"]
-    source_text = ordinary.split("\n\n", 1)[1].split(
-        "\n\nCurrent contract boundary\n",
-        1,
-    )[0]
+    source_text = _ready_to_send_body(ordinary)
     _, canonical_entra, _ = snow._identity_runtime_instruction_source(
         "entra"
     )
-    assert source_text == canonical_entra
+    with snow.product_profile_context(profile_key):
+        assert source_text == snow._first_agent_entra_packet("dev123")
+    assert source_text != canonical_entra
+    assert "**Before creating another app registration**" in source_text
+    assert "**Part 4: Only if ServiceNow identifies employees" in source_text
+    assert "**Please send back:** the Application (client) ID" in source_text
     assert "The Entra administrator should:" not in ordinary
-    assert len(entra["questions"]) == 2
+    assert len(entra["questions"]) == 1
     assert [
         item["canonicalQuestion"]["header"]
         for item in entra["questions"]
     ] == [
-        "Application client ID",
-        "Selected User Claim",
+        "What did your Entra administrator reply?",
+    ]
+    assert "Selected User Claim" not in json.dumps(entra["questions"])
+    assert "non-sensitive reply" in entra["questions"][0]["canonicalQuestion"][
+        "question"
     ]
     for item in entra["questions"]:
         canonical = item["canonicalQuestion"]
         arguments = item["askUserArguments"]
         field = arguments["requestedSchema"]["properties"]["response"]
         assert arguments["message"] == canonical["header"]
-        assert field["description"] == canonical["question"]
+        assert "description" not in field
         assert field["title"] in {"Selection", "Input"}
         assert arguments["requestedSchema"]["required"] == ["response"]
 
@@ -7336,7 +7827,7 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
         "runtime-instructions/servicenow-administrator.md"
     )
     assert service_now["runtimeInstructionSha256"] == (
-        "F4BE4C961DA8C0A7548D8F346C3A46831EFFF571718001B59A1CBF42B5C62020"
+        "ED080226F6E6A956BFAB0AFD1AA2D3DD2EFD449DE16869B18CC82282E4B35632"
     )
     assert service_now["lockedValues"] == {
         "applicationClientId": APP_CLIENT_ID,
@@ -7347,36 +7838,47 @@ def test_direct_identity_handoff_uses_authoritative_source_and_adapter(
     assert APP_CLIENT_ID in ordinary
     assert "employee_id" in ordinary
     assert TENANT_ID in ordinary
-    assert "CONFIRMED_" not in ordinary
+    assert f"tenant ID `{TENANT_ID}`" not in ordinary
+    assert (
+        f"https://login.microsoftonline.com/{TENANT_ID}/.well-known/"
+        "openid-configuration"
+    ) in ordinary
     assert "<client ID>" not in ordinary
     assert "<tenant ID>" not in ordinary
     assert "<instance>" not in ordinary
     assert "`employee_id`" in ordinary
-    assert "custom claim name `employee_id`" in ordinary
-    assert "or `employee_id`." in ordinary
-    assert "`https://dev123.service-now.com`" in ordinary
-    assert ("8. **HR agent only:**" in ordinary) is (
-        profile_key == "hrsd"
+    assert "- **Custom claim:** `employee_id`" in ordinary
+    assert (
+        "- **User Claim:** `employee_id`, the claim confirmed by the Entra "
+        "administrator. Don't change it." in ordinary
     )
-    source_text = ordinary.split("\n\n", 1)[1].split(
-        "\n\nCurrent contract boundary\n",
-        1,
-    )[0]
+    assert "<claim>" not in ordinary
+    assert "**https://dev123.service-now.com**" in ordinary
+    assert ("**HR access:**" in ordinary) is (profile_key == "hrsd")
+    source_text = _ready_to_send_body(ordinary)
     with snow.product_profile_context(profile_key):
-        expected_text, _, _ = snow._render_identity_runtime_instruction(
-            context,
-            stage="servicenow",
-            application_client_id=APP_CLIENT_ID,
+        assert source_text == snow._first_agent_servicenow_packet(
+            instance_name="dev123",
+            client_id=APP_CLIENT_ID,
+            tenant_id=TENANT_ID,
             claim_name="employee_id",
         )
-    assert source_text == expected_text
     assert len(service_now["questions"]) == 1
     input_card = service_now["questions"][0]
     assert input_card["canonicalQuestion"]["allowFreeformInput"] is True
-    assert input_card["askUserArguments"]["requestedSchema"]["properties"][
-        "response"
-    ]["description"] == input_card["canonicalQuestion"]["question"]
-    assert service_now_completion["ordinaryReply"] is None
+    assert "description" not in input_card["askUserArguments"][
+        "requestedSchema"
+    ]["properties"]["response"]
+    assert service_now_completion["ordinaryReply"] == {
+        "kind": "ordinary-agent-response",
+        "text": (
+            "Thanks—please ask your ServiceNow administrator to confirm "
+            "that the configuration is saved and name both the **User "
+            "Claim** and **User Field**.\n\nThat will clarify which "
+            "settings use `employee_id` to identify the signed-in employee."
+        ),
+    }
+    assert "```" not in service_now_completion["ordinaryReply"]["text"]
     assert service_now_completion["questions"] == []
     assert recorded_mapping["tokenClaimName"] == "employee_id"
     assert recorded_mapping["serviceNowUserField"] == "u_employee_id"
@@ -7401,13 +7903,26 @@ def test_canonical_runtime_instruction_sources_are_exact_and_structured():
         "runtime-instructions/servicenow-administrator.md"
     )
     assert entra_sha == (
-        "3EFE09214DEFAE5889AF480E041EDF7CE3D5D2F8B8E82B83D83C4856A2D80CFD"
+        "0306CE216C696E56C02CBEC78DB152096867B2D26C7AC06BE8AD89D8B01B4D04"
     )
     assert service_now_sha == (
-        "F4BE4C961DA8C0A7548D8F346C3A46831EFFF571718001B59A1CBF42B5C62020"
+        "ED080226F6E6A956BFAB0AFD1AA2D3DD2EFD449DE16869B18CC82282E4B35632"
     )
     assert "\u00a0" not in entra + service_now
     assert entra.startswith("#### Instructions for the Entra administrator")
+    assert entra.split("\n")[2] == (
+        "For the full steps, see [Register an application in Microsoft "
+        "Entra ID for OIDC integration with ServiceNow]"
+        "(https://learn.microsoft.com/en-us/copilot/employee-self-service/"
+        "declarative-agent-servicenow-hr-it#task-1-register-an-application-"
+        "in-microsoft-entra-id-for-oidc-integration-with-servicenow)."
+    )
+    assert service_now.split("\n")[2] == (
+        "For the full steps, see [Register the OIDC provider in ServiceNow]"
+        "(https://learn.microsoft.com/en-us/copilot/employee-self-service/"
+        "declarative-agent-servicenow-hr-it"
+        "#task-2-register-oidc-provider-in-servicenow)."
+    )
     assert "**Part 1: Register the app**" in entra
     assert "**Part 2: Add the user claims to the token**" in entra
     assert (
@@ -7425,6 +7940,15 @@ def test_canonical_runtime_instruction_sources_are_exact_and_structured():
         "#### Instructions for the ServiceNow administrator"
     )
     assert "**Values from the maker:** Client ID `<client ID>`" in service_now
+    assert "tenant ID" not in service_now.split("**Send back")[0].split(
+        "OIDC Metadata URL"
+    )[0]
+    assert "login.microsoftonline.com/<tenant ID>/.well-known" in service_now
+    assert "User Claim `<claim>`, confirmed by the Entra administrator." in (
+        service_now
+    )
+    assert "Client ID `<client ID>` and User Claim `<claim>`" in service_now
+    assert "tenant ID" not in entra
     assert "1. Sign in to `https://<instance>.service-now.com`." in (
         service_now
     )
@@ -7457,7 +7981,7 @@ def test_canonical_runtime_instruction_sources_are_exact_and_structured():
         )
         assert "--directory-tenant-id" not in entra_guide
         assert (
-            "Client ID and User Claim prompts"
+            "Do not ask the maker for the claim up front"
             in " ".join(entra_guide.split())
         )
         assert (
@@ -7543,17 +8067,29 @@ def test_direct_identity_handoff_pauses_before_instructions_until_ack(
     assert after_yes["decision"] == "instructions-required"
     assert after_yes["ordinaryReply"]["text"]
     assert after_yes["questions"][0]["canonicalQuestion"]["header"] == (
-        "Application client ID"
+        "What did your Entra administrator reply?"
     )
     assert [
         item["canonicalQuestion"]["header"]
         for item in after_client["questions"]
     ] == [
-        "Selected User Claim",
+        "Which claim name did your Entra administrator confirm?",
     ]
     assert after_client["retainedDirectInput"] == {
         "applicationClientId": APP_CLIENT_ID,
     }
+    assert after_client["ordinaryReply"] is None
+    claim_followup = after_client["questions"][0]["canonicalQuestion"][
+        "question"
+    ]
+    assert claim_followup.startswith(
+        "We have the Client ID. Next, we need the "
+        "exact claim name your Entra administrator configured for "
+        "ServiceNow to use (`email`, `upn`, or a custom claim name).\n\n"
+        "Ask your Entra administrator for that name, or paste the rest of "
+        "their non-sensitive reply. You don't need to resend the Client ID."
+    )
+    assert APP_CLIENT_ID not in claim_followup
     assert all(
         item["canonicalQuestion"]["header"]
         != "Entra administrator availability"
@@ -7562,7 +8098,7 @@ def test_direct_identity_handoff_pauses_before_instructions_until_ack(
     assert same_group_resume["availability"]["acknowledged"] is True
     assert same_group_resume["questions"][0]["canonicalQuestion"][
         "header"
-    ] == "Application client ID"
+    ] == "What did your Entra administrator reply?"
     assert same_group_resume["questions"] == after_yes["questions"]
     assert path.read_bytes() == acknowledged_bytes
 
@@ -8062,7 +8598,7 @@ def test_direct_identity_cli_roundtrips_both_admin_stages(
     entra_handoff = json.loads(capsys.readouterr().out)
     assert entra_handoff["questions"][0]["askUserArguments"][
         "message"
-    ] == "Application client ID"
+    ] == "What did your Entra administrator reply?"
     assert snow.main(
         [
             "identity-direct-handoff",
@@ -8075,7 +8611,7 @@ def test_direct_identity_cli_roundtrips_both_admin_stages(
     after_client = json.loads(capsys.readouterr().out)
     assert after_client["questions"][0]["askUserArguments"][
         "message"
-    ] == "Selected User Claim"
+    ] == "Which claim name did your Entra administrator confirm?"
     assert snow.main(
         [
             "record-identity-direct",
@@ -8775,7 +9311,7 @@ def test_v2_lifecycle_migrates_to_v8_without_obsolete_preflight_gates(
     state_again = snow._load_lifecycle_state(_context())
     snow._write_lifecycle_state(_context(), state_again)
 
-    assert state["schemaVersion"] == 12
+    assert state["schemaVersion"] == snow.LIFECYCLE_SCHEMA_VERSION
     assert state["acceptedContractRevision"] == 1
     assert "reuseDecision" not in state["adminSetup"]["preflight"]
     assert set(state["adminSetup"]["phaseHandoffs"]) == {
@@ -8789,8 +9325,10 @@ def test_v2_lifecycle_migrates_to_v8_without_obsolete_preflight_gates(
     assert state["phases"]["preflight"]["status"] == "in-progress"
     assert state["phases"]["credential"]["status"] == "in-progress"
     assert "actionApplied" not in state["phases"]["credential"]
-    for phase_id in ("topics", "agent-connection", "test"):
+    for phase_id in ("topics", "test"):
         assert state["phases"][phase_id]["status"] == "pending"
+    assert "agent-connection" not in state["phases"]
+    assert state["retiredPhases"]["agent-connection"]["status"] == "pending"
     assert "parameter-sharing" not in state["phases"]
     assert state["retiredPhases"]["parameter-sharing"]["status"] == "pending"
     assert "publish" not in state["phases"]
@@ -8958,7 +9496,7 @@ def test_v4_migration_removes_obsolete_gates_and_keeps_completed_discovery(
 
     state = snow._load_lifecycle_state(_context())
 
-    assert state["schemaVersion"] == 12
+    assert state["schemaVersion"] == snow.LIFECYCLE_SCHEMA_VERSION
     assert state["adminSetup"]["schemaVersion"] == 4
     assert "scenario" not in state["adminSetup"]["preflight"]
     assert "reuseDecision" not in state["adminSetup"]["preflight"]
@@ -9510,10 +10048,10 @@ def test_phase_command_error_returns_customer_visible_recovery(
     assert error["status"] == "error"
     recovery = error["details"]["recoveryHandoff"]
     _assert_recovery_handoff(recovery)
-    assert recovery["owner"] == "Power Platform Maker/Admin"
+    assert recovery["owner"] == "ESS Maker / Agent Developer"
     assert "dev123" in recovery["values"]
     assert APP_CLIENT_ID in recovery["values"]
-    assert "/connections" in recovery["where"]
+    assert "Connection Settings -> ServiceNow" in recovery["where"]
     assert "rerun only `create`" in recovery["recheck"].casefold()
 
 
@@ -9601,8 +10139,8 @@ def test_resume_error_uses_current_credential_phase_recovery(
     error = json.loads(capsys.readouterr().out)
     recovery = error["details"]["recoveryHandoff"]
     _assert_recovery_handoff(recovery)
-    assert recovery["owner"] == "Power Platform Maker/Admin"
-    assert "/connections" in recovery["where"]
+    assert recovery["owner"] == "ESS Maker / Agent Developer"
+    assert "Connection Settings -> ServiceNow" in recovery["where"]
     assert "credential" in recovery["recheck"]
 
 
@@ -9703,6 +10241,595 @@ def test_record_test_attestation_accepts_maker_fail_without_category(
     assert result["failureCategory"] is None
 
 
+@pytest.mark.parametrize(
+    ("profile", "prompt_category", "untested_text"),
+    (
+        (
+            "hrsd",
+            "list-my-open-hr-cases",
+            "**The setup steps are finished, but the integration hasn't "
+            "been tested.** Test it before employees use it.\n\n"
+            "Your progress is saved at the Test-pane request. When you "
+            "return, we'll continue there.",
+        ),
+        (
+            "itsm",
+            "list-my-open-it-tickets",
+            "**The setup steps are finished, but the integration hasn't "
+            "been tested.** Test it before employees use it.\n\n"
+            "Your progress is saved at the Test-pane request. When you "
+            "return, we'll continue there.",
+        ),
+    ),
+)
+def test_record_test_untested_is_saved_never_pass_and_resumable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    prompt_category: str,
+    untested_text: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context = _context()
+    components = _components(CONNECTION_ID)
+    if profile == "itsm":
+        context = {
+            **context,
+            "agent": {
+                **context["agent"],
+                "schema_name": snow.IT_SCHEMA_NAME,
+                "workspace_slug": "employee-self-service-it",
+            },
+            "active": {"slug": "employee-self-service-it"},
+        }
+        components = _itsm_components()
+    context["environment"] = {**context["environment"], "display_name": "Contoso Dev"}
+    with snow.product_profile_context(profile):
+        state = snow._state_base(context, components)
+        _add_current_agent_binding(context, state, components)
+        state_path = snow._lifecycle_state_path(context)
+        state_path.parent.mkdir(parents=True)
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        monkeypatch.setattr(
+            snow,
+            "_agentbuilder_client",
+            lambda _context: type(
+                "FakeAgentBuilder",
+                (),
+                {"fetch_components": lambda self, _agent_id: components},
+            )(),
+        )
+        with pytest.raises(snow.ServiceNowConnectError, match="untested"):
+            snow.record_test_attestation(
+                context,
+                prompt_category=prompt_category,
+                result="untested",
+                failure_category="unexpected",
+            )
+
+        result = snow.record_test_attestation(
+            context,
+            prompt_category=prompt_category,
+            result="untested",
+            failure_category=None,
+        )
+        saved = json.loads(state_path.read_text(encoding="utf-8"))
+        record = saved["evidence"]["test"]
+        contract = json.loads(
+            (
+                snow.SOLUTION_ROOT
+                / "src"
+                / "skills"
+                / "connect"
+                / snow.ACTIVE_PROFILE.provider_key
+                / "contract.json"
+            ).read_text(encoding="utf-8")
+        )
+        test_phase = next(p for p in contract["phases"] if p["id"] == "test")
+        guidance = snow._current_task_guidance(
+            context,
+            saved,
+            phase_id="test",
+            role="ESS Maker / Agent Developer",
+        )
+
+        assert result["message"] == untested_text
+        assert "message" not in record
+        assert record["status"] == "untested"
+        assert record["result"] == "untested"
+        assert record["failureCategory"] is None
+        assert record["recordedAt"]
+        assert not snow._manual_evidence_current(saved, test_phase)
+        assert "worked" not in result["message"]
+        assert guidance.startswith(
+            f"Next, test a request in **{snow._spec_agent_name()}'s Test pane "
+            "in Contoso Dev**.\n\n"
+        )
+        assert guidance.endswith(
+            "request that should return your real ServiceNow data, then "
+            "tell us whether it returned what you expected."
+        )
+        assert "finish without testing" not in guidance
+
+        snow.record_test_attestation(
+            context,
+            prompt_category=prompt_category,
+            result="pass",
+            failure_category=None,
+        )
+        replaced = json.loads(state_path.read_text(encoding="utf-8"))
+        assert replaced["evidence"]["test"]["status"] == "completed"
+        assert replaced["evidence"]["test"]["result"] == "pass"
+        assert snow._manual_evidence_current(replaced, test_phase)
+
+
+def test_record_test_cli_accepts_untested_result() -> None:
+    args = snow.build_parser().parse_args(
+        [
+            "--provider",
+            "servicenow-da-hrsd",
+            "record-test",
+            "--prompt-category",
+            "list-my-open-hr-cases",
+            "--result",
+            "untested",
+        ]
+    )
+    assert args.result == "untested"
+
+
+@pytest.mark.parametrize(
+    ("profile", "prompt_category", "audience"),
+    (
+        ("hrsd", "list-my-open-hr-cases", "HR"),
+        ("itsm", "list-my-open-it-tickets", "IT"),
+    ),
+)
+def test_record_test_empty_result_records_nothing_and_never_passes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    prompt_category: str,
+    audience: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context = _context()
+    components = _components(CONNECTION_ID)
+    if profile == "itsm":
+        context = {
+            **context,
+            "agent": {
+                **context["agent"],
+                "schema_name": snow.IT_SCHEMA_NAME,
+                "workspace_slug": "employee-self-service-it",
+            },
+            "active": {"slug": "employee-self-service-it"},
+        }
+        components = _itsm_components()
+    with snow.product_profile_context(profile):
+        state = snow._state_base(context, components)
+        _add_current_agent_binding(context, state, components)
+        state_path = snow._lifecycle_state_path(context)
+        state_path.parent.mkdir(parents=True)
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        monkeypatch.setattr(
+            snow,
+            "_agentbuilder_client",
+            lambda _context: type(
+                "FakeAgentBuilder",
+                (),
+                {"fetch_components": lambda self, _agent_id: components},
+            )(),
+        )
+        contract = json.loads(
+            (
+                snow.SOLUTION_ROOT
+                / "src"
+                / "skills"
+                / "connect"
+                / snow.ACTIVE_PROFILE.provider_key
+                / "contract.json"
+            ).read_text(encoding="utf-8")
+        )
+        test_phase = next(p for p in contract["phases"] if p["id"] == "test")
+        before = state_path.read_bytes()
+
+        result = snow.record_test_attestation(
+            context,
+            prompt_category=prompt_category,
+            result="empty",
+            failure_category=None,
+        )
+
+        assert result["message"] == (
+            "That matches what you expected, but an empty result alone "
+            f"doesn't show whether the agent can retrieve your {audience} "
+            "data.\n\n"
+            "Try a supported request for ServiceNow data you know exists "
+            "for your account, then tell us whether the result matches. "
+            "You can also finish without testing."
+        )
+        assert result["status"] == "open"
+        assert result["recorded"] is False
+        assert state_path.read_bytes() == before
+        unclear = snow.record_test_attestation(
+            context,
+            prompt_category=prompt_category,
+            result="unclear",
+            failure_category=None,
+        )
+        assert unclear["message"] == snow._dev_test_clarifying_question()
+        assert unclear["recorded"] is False
+        assert state_path.read_bytes() == before
+        with pytest.raises(snow.ServiceNowConnectError, match="unclear"):
+            snow.record_test_attestation(
+                context,
+                prompt_category=prompt_category,
+                result="unclear",
+                failure_category="unexpected",
+            )
+        saved = json.loads(state_path.read_text(encoding="utf-8"))
+        assert "test" not in saved.get("evidence", {})
+        assert not snow._manual_evidence_current(saved, test_phase)
+        with pytest.raises(snow.ServiceNowConnectError, match="empty-result"):
+            snow.record_test_attestation(
+                context,
+                prompt_category=prompt_category,
+                result="empty",
+                failure_category="empty-result",
+            )
+
+        error = snow.record_test_attestation(
+            context,
+            prompt_category=prompt_category,
+            result="fail",
+            failure_category=None,
+        )
+        assert error["status"] == "failed"
+        assert error["failureCategory"] is None
+        after_fail = state_path.read_bytes()
+        snow.record_test_attestation(
+            context,
+            prompt_category=prompt_category,
+            result="empty",
+            failure_category=None,
+        )
+        assert state_path.read_bytes() == after_fail
+
+        snow.record_test_attestation(
+            context,
+            prompt_category=prompt_category,
+            result="pass",
+            failure_category=None,
+        )
+        replaced = json.loads(state_path.read_text(encoding="utf-8"))
+        assert replaced["evidence"]["test"]["result"] == "pass"
+        assert snow._manual_evidence_current(replaced, test_phase)
+
+
+def test_dev_test_step_hr_and_it_copy_is_identical_except_domain_nouns() -> None:
+    nouns = {
+        "hrsd": (
+            ("Employee Self-Service HR", "AGENT"),
+            ("HR cases", "RECORDS"),
+            ("HR data", "AUDIENCE data"),
+            ("an HR request", "an AUDIENCE request"),
+            ("cases", "RECORDS"),
+            ("case", "RECORD"),
+        ),
+        "itsm": (
+            ("Employee Self-Service IT", "AGENT"),
+            ("IT tickets", "RECORDS"),
+            ("IT data", "AUDIENCE data"),
+            ("an IT request", "an AUDIENCE request"),
+            ("tickets", "RECORDS"),
+            ("ticket", "RECORD"),
+        ),
+    }
+
+    def neutral(text: str, profile: str) -> str:
+        for source, target in nouns[profile]:
+            text = text.replace(source, target)
+        return text
+
+    # The untested message is intentionally excluded: its HR and IT wording
+    # is pinned separately from the spec.
+    rendered: dict[str, dict[str, str]] = {}
+    for profile in ("hrsd", "itsm"):
+        with snow.product_profile_context(profile):
+            rendered[profile] = {
+                "ready": snow._dev_test_ready_message(),
+                "question": snow._dev_test_clarifying_question(),
+                "empty": snow._dev_empty_result_message(),
+            }
+    for key in rendered["hrsd"]:
+        assert neutral(rendered["hrsd"][key], "hrsd") == neutral(
+            rendered["itsm"][key], "itsm"
+        ), key
+
+
+def test_test_connection_docs_hr_and_it_are_identical_except_domain_nouns() -> None:
+    root = snow.SOLUTION_ROOT / "src" / "skills" / "connect"
+    hr = (root / "servicenow-da-hrsd" / "actions" / "test-connection.md").read_text(
+        encoding="utf-8"
+    )
+    it = (root / "servicenow-da-itsm" / "actions" / "test-connection.md").read_text(
+        encoding="utf-8"
+    )
+    for source, target in (
+        ("case/ticket", "CASE_OR_TICKET"),
+        ("list-my-open-it-tickets", "list-my-open-hr-cases"),
+        ("servicenow-da-itsm", "servicenow-da-hrsd"),
+        ("ITSM", "HRSD"),
+        ("(IT)", "(HR)"),
+        ("IT tickets", "HR cases"),
+        ("tickets", "cases"),
+        ("ticket", "case"),
+    ):
+        it = it.replace(source, target)
+    hr = hr.replace("case/ticket", "CASE_OR_TICKET")
+    assert it == hr
+
+
+PORTAL_CONFIRMATION_OPTIONS = [
+    {"label": "Yes"},
+    {"label": "No"},
+]
+
+
+@pytest.mark.parametrize("profile", ("hrsd", "itsm"))
+@pytest.mark.parametrize(
+    ("typed", "shown"),
+    (
+        ("https://dev123.service-now.com/esc/", "https://dev123.service-now.com/esc"),
+        ("dev123.service-now.com/esc", "https://dev123.service-now.com/esc"),
+        ("  https://DEV123.service-now.com  ", "https://dev123.service-now.com"),
+    ),
+)
+def test_portal_url_confirmation_shows_normalized_url_and_saves_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    typed: str,
+    shown: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, path = _write_shared_target_state(
+        tmp_path,
+        profile=profile,
+        agent_id=AGENT_ID,
+        agent_slug="employee-self-service-hr",
+        instance_name="dev123",
+    )
+    before = path.read_bytes()
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: pytest.fail("Confirmation must not call the service."),
+    )
+
+    with snow.product_profile_context(profile):
+        result = snow.portal_url_confirmation(context, typed)
+
+    assert result["portalUrl"] == shown
+    assert result["header"] == f"Is {shown} the employee portal URL?"
+    assert result["question"] == (
+        f"You entered **{shown}** as the employee portal URL."
+    )
+    assert result["options"] == PORTAL_CONFIRMATION_OPTIONS
+    assert result["allowFreeformInput"] is False
+    assert result["savedMessage"] == "We'll save that portal URL."
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("profile", ("hrsd", "itsm"))
+@pytest.mark.parametrize(
+    "typed",
+    (
+        "http://dev123.service-now.com/esc",
+        "https://other.service-now.com/esc",
+        "https://dev123.service-now.com/esc?x=1",
+    ),
+)
+def test_portal_url_confirmation_rejects_invalid_urls_like_set_portal_url(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    typed: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _path = _write_shared_target_state(
+        tmp_path,
+        profile=profile,
+        agent_id=AGENT_ID,
+        agent_slug="employee-self-service-hr",
+        instance_name="dev123",
+    )
+    with snow.product_profile_context(profile):
+        with pytest.raises(snow.ServiceNowConnectError) as confirm_error:
+            snow.portal_url_confirmation(context, typed)
+        with pytest.raises(snow.ServiceNowConnectError) as expected_error:
+            snow.normalize_portal_url(typed, expected_instance_name="dev123")
+
+    assert str(confirm_error.value) == str(expected_error.value)
+
+
+def test_portal_url_confirmation_requires_confirmed_instance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, _path = _write_shared_target_state(
+        tmp_path,
+        profile="hrsd",
+        agent_id=AGENT_ID,
+        agent_slug="employee-self-service-hr",
+    )
+    with snow.product_profile_context("hrsd"):
+        with pytest.raises(snow.ServiceNowConnectError, match="confirmed"):
+            snow.portal_url_confirmation(context, "https://dev123.service-now.com")
+
+
+def test_portal_url_confirmation_cli_and_phase_mapping() -> None:
+    args = snow.build_parser().parse_args(
+        [
+            "--provider",
+            "servicenow-da-itsm",
+            "portal-url-confirmation",
+            "--portal-url",
+            "dev123.service-now.com",
+        ]
+    )
+    assert args.command == "portal-url-confirmation"
+    assert args.portal_url == "dev123.service-now.com"
+    with pytest.raises(SystemExit):
+        snow.build_parser().parse_args(["portal-url-confirmation"])
+
+
+def test_portal_url_confirmation_hr_and_it_are_identical() -> None:
+    results = {}
+    for profile in ("hrsd", "itsm"):
+        context = _profile_context(
+            profile,
+            agent_id=AGENT_ID,
+            agent_slug="employee-self-service-hr",
+        )
+        with snow.product_profile_context(profile):
+            state = snow._state_base(context, _components())
+            state["adminSetup"]["preflight"]["instanceName"] = "dev123"
+            path = snow._lifecycle_state_path(context)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(state), encoding="utf-8")
+            results[profile] = snow.portal_url_confirmation(
+                context, "https://dev123.service-now.com/esc"
+            )
+    assert results["hrsd"] == results["itsm"]
+
+
+def test_portal_url_docs_require_confirmation_before_save_hr_and_it() -> None:
+    root = snow.SOLUTION_ROOT / "src" / "skills" / "connect"
+    docs = {
+        profile: (
+            root / f"servicenow-da-{profile}" / "actions" / "configure-portal-url.md"
+        ).read_text(encoding="utf-8")
+        for profile in ("hrsd", "itsm")
+    }
+    for text in docs.values():
+        assert "portal-url-confirmation --portal-url" in text
+        assert "Is **{NORMALIZED_PORTAL_URL}** the employee portal URL?" in (
+            " ".join(text.split())
+        )
+        assert 'options "Yes" and "No"' in text
+        assert "Nothing is saved before the Maker selects **Yes**." in text
+        assert text.index("portal-url-confirmation --portal-url") < text.index(
+            "set-portal-url --portal-url"
+        )
+    def confirmation_block(text: str) -> str:
+        start = text.index("portal-url-confirmation --portal-url")
+        end = text.index("Nothing is saved before the Maker selects **Yes**.")
+        return text[start:end].replace("itsm", "hrsd")
+
+    assert confirmation_block(docs["itsm"]) == confirmation_block(docs["hrsd"])
+    skill_root = root / "servicenow"
+    entry = (skill_root / "entry.md").read_text(encoding="utf-8")
+    assert "`portal-url-confirmation`" in entry
+    for profile in ("hrsd", "itsm"):
+        skill = (root / f"servicenow-da-{profile}" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        assert "`portal-url-confirmation`" in skill
+
+
+def test_record_test_cli_accepts_empty_result() -> None:
+    args = snow.build_parser().parse_args(
+        [
+            "--provider",
+            "servicenow-da-itsm",
+            "record-test",
+            "--prompt-category",
+            "list-my-open-it-tickets",
+            "--result",
+            "empty",
+        ]
+    )
+    assert args.result == "empty"
+    realm = snow.build_parser().parse_args(
+        [
+            "--provider",
+            "servicenow-da-hrsd",
+            "record-realm-test",
+            "--realm",
+            "test",
+            "--prompt-category",
+            "list-my-open-hr-cases",
+            "--result",
+            "pass",
+        ]
+    )
+    assert realm.result == "pass"
+    with pytest.raises(SystemExit):
+        snow.build_parser().parse_args(
+            [
+                "--provider",
+                "servicenow-da-hrsd",
+                "record-realm-test",
+                "--realm",
+                "test",
+                "--prompt-category",
+                "list-my-open-hr-cases",
+                "--result",
+                "empty",
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    ("profile", "records", "record"),
+    (("hrsd", "cases", "case"), ("itsm", "tickets", "ticket")),
+)
+def test_dev_test_follow_up_question_follows_spec(
+    profile: str,
+    records: str,
+    record: str,
+) -> None:
+    with snow.product_profile_context(profile):
+        question = snow._dev_test_clarifying_question()
+
+    assert question == (
+        f"What did the request return—your expected {records}, an empty "
+        f"result, or an error? No need to share {record} contents."
+    )
+
+
+@pytest.mark.parametrize(
+    ("profile", "audience", "records", "record"),
+    (
+        ("hrsd", "HR", "cases", "case"),
+        ("itsm", "IT", "tickets", "ticket"),
+    ),
+)
+def test_existing_identity_test_follow_ups_follow_spec(
+    profile: str,
+    audience: str,
+    records: str,
+    record: str,
+) -> None:
+    with snow.product_profile_context(profile):
+        question = snow._dev_test_clarifying_question("knowledge")
+        empty = snow._dev_empty_result_message("knowledge")
+
+    assert question == (
+        f"What did the request return—your expected {records}, an empty "
+        f"result, or an error? Don't share {record} contents, employee "
+        "identifiers, tokens, or other secrets."
+    )
+    assert empty.startswith(
+        "That matches what you expected, but it doesn't confirm that the "
+        f"agent can retrieve your real {audience} data.\n\n"
+        "Try a supported request"
+    )
+
+
 def test_record_test_attestation_keeps_legacy_failure_category_compatible(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -9732,7 +10859,7 @@ def test_record_test_attestation_keeps_legacy_failure_category_compatible(
     assert result["failureCategory"] == "permission"
 
 
-def test_record_test_requires_current_agent_connection_attestation(
+def test_record_test_requires_current_connection_and_binding_proof(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -9754,7 +10881,7 @@ def test_record_test_requires_current_agent_connection_attestation(
 
     with pytest.raises(
         snow.ServiceNowConnectError,
-        match="current Agent Connect observation",
+        match="Verify the ServiceNow connection and agent binding",
     ):
         snow.record_test_attestation(
             _context(),
@@ -11678,25 +12805,20 @@ def test_topic_action_handoff_returns_complete_it_question(
         "allowFreeformInput",
     }
     assert result["question"]["options"] == [
-        {"label": "Enable all listed inactive ServiceNow topics"},
-        {
-            "label": (
-                "Keep the current topic states for this configuration"
-            )
-        },
-        {"label": "Not now, leave the phase incomplete"},
+        {"label": "Yes"},
+        {"label": "No"},
     ]
     assert "choices" not in result["question"]
     question = result["question"]["question"]
-    assert "ServiceNowITSMSystemReadExecution" in question
-    assert "ServiceNowITSMSystemWriteExecution" in question
-    assert "13 active and 2 inactive" in question
-    assert "Employee Self-Service (IT)" in question
-    assert "employee-self-service-it" in question
-    assert AGENT_ID in question
-    assert ENVIRONMENT_ID in question
-    assert result["componentHash"] in question
-    assert "Do you want to enable all listed inactive" in question
+    reply = result["replyBeforeQuestion"]
+    assert "ServiceNowITSMSystemReadExecution" in reply
+    assert "ServiceNowITSMSystemWriteExecution" in reply
+    assert "13 active and 2 inactive" in reply
+    for technical in ("Selected agent:", "Environment:", "Component hash"):
+        assert technical not in reply
+    assert result["componentHash"]
+    assert "unrelated topics remain unchanged" in question
+    assert "ServiceNowITSMSystemReadExecution" not in question
     for instruction in (
         "Purpose:",
         "Owner:",
@@ -11772,22 +12894,263 @@ def test_topic_action_handoff_has_hr_parity(
     assert result["decision"] == "question-required"
     assert result["profile"] == "hrsd"
     question = result["question"]["question"]
-    assert "Inactive ServiceNow HRSD topics" in question
-    assert "Employee Self-Service (HR)" in question
-    assert result["componentHash"] in question
+    reply = result["replyBeforeQuestion"]
+    assert "Inactive ServiceNow HRSD topics" in reply
+    for technical in ("Selected agent:", "Environment:", "Component hash"):
+        assert technical not in reply
+    assert result["componentHash"]
+    assert question == (
+        "Only topics in the inventory listed above are in scope; unrelated "
+        "topics remain unchanged."
+    )
+    assert "Selected agent:" not in question
+    assert "Current topic inventory:" not in question
+    assert "Inactive ServiceNow HRSD topics" not in question
+    assert result["question"]["header"] == (
+        "Should we enable the inactive ServiceNow topics?"
+    )
     assert result["question"]["options"] == [
-        {"label": "Enable all listed inactive ServiceNow topics"},
-        {
-            "label": (
-                "Keep the current topic states for this configuration"
-            )
-        },
-        {"label": "Not now, leave the phase incomplete"},
+        {"label": "Yes"},
+        {"label": "No"},
     ]
     assert "Purpose:" not in question
     assert "Owner:" not in question
     assert "Copilot Studio" not in question
     assert "https://" not in question
+
+
+_TECHNICAL_CARD_BLOCKS = (
+    "**Current task**",
+    "**Where and how**",
+    "**Expected nonsecret evidence**",
+    "**Completion boundary**",
+    "Responsible role:",
+    "Realm:",
+)
+
+
+@pytest.mark.parametrize("profile", ("hrsd", "itsm"))
+def test_maker_phase_lead_ins_bridge_context_before_where_and_how(
+    profile: str,
+) -> None:
+    context = _profile_context(
+        profile,
+        agent_id=AGENT_ID if profile == "hrsd" else OTHER_AGENT_ID,
+        agent_slug=(
+            "employee-self-service-hr"
+            if profile == "hrsd"
+            else "employee-self-service-it"
+        ),
+    )
+
+    def state(mapping: dict | None) -> dict:
+        evidence: dict = {}
+        if mapping is not None:
+            evidence["identityMapping"] = mapping
+        return {
+            "adminSetup": {
+                "preflight": {"instanceName": "dev123"},
+                "phaseHandoffs": {},
+            },
+            "evidence": evidence,
+        }
+
+    def guidance(phase_id: str, value: dict) -> str:
+        return snow._current_task_guidance(
+            context,
+            value,
+            phase_id=phase_id,
+            role="ESS Maker / Agent Developer",
+        )
+
+    mapping = {
+        "serviceNowAdministratorConfirmed": True,
+        "tokenClaimName": "employee_id",
+        "serviceNowUserField": "employee_number",
+    }
+    with snow.product_profile_context(profile):
+        known = guidance("credential", state(mapping))
+        unknown = guidance("credential", state(None))
+        with pytest.raises(snow.ServiceNowConnectError):
+            guidance("agent-connection", state(None))
+        portal = guidance("portal-url", state(None))
+        test = guidance("test", state(None))
+
+    audience = "HR" if profile == "hrsd" else "IT"
+    saved = (
+        "Your ServiceNow administrator has confirmed that the configuration "
+        "is saved, using `employee_id` as the User Claim and "
+        "**employee_number** as the User Field.\n\n"
+        "Next, create the sign-in connection"
+    )
+    create = (
+        f"Next, create the sign-in connection that Employee Self-Service "
+        f"{audience} will use to access ServiceNow. This part happens in "
+        "Copilot Studio:\n\n1. Open **"
+    )
+    assert saved in known
+    assert known.index(saved) < known.index(create)
+    assert "has confirmed that the configuration is saved" not in unknown
+    assert create in known and create in unknown
+    for text in (known, unknown):
+        assert "2. Go to **Settings > Connection Settings > ServiceNow > " in (
+            text
+        )
+        assert "   - **Authentication type:** Microsoft Entra ID User Login\n" in (
+            text
+        )
+        assert "   - **Resource URI:** `" in text
+        assert (
+            "   - **Instance name:** `dev123`—not the full URL\n"
+            "4. Complete the connection creation.\n\n"
+            "Return here and tell us which connection you used. You "
+            "won't need to resend the administrator replies.\n\n"
+            f"After that, we'll test an {audience} request with your "
+            "account to check sign-in and employee matching."
+        ) in text
+        for technical in _TECHNICAL_CARD_BLOCKS:
+            assert technical not in text
+        assert "**Expected form values" not in text
+        assert "Part 2" not in text
+    record_noun = "case" if profile == "hrsd" else "ticket"
+    assert portal == (
+        f"Next, we'll make sure the agent's {audience} {record_noun} links "
+        "open in the right employee portal.\n\n"
+        "What is the full HTTPS base URL of your ServiceNow employee "
+        "portal? It may differ from the instance URL, so we won't assume "
+        "`/sp` or `/esc`."
+    )
+    assert snow.has_wait_cue(portal)
+    if profile == "hrsd":
+        expected_test = (
+            "We're ready to try an HR request.\n\n"
+            "In **Employee Self-Service HR's Test pane**, run a request that "
+            "should return your real ServiceNow data—for example, **\"Show "
+            "my open HR cases,\"** if you have open cases.\n\n"
+            "Come back and tell us what happened and whether it matched what "
+            "you expected. You don't need to paste case contents.\n\n"
+            "You can also finish without testing; the integration will "
+            "remain untested."
+        )
+    else:
+        expected_test = (
+            "We're ready to try an IT request.\n\n"
+            "In **Employee Self-Service IT's Test pane**, run a request that "
+            "should return your real ServiceNow data—for example, **\"Show "
+            "my open IT tickets,\"** if you have open tickets.\n\n"
+            "Come back and tell us what happened and whether it matched what "
+            "you expected. You don't need to paste ticket contents.\n\n"
+            "You can also finish without testing; the integration will "
+            "remain untested."
+        )
+    assert expected_test == test
+    assert "Required prompt" not in test
+
+
+@pytest.mark.parametrize("profile", ("hrsd", "itsm"))
+def test_portal_url_ask_is_plain_text_per_setup_mode(
+    profile: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _profile_context(
+        profile,
+        agent_id=AGENT_ID if profile == "hrsd" else OTHER_AGENT_ID,
+        agent_slug=(
+            "employee-self-service-hr"
+            if profile == "hrsd"
+            else "employee-self-service-it"
+        ),
+    )
+
+    def state(**extra: Any) -> dict:
+        value: dict = {
+            "adminSetup": {
+                "preflight": {"instanceName": "dev123"},
+                "phaseHandoffs": {},
+            },
+            "evidence": {},
+        }
+        value.update(extra)
+        return value
+
+    custom = state()
+    custom["evidence"]["identityMapping"] = {
+        "serviceNowAdministratorConfirmed": True,
+        "tokenClaimName": "employee_id",
+        "serviceNowUserField": "employee_number",
+    }
+    standard = state()
+    standard["evidence"]["identityMapping"] = {
+        "serviceNowAdministratorConfirmed": True,
+        "tokenClaimName": "upn",
+        "serviceNowUserField": "email",
+    }
+    audience = "HR" if profile == "hrsd" else "IT"
+    other = "IT" if profile == "hrsd" else "HR"
+    singular = "case" if profile == "hrsd" else "ticket"
+    plural = "cases" if profile == "hrsd" else "tickets"
+
+    def guidance(value: dict) -> str:
+        return snow._current_task_guidance(
+            context,
+            value,
+            phase_id="portal-url",
+            role="ESS Maker / Agent Developer",
+        )
+
+    with snow.product_profile_context(profile):
+        monkeypatch.setattr(
+            snow, "_other_agent_already_connected", lambda *_: False
+        )
+        first = guidance(standard)
+        payroll = guidance(custom)
+        existing = guidance(state(existingIdentity={"kind": "knowledge"}))
+        monkeypatch.setattr(
+            snow, "_other_agent_already_connected", lambda *_: True
+        )
+        second = guidance(standard)
+
+    assert first.endswith(
+        "What is the full HTTPS base URL of your ServiceNow employee "
+        "portal? It may differ from the instance URL, so we won't assume "
+        "`/sp` or `/esc`."
+    )
+    assert payroll == (
+        f"Next, we'll make sure {audience} {singular} links open in the "
+        "employee portal.\n\n"
+        "What is the full HTTPS base URL employees should use for "
+        f"{audience} {plural}?"
+    )
+    assert existing == (
+        f"Next, we'll make sure the agent's {singular} links open in the "
+        "employee portal.\n\n"
+        "What is the full HTTPS base URL employees should use for "
+        f"{audience} {plural}? It may differ from the ServiceNow instance "
+        "URL."
+    )
+    assert second == (
+        f"Next, we'll make sure the {audience} agent's {singular} links "
+        "open in the right employee portal.\n\n"
+        "What is the full HTTPS base URL of the portal employees should "
+        f"use for {audience} {plural}? It may differ from the {other} "
+        "portal."
+    )
+    for text in (first, payroll, existing, second):
+        assert snow.has_wait_cue(text)
+        assert "ask_user" not in text
+
+
+def test_portal_url_docs_ask_in_plain_text_not_a_card() -> None:
+    root = snow.SOLUTION_ROOT / "src" / "skills" / "connect"
+    for profile in ("hrsd", "itsm"):
+        text = (
+            root / f"servicenow-da-{profile}" / "actions"
+            / "configure-portal-url.md"
+        ).read_text(encoding="utf-8")
+        assert "plain chat text built by the controller" in text
+        assert "visible-handoff-question:v1 -->" not in text
+        assert "What is the full HTTPS base URL of your ServiceNow" not in text
+        assert "allowFreeformInput\": true" not in text
 
 
 @pytest.mark.parametrize(
@@ -11830,14 +13193,15 @@ def test_topic_operational_guidance_is_in_ordinary_reply(
             "copilotStudioAgent"
         ]["url"]
 
-    assert f"Open {expected_url} → Topics" in ordinary
-    assert f"{product.provider_key}/actions/prepare-topics.md" in ordinary
-    assert "Enable only the listed inactive topics" in ordinary
-    assert "explicitly keep the current states" in ordinary
-    assert "unrelated topics remain unchanged" in ordinary
-    assert "**Current task**" in ordinary
-    assert "**Expected nonsecret evidence**" in ordinary
-    assert "**Completion boundary**" in ordinary
+    assert ordinary == (
+        f"We'll save that portal URL and turn on the built-in ServiceNow "
+        f"{'HR' if profile == 'hrsd' else 'IT'} topics, including system "
+        "topics. Unrelated topics will stay unchanged."
+    )
+    for technical in _TECHNICAL_CARD_BLOCKS:
+        assert technical not in ordinary
+    assert expected_url not in ordinary
+    assert product.provider_key not in ordinary
 
 
 def test_topic_action_handoff_reuses_only_current_keep_current(
@@ -12027,7 +13391,7 @@ def test_resume_handoff_consumes_controller_and_returns_exact_action(
     )
     internal = result["progress"]["internal"]
     assert internal["currentPhase"]["startText"] == (
-        "Starting: Turn on the ServiceNow topics"
+        "Starting: Turn on ServiceNow topics"
     )
     assert result["progress"]["completedCount"] == 1
     assert internal["groupedFinalText"] is None
@@ -12150,11 +13514,11 @@ def test_resume_handoff_withholds_preflight_checkpoint_for_pending_instance(
     assert pending["manualQuestion"] == manual_question
     assert pending["choiceValues"] == choices
     body = pending["question"]["question"]
-    assert "Which instance should this agent use" in body
+    assert "dev184242" in body
     assert "Progress" not in body
     assert "Connection progress" not in body
     assert "**Phases**" not in body
-    assert "**Phases**" in (
+    assert "Complete these tasks to finish setup." in (
         result["transport"]["internal"]["ordinaryReply"]["text"]
     )
     assert result["businessGroupAvailabilityAccepted"] is False
@@ -12284,24 +13648,21 @@ def test_phase_progress_uses_provider_contract_labels_and_order(
     expected_customer_labels = [
         "Review the current setup",
         *(
-            ["Confirm HR ServiceNow prerequisite"]
+            ["Confirm HR ServiceNow prerequisites"]
             if has_plugin_phase
             else []
         ),
-        "Confirm the Microsoft Entra identity details",
-        "Confirm ServiceNow user mapping",
-        "Check ServiceNow connection",
-        "Connect this agent to ServiceNow",
-        "Turn on the ServiceNow topics",
-        "Set employee portal URL",
+        "Confirm Microsoft Entra identity details",
+        "Confirm ServiceNow single sign-on and user mapping",
+        "Create and connect ServiceNow",
+        "Turn on ServiceNow topics",
+        "Set the employee portal URL",
         "Test a ServiceNow request",
     ]
     assert [item["customerLabel"] for item in progress["items"]] == (
         expected_customer_labels
     )
-    assert progress["headline"] == (
-        f"Starting the {contract['displayName']} connection."
-    )
+    assert progress["headline"] == "Set up ServiceNow HR"
 
 
 def _real_contract(provider: str) -> dict[str, object]:
@@ -12324,7 +13685,6 @@ def test_phase_progress_distinguishes_reused_manual_recheck_and_blocked() -> Non
         "entra-registration": ("done", {"B": "Manual"}),
         "servicenow-oidc": ("done", {"C": "Passed"}),
         "credential": ("pending", {}),
-        "agent-connection": ("pending", {}),
         "topics": ("blocked", {"E": "Failed"}),
         "portal-url": ("pending", {}),
         "test": ("pending", {}),
@@ -12357,7 +13717,6 @@ def test_phase_progress_distinguishes_reused_manual_recheck_and_blocked() -> Non
         "complete-manual",
         "rechecking",
         "pending",
-        "pending",
         "needs-attention",
         "pending",
         "pending",
@@ -12366,15 +13725,67 @@ def test_phase_progress_distinguishes_reused_manual_recheck_and_blocked() -> Non
     assert progress["items"][1]["text"] == "Complete — admin confirmed"
     internal = progress["internal"]["currentPhase"]
     assert internal["startText"] == (
-        "Rechecking: Confirm ServiceNow user mapping"
+        "Rechecking: Confirm ServiceNow single sign-on and user mapping"
     )
     assert internal["waitingText"] == (
-        "Waiting — Confirm ServiceNow user mapping: please provide the requested information to continue."
+        "We're waiting for your ServiceNow administrator's "
+        "saved-configuration confirmation, User Claim, and User Field.\n\n"
+        "When you return, paste their non-sensitive reply or send those "
+        "items individually. Don't include employee identifiers or secrets. "
+        "You won't need to repeat the Entra values."
+    )
+    entra_progress = snow._build_phase_progress(
+        contract,
+        state,
+        {
+            "decision": "run-checkpoints",
+            "phase": {"id": "entra-registration"},
+        },
+        executed_actions=frozenset(),
+        verified_phases=frozenset({"preflight"}),
+    )
+    assert entra_progress["internal"]["currentPhase"]["waitingText"] == (
+        "We're waiting for your Entra administrator's Application (client) ID "
+        "and, if they did Part 4, the claim name.\n\n"
+        "When you return, paste their reply without secrets. You won't need "
+        "to repeat anything you've already sent."
+    )
+    other_progress = snow._build_phase_progress(
+        contract,
+        state,
+        {"decision": "run-checkpoints", "phase": {"id": "topics"}},
+        executed_actions=frozenset(),
+        verified_phases=frozenset({"preflight"}),
+    )
+    other_waiting = other_progress["internal"]["currentPhase"]["waitingText"]
+    assert other_waiting.startswith("Waiting — ")
+    assert other_waiting.endswith(
+        "please provide the requested information to continue."
     )
     grouped = progress["internal"]["groupedText"]
-    assert "   - ✅ Review the current setup — Reused — checked" not in grouped
-    assert "- ✅ Review the current setup — Reused — checked" in grouped
-    assert "   - ❌ Turn on the ServiceNow topics — Needs attention" in grouped
+    assert "Review the current setup" not in grouped
+    assert "- ✅ Confirm Microsoft Entra identity details" in grouped
+    assert "- ❌ Turn on ServiceNow topics — needs attention" in grouped
+
+
+def test_hrsd_plugin_waiting_text_is_fixed_in_doc() -> None:
+    doc = (
+        Path(__file__).resolve().parents[2]
+        / "solutions"
+        / "ess-maker-skills"
+        / "src"
+        / "skills"
+        / "connect"
+        / "servicenow-da-hrsd"
+        / "actions"
+        / "verify-plugin-prerequisites.md"
+    ).read_text(encoding="utf-8")
+    assert (
+        "HR setup is waiting for your ServiceNow administrator to confirm "
+        "that the HR Service Delivery Core plugin is installed and active.\n\n"
+        "  Bring back that confirmation when it's ready, and we'll continue "
+        "with the Entra handoff. You won't need to restart."
+    ) in doc.replace("\r\n", "\n")
 
 
 def test_phase_progress_does_not_complete_after_action_only() -> None:
@@ -12407,7 +13818,7 @@ def test_phase_progress_does_not_complete_after_action_only() -> None:
     assert progress["completedCount"] == 0
     assert progress["internal"]["groupedFinalText"] is None
     assert progress["internal"]["currentPhase"]["startText"] == (
-        "Checking: Turn on the ServiceNow topics"
+        "Checking: Turn on ServiceNow topics"
     )
 
 
@@ -12446,25 +13857,21 @@ def test_phase_progress_grouped_text_follows_transitions_wait_and_error(
         verified_phases=frozenset({"preflight"}),
     )
 
-    assert "- 🔄 Review the current setup — In progress" in (
+    assert "- ⬜ Confirm Microsoft Entra identity details" in (
         initial["internal"]["groupedText"]
     )
-    assert "   - ⬜ Confirm the Microsoft Entra identity details — Pending" in (
-        initial["internal"]["groupedText"]
-    )
+    assert "- ✅" not in initial["internal"]["groupedText"]
     grouped = transitioned["internal"]["groupedText"]
-    assert "- ✅ Review the current setup — Complete — checked" in grouped
-    assert "   - 🔄 Confirm the Microsoft Entra identity details — In progress" in grouped
+    assert "Review the current setup" not in grouped
+    assert "- ⬜ Confirm Microsoft Entra identity details" in grouped
     assert "Connection progress:" not in grouped
     assert "questionText" not in transitioned["currentPhase"]
     current = transitioned["internal"]["currentPhase"]
-    assert "- ✅ Review the current setup — Complete — checked" in (
+    assert "- ⬜ Confirm Microsoft Entra identity details" in (
         current["groupedWaitingText"]
     )
-    assert "   - ⏳ Confirm the Microsoft Entra identity details — Waiting" in (
-        current["groupedWaitingText"]
-    )
-    assert "   - ❌ Confirm the Microsoft Entra identity details — Needs attention" in (
+    assert "Waiting" not in current["groupedWaitingText"]
+    assert "- ❌ Confirm Microsoft Entra identity details — needs attention" in (
         current["groupedErrorText"]
     )
 
@@ -12490,27 +13897,35 @@ def test_phase_progress_final_text_requires_every_current_verified_marker() -> N
         executed_actions=frozenset(),
         verified_phases=all_ids - {"portal-url"},
     )
-    complete = snow._build_phase_progress(
-        contract,
-        state,
-        {"decision": "complete"},
-        executed_actions=frozenset(),
-        verified_phases=all_ids,
-    )
+    with snow.product_profile_context("itsm"):
+        complete = snow._build_phase_progress(
+            contract,
+            state,
+            {"decision": "complete"},
+            executed_actions=frozenset(),
+            verified_phases=all_ids,
+        )
 
     assert incomplete["internal"]["groupedFinalText"] is None
     portal = next(i for i in incomplete["items"] if i["id"] == "portal-url")
     assert portal["status"] == "rechecking"
     final = complete["internal"]["groupedFinalText"]
     assert final.endswith(
-        "Complete — every ServiceNow ITSM step was checked in this run."
+        "Creating tickets and sign-in for other employees haven't been "
+        "verified."
     )
-    assert "**Phases**" in final
-    assert "Responsible role:" in final
+    assert (
+        "**Your ServiceNow connection worked for the IT ticket lookup.** "
+        "Employee Self-Service IT returned the tickets you expected in the "
+        "Test pane."
+    ) in final
+    assert final.startswith("**Set up ServiceNow IT**")
+    assert "Responsible role:" not in final
     assert "Connection progress:" not in final
-    assert "   - ✅ Test a ServiceNow request — Complete — admin confirmed" in final
-    assert "   - ✅ Publish agent" not in final
-    assert "   - ✅ Set employee portal URL — Complete — checked" in final
+    assert "- ✅ Test a ServiceNow request\n" in final
+    assert "Publish agent" not in final
+    assert "- ✅ Set the employee portal URL\n" in final
+    assert "- ⬜" not in final
 
 
 @pytest.mark.parametrize(
@@ -12605,9 +14020,9 @@ def test_portal_phase_reenters_action_when_checkpoint_is_incomplete(
         verified_phases=frozenset(verified),
     )
     assert progress["currentPhase"]["customerLabel"] == (
-        "Set employee portal URL"
+        "Set the employee portal URL"
     )
-    assert "   - ❌ Set employee portal URL — Needs attention" in (
+    assert "- ❌ Set the employee portal URL — needs attention" in (
         progress["internal"]["currentPhase"]["groupedErrorText"]
     )
 
@@ -12695,7 +14110,7 @@ def test_resume_handoff_cli_initializes_preflight_without_role_question(
     availability = result["transport"]["businessGroupAvailability"]
     assert availability["gateRequired"] is False
     assert availability["question"] is None
-    assert "**Phases**" in (
+    assert "Complete these tasks to finish setup." in (
         result["transport"]["internal"]["ordinaryReply"]["text"]
     )
     state_path = (
@@ -12707,7 +14122,7 @@ def test_resume_handoff_cli_initializes_preflight_without_role_question(
     )
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert state["attested"] is True
-    assert state["acceptedContractRevision"] == 11
+    assert state["acceptedContractRevision"] == 12
     assert state["businessGroupAcknowledgements"] == {}
 
 
@@ -12873,8 +14288,8 @@ def test_resume_handoff_cli_jit_group_no_is_byte_stable(
     assert first["status"] == "business-group-availability-required"
     assert availability["currentGroup"]["id"] == "hr-prerequisite"
     assert availability["question"]["options"] == [
-        {"label": "Yes, the ServiceNow admin is available now"},
-        {"label": "No, I need to bring the ServiceNow admin in"},
+        {"label": "Yes"},
+        {"label": "No"},
     ]
 
     command = [
@@ -12897,6 +14312,10 @@ def test_resume_handoff_cli_jit_group_no_is_byte_stable(
     assert snow.main(command) == 0
     repeated_no = json.loads(capsys.readouterr().out)
 
+    assert first_no["status"] == "business-group-unavailable"
+    assert first_no["transport"]["businessGroupAvailability"][
+        "question"
+    ] is None
     assert first_no["transport"]["businessGroupAvailability"][
         "questionSha256"
     ] == availability["questionSha256"]
@@ -12908,6 +14327,9 @@ def test_resume_handoff_cli_jit_group_no_is_byte_stable(
     ] == repeated_no["transport"]["businessGroupAvailability"][
         "unavailableReply"
     ]
+    assert first_no["renderBlock"]["text"] == first_no["transport"][
+        "businessGroupAvailability"
+    ]["unavailableReply"]
     assert state_path.read_bytes() == before
 
 
@@ -12960,24 +14382,27 @@ def test_initial_plan_shows_business_groups_without_preflight_gate(
     transport = initial["transport"]
     ordinary = transport["internal"]["ordinaryReply"]["text"]
     availability = transport["businessGroupAvailability"]
-    expected_groups = 4 if profile == "hrsd" else 3
+    task_count = (
+        len(json.loads(source_contract.read_text(encoding="utf-8"))["phases"])
+        - 1
+    )
     assert initial["lifecycle"]["phase"]["id"] == "preflight"
-    assert "**Automatic setup**" in ordinary
-    assert "**Phases**" in ordinary
-    assert ordinary.count("Responsible role:") == expected_groups
-    assert ordinary.count("   - ") == (
-        len(json.loads(source_contract.read_text(encoding="utf-8"))["phases"])
-        - 1
+    assert ordinary.startswith(
+        "**Set up ServiceNow HR**" if profile == "hrsd"
+        else "**Set up ServiceNow IT**"
     )
-    assert "- 🔄 Review the current setup — In progress" in ordinary
-    assert ordinary.count("   - ⬜ ") == (
-        len(json.loads(source_contract.read_text(encoding="utf-8"))["phases"])
-        - 1
-    )
-    assert (
-        "✅ Complete — admin confirmed or reused means current compatible "
-        "evidence was accepted; it is not automatic API verification."
-    ) in ordinary
+    assert "Complete these tasks to finish setup." in ordinary
+    for removed in (
+        "Automatic setup",
+        "**Phases**",
+        "Responsible role:",
+        "Review the current setup",
+        "Pending",
+        "admin confirmed or reused",
+    ):
+        assert removed not in ordinary
+    assert ordinary.count("- ⬜ ") == task_count
+    assert "✅" not in ordinary
     assert availability["gateRequired"] is False
     assert availability["currentGroup"] is None
     assert availability["question"] is None
@@ -13079,26 +14504,26 @@ def test_business_group_question_is_just_in_time_after_preflight(
     assert availability["currentGroup"]["role"] == expected_role
     expected_questions = {
         "hr-prerequisite": {
-            "header": "HR prerequisite",
-            "question": "Is your ServiceNow administrator available to complete this step?",
+            "header": "Is your ServiceNow administrator available to complete this step?",
+            "question": "HR prerequisite",
             "options": [
-                {"label": "Yes, the ServiceNow admin is available now"},
-                {"label": "No, I need to bring the ServiceNow admin in"},
+                {"label": "Yes"},
+                {"label": "No"},
             ],
             "allowFreeformInput": False,
         },
         "entra-identity": {
-            "header": "Entra identity",
-            "question": "Is your Microsoft Entra administrator available to complete this step?",
+            "header": "Is your Microsoft Entra administrator available to complete this step?",
+            "question": "Entra identity",
             "options": [
-                {"label": "Yes, the Entra admin is available now"},
-                {"label": "No, I need to bring the Entra admin in"},
+                {"label": "Yes"},
+                {"label": "No"},
             ],
             "allowFreeformInput": False,
         },
     }
     assert availability["question"] == expected_questions[expected_group]
-    assert availability["question"]["header"] == availability[
+    assert availability["question"]["question"] == availability[
         "currentGroup"
     ]["label"]
     elicitation = json.dumps(
@@ -13107,16 +14532,14 @@ def test_business_group_question_is_just_in_time_after_preflight(
     )
     assert "**Phases**" not in elicitation
     assert all(icon not in elicitation for icon in ("✅", "🔄", "⬜", "❌"))
-    assert "Maker" not in availability["question"]["question"]
+    assert "Maker" not in availability["question"]["header"]
     assert "action" not in gated
     assert "checkpoints" not in gated
     assert "pendingInput" not in gated
-    assert first_no["transport"]["businessGroupAvailability"]["question"] == (
-        availability["question"]
-    )
+    assert first_no["transport"]["businessGroupAvailability"]["question"] is None
     assert second_no["transport"]["businessGroupAvailability"][
         "question"
-    ] == availability["question"]
+    ] is None
     assert first_no["transport"]["businessGroupAvailability"][
         "questionSha256"
     ] == second_no["transport"]["businessGroupAvailability"][
@@ -13127,7 +14550,72 @@ def test_business_group_question_is_just_in_time_after_preflight(
     ] == second_no["transport"]["businessGroupAvailability"][
         "unavailableReply"
     ]
+    wrapped = snow._with_agent_rules(second_no, "resume-handoff")
+    assert wrapped["endTurn"] is True
+    assert "pendingCard" not in wrapped
+    assert wrapped["chatMessage"] == first_no["transport"][
+        "businessGroupAvailability"
+    ]["unavailableReply"]
+    for jargon in (
+        "business group",
+        "lifecycle phase",
+        "evidence",
+        "attestation",
+        "contract revision",
+        "answer the same question",
+    ):
+        assert jargon not in wrapped["chatMessage"].lower()
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("profile", ("hrsd", "itsm"))
+def test_unavailable_reply_is_plain_waiting_text_for_every_group(
+    profile: str,
+) -> None:
+    context = _profile_context(
+        profile,
+        agent_id=AGENT_ID if profile == "hrsd" else OTHER_AGENT_ID,
+        agent_slug=(
+            "employee-self-service-hr"
+            if profile == "hrsd"
+            else "employee-self-service-it"
+        ),
+    )
+    with snow.product_profile_context(profile):
+        audience = snow._product_audience()
+        agent = snow._display_agent_name(context)
+        replies = {
+            group_id: snow._availability_unavailable_reply(
+                context, {"id": group_id}
+            )
+            for group_id in (
+                "hr-prerequisite",
+                "entra-identity",
+                "servicenow-sso",
+                "maker-configuration",
+            )
+        }
+    assert replies["servicenow-sso"] == (
+        f"The Entra values are confirmed for {audience}. Next, we're "
+        "waiting for your ServiceNow administrator to confirm the saved "
+        f"configuration, User Claim, and User Field for **{agent}**. When "
+        "they reply, paste their non-sensitive message or send those items "
+        "individually. Don't include employee identifiers or secrets. You "
+        "won't need to repeat the Entra values."
+    )
+    for reply in replies.values():
+        lowered = reply.lower()
+        for jargon in (
+            "business group",
+            "lifecycle",
+            "evidence",
+            "attestation",
+            "contract revision",
+            "security_admin",
+            "answer the same question",
+        ):
+            assert jargon not in lowered
+        assert "tenant" not in lowered
 
 
 def test_grouped_ordinary_reply_uses_canonical_status_glyphs_without_mutation(
@@ -13145,7 +14633,6 @@ def test_grouped_ordinary_reply_uses_canonical_status_glyphs_without_mutation(
         "entra-registration": ("current", "In progress"),
         "servicenow-oidc": ("rechecking", "Rechecking"),
         "credential": ("checking", "Checking"),
-        "agent-connection": ("pending", "Pending"),
         "topics": ("needs-attention", "Needs attention"),
         "portal-url": ("pending", "Pending"),
         "test": ("complete-manual", "Complete — admin confirmed"),
@@ -13179,7 +14666,7 @@ def test_grouped_ordinary_reply_uses_canonical_status_glyphs_without_mutation(
             context=context,
             contract=contract,
             state=state,
-            title="Resuming ServiceNow HRSD connection.",
+            title="Set up ServiceNow HR",
             phase_items=phase_items,
             current_group=None,
             roles_available=None,
@@ -13188,24 +14675,97 @@ def test_grouped_ordinary_reply_uses_canonical_status_glyphs_without_mutation(
         )
 
     ordinary = transport["internal"]["ordinaryReply"]["text"]
-    assert "- ✅ Review the current setup — Complete — checked" in ordinary
-    assert "   - ✅ Confirm HR ServiceNow prerequisite — Reused — checked" in (
-        ordinary
-    )
-    assert "   - 🔄 Confirm the Microsoft Entra identity details — In progress" in ordinary
-    assert "   - 🔄 Confirm ServiceNow user mapping — Rechecking" in ordinary
-    assert "   - 🔄 Check ServiceNow connection — Checking" in ordinary
-    assert "   - ⬜ Connect this agent to ServiceNow — Pending" in ordinary
-    assert "   - ❌ Turn on the ServiceNow topics — Needs attention" in ordinary
-    assert "   - ⬜ Set employee portal URL — Pending" in ordinary
-    assert "   - ✅ Test a ServiceNow request — Complete — admin confirmed" in ordinary
-    assert ordinary.count("Responsible role:") == 4
-    assert (
-        "✅ Complete — admin confirmed or reused means current compatible "
-        "evidence was accepted; it is not automatic API verification."
-    ) in ordinary
+    assert ordinary.splitlines()[4:] == [
+        "- ✅ Confirm HR ServiceNow prerequisites",
+        "- ⬜ Confirm Microsoft Entra identity details",
+        "- ⬜ Confirm ServiceNow single sign-on and user mapping",
+        "- ⬜ Create and connect ServiceNow",
+        "- ❌ Turn on ServiceNow topics — needs attention",
+        "- ⬜ Set the employee portal URL",
+        "- ✅ Test a ServiceNow request",
+    ]
+    assert "Responsible role:" not in ordinary
+    assert "Pending" not in ordinary
     assert transport["businessGroupAvailability"]["question"] is None
     assert state == state_before
+
+
+@pytest.mark.parametrize(
+    ("profile", "provider", "title", "labels"),
+    (
+        (
+            "hrsd",
+            "servicenow-da-hrsd",
+            "Set up ServiceNow HR",
+            [
+                "Confirm HR ServiceNow prerequisites",
+                "Confirm Microsoft Entra identity details",
+                "Confirm ServiceNow single sign-on and user mapping",
+                "Create and connect ServiceNow",
+                "Turn on ServiceNow topics",
+                "Set the employee portal URL",
+                "Test a ServiceNow request",
+            ],
+        ),
+        (
+            "itsm",
+            "servicenow-da-itsm",
+            "Set up ServiceNow IT",
+            [
+                "Confirm Microsoft Entra identity details",
+                "Confirm ServiceNow single sign-on and user mapping",
+                "Create and connect ServiceNow",
+                "Turn on ServiceNow topics",
+                "Set the employee portal URL",
+                "Test a ServiceNow request",
+            ],
+        ),
+    ),
+)
+def test_flat_setup_checklist_matches_spec_format_for_both_profiles(
+    profile: str,
+    provider: str,
+    title: str,
+    labels: list[str],
+) -> None:
+    contract = _real_contract(provider)
+    done = ("preflight", "plugin-prerequisites", "entra-registration")
+    state = {
+        "phases": {
+            phase["id"]: {
+                "status": "done" if phase["id"] in done else "pending",
+                "checkpointResults": (
+                    {"X": "Passed"} if phase["id"] in done else {}
+                ),
+            }
+            for phase in contract["phases"]
+        }
+    }
+    with snow.product_profile_context(profile):
+        progress = snow._build_phase_progress(
+            contract,
+            state,
+            {"decision": "run-action", "phase": {"id": "servicenow-oidc"}},
+            executed_actions=frozenset(),
+            verified_phases=frozenset(done),
+        )
+    text = progress["internal"]["groupedText"]
+    checked = [
+        label for label, item in zip(labels, [
+            i for i in progress["items"] if i["id"] != "preflight"
+        ]) if item["status"].startswith("complete-")
+    ]
+    expected = [
+        f"- {'✅' if label in checked else '⬜'} {label}" for label in labels
+    ]
+    assert text.splitlines() == [
+        f"**{title}**",
+        "",
+        "Complete these tasks to finish setup.",
+        "",
+        *expected,
+    ]
+    assert not snow.has_wait_cue(text)
 
 
 def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
@@ -13239,6 +14799,7 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             instance_name="dev123",
         ))
         state["attested"] = True
+        state["adminSetup"]["preflight"]["instanceName"] = "dev123"
         state["attestedAt"] = "2026-11-02T00:00:00Z"
         state["acceptedContractRevision"] = contract["contractRevision"]
         state["phases"] = {
@@ -13285,11 +14846,12 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             "question"
         ] is None
         plugin_guidance = plugin_yes["transport"]["internal"]["ordinaryReply"]["text"]
-        assert "**Current task**" in plugin_guidance
-        assert "Confirm HR ServiceNow prerequisite" in plugin_guidance
-        assert "ServiceNow Application Manager" in plugin_guidance
+        assert "Set up ServiceNow HR" in plugin_guidance
+        assert "First, your ServiceNow administrator needs to confirm" in (
+            plugin_guidance
+        )
         assert "com.sn_hr_core" in plugin_guidance
-        assert "Availability alone never completes this check" in (
+        assert "Availability alone never completes this check" not in (
             plugin_guidance
         )
         after_plugin_yes = json.loads(path.read_text(encoding="utf-8"))
@@ -13323,11 +14885,13 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             availability_context_sha256=entra["contextIdentitySha256"],
         )
         entra_guidance = entra_yes["transport"]["internal"]["ordinaryReply"]["text"]
-        assert "Confirm the Microsoft Entra identity details" in entra_guidance
-        assert "guide-entra-registration.md" in entra_guidance
-        assert "valid Application client ID GUID" in entra_guidance
-        assert "one explicit safe User Claim name" in entra_guidance
-        assert "does not prove app configuration" in entra_guidance
+        # gate() already showed this unchanged checklist, so it is not repeated.
+        assert "Set up ServiceNow HR" in entra_guidance
+        for technical in _TECHNICAL_CARD_BLOCKS[:4] + (
+            "guide-entra-registration.md",
+            "does not prove app configuration",
+        ):
+            assert technical not in entra_guidance
 
         state = json.loads(path.read_text(encoding="utf-8"))
         state["phases"]["entra-registration"]["status"] = "done"
@@ -13349,23 +14913,14 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             "ServiceNow admin / security_admin"
         )
         assert sso["question"] == {
-            "header": "ServiceNow SSO and user mapping",
-            "question": (
-                "Is the ServiceNow admin with security_admin available now?"
+            "header": (
+                "Is your ServiceNow administrator available to complete "
+                "this step?"
             ),
+            "question": "ServiceNow SSO and user mapping",
             "options": [
-                {
-                    "label": (
-                        "Yes, the ServiceNow admin with security_admin is "
-                        "available now"
-                    )
-                },
-                {
-                    "label": (
-                        "No, I need to bring the ServiceNow admin with "
-                        "security_admin in"
-                    )
-                },
+                {"label": "Yes"},
+                {"label": "No"},
             ],
             "allowFreeformInput": False,
         }
@@ -13383,11 +14938,12 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             availability_context_sha256=sso["contextIdentitySha256"],
         )
         sso_guidance = sso_yes["transport"]["internal"]["ordinaryReply"]["text"]
-        assert "Confirm ServiceNow user mapping" in sso_guidance
-        assert "guide-servicenow-oidc.md" in sso_guidance
-        assert "Manual evidence does not prove a real employee token" in (
-            sso_guidance
-        )
+        assert "Set up ServiceNow HR" in sso_guidance
+        for technical in _TECHNICAL_CARD_BLOCKS[:4] + (
+            "guide-servicenow-oidc.md",
+            "Manual evidence does not prove a real employee token",
+        ):
+            assert technical not in sso_guidance
 
         state = json.loads(path.read_text(encoding="utf-8"))
         state["phases"]["servicenow-oidc"]["status"] = "done"
@@ -13406,11 +14962,14 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
         _, maker = gate(verified_admin)
         assert maker["currentGroup"]["id"] == "maker-configuration"
         assert maker["question"] == {
-            "header": "Maker configuration and validation",
-            "question": "Are you available to complete this step?",
+            "header": (
+                "Are you available, with the ESS Maker / Agent Developer "
+                "role, to complete this step?"
+            ),
+            "question": "Maker configuration and validation",
             "options": [
-                {"label": "Yes, the Maker is available now"},
-                {"label": "No, I need to bring the Maker in"},
+                {"label": "Yes"},
+                {"label": "No"},
             ],
             "allowFreeformInput": False,
         }
@@ -13422,17 +14981,14 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             availability_context_sha256=maker["contextIdentitySha256"],
         )
         maker_guidance = maker_yes["transport"]["internal"]["ordinaryReply"]["text"]
-        assert "Check ServiceNow connection" in maker_guidance
-        display_index = maker_guidance.index("Display name (optional)")
-        auth_index = maker_guidance.index("Authentication Type")
+        assert "Set up ServiceNow HR" in maker_guidance
+        auth_index = maker_guidance.index("Authentication type")
         resource_index = maker_guidance.index("Resource URI")
-        instance_index = maker_guidance.index("Instance Name")
-        assert display_index < auth_index < resource_index < instance_index
-        assert "optional display name is guidance only" in maker_guidance
+        instance_index = maker_guidance.index("Instance name")
+        assert auth_index < resource_index < instance_index
 
         for phase_id in (
             "credential",
-            "agent-connection",
             "topics",
             "portal-url",
         ):
@@ -13455,7 +15011,6 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
             )
             assert availability["question"] is None
             assert resumed["lifecycle"]["phase"]["id"] in {
-                "agent-connection",
                 "topics",
                 "portal-url",
                 "test",
@@ -13470,6 +15025,173 @@ def test_hr_business_groups_are_distinct_and_maker_group_is_reused(
         "servicenow-sso",
         "maker-configuration",
     }
+
+
+MAKER_ROLE_QUESTION = (
+    "Are you available, with the ESS Maker / Agent Developer role, to "
+    "complete this step?"
+)
+
+
+@pytest.mark.parametrize("profile", ("hrsd", "itsm"))
+def test_maker_role_is_asked_once_at_maker_phase_start(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+) -> None:
+    product = snow.PRODUCT_PROFILES[profile]
+    context = _profile_context(
+        profile,
+        agent_id=AGENT_ID if profile == "hrsd" else OTHER_AGENT_ID,
+        agent_slug=(
+            "employee-self-service-hr"
+            if profile == "hrsd"
+            else "employee-self-service-it"
+        ),
+    )
+    context["root"] = tmp_path
+    contract = json.loads(
+        (snow.SOLUTION_ROOT / product.contract_path).read_text(
+            encoding="utf-8"
+        )
+    )
+    target_contract = tmp_path / product.contract_path
+    target_contract.parent.mkdir(parents=True, exist_ok=True)
+    target_contract.write_text(json.dumps(contract), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    role = "ESS Maker / Agent Developer"
+    with snow.product_profile_context(profile):
+        groups = snow._business_groups(contract)
+        maker_group = next(
+            group for group in groups if group["id"] == "maker-configuration"
+        )
+        earlier = {"preflight"}
+        for group in groups:
+            if group["id"] != "maker-configuration":
+                earlier.update(group["phaseIds"])
+        mutating_maker_phases = [
+            phase["id"]
+            for phase in contract["phases"]
+            if phase["id"] in maker_group["phaseIds"]
+            and phase.get("mutates") is True
+        ]
+        assert {"credential", "topics", "portal-url"} <= set(
+            mutating_maker_phases
+        )
+        assert all(
+            phase.get("requiredRole") == role
+            for phase in contract["phases"]
+            if phase["id"] in mutating_maker_phases
+        )
+        state = snow._state_base(
+            context,
+            _target_profile_components(profile, instance_name="dev123"),
+        )
+        state["attested"] = True
+        state["acceptedContractRevision"] = contract["contractRevision"]
+        state["phases"] = {
+            phase["id"]: {
+                "status": "done" if phase["id"] in earlier else "pending",
+                "checkpointResults": (
+                    {phase["checkpoints"][0]: "Manual"}
+                    if phase["id"] in earlier
+                    else {}
+                ),
+            }
+            for phase in contract["phases"]
+        }
+        snow._write_lifecycle_state(context, state)
+        for group in groups:
+            if group["id"] == "maker-configuration":
+                continue
+            snow._record_business_group_acknowledgement(
+                context,
+                snow._load_lifecycle_state(context),
+                contract,
+                group,
+                context_sha256=snow._canonical_json_hash(
+                    snow._business_group_context(context, contract, group)
+                ),
+            )
+        snow._write_lifecycle_state(
+            context,
+            {
+                **snow._load_lifecycle_state(context),
+                "roleAttestations": {},
+            },
+        )
+
+        verified = frozenset(earlier)
+        first = snow.resume_handoff(context, verified_phases=verified)
+        availability = first["transport"]["businessGroupAvailability"]
+        assert availability["currentGroup"]["id"] == "maker-configuration"
+        assert availability["question"]["header"] == MAKER_ROLE_QUESTION
+        assert availability["question"]["question"] == (
+            "Maker configuration and validation"
+        )
+        assert first["status"] == "business-group-availability-required"
+        assert snow._load_lifecycle_state(context)["roleAttestations"] == {}
+
+        declined = snow.resume_handoff(
+            context,
+            verified_phases=verified,
+            roles_available=False,
+            availability_group_id="maker-configuration",
+            availability_context_sha256=availability["contextIdentitySha256"],
+        )
+        assert declined["status"] == "business-group-unavailable"
+        assert declined["transport"]["businessGroupAvailability"][
+            "question"
+        ] is None
+        saved = snow._load_lifecycle_state(context)
+        assert saved["roleAttestations"] == {}
+        assert "maker-configuration" not in saved.get(
+            "businessGroupAcknowledgements", {}
+        )
+
+        accepted = snow.resume_handoff(
+            context,
+            verified_phases=verified,
+            roles_available=True,
+            availability_group_id="maker-configuration",
+            availability_context_sha256=availability["contextIdentitySha256"],
+        )
+        assert accepted["transport"]["businessGroupAvailability"][
+            "question"
+        ] is None
+        attestation = snow._load_lifecycle_state(context)[
+            "roleAttestations"
+        ][role]
+        assert attestation["verifiedBy"] == "attested"
+        assert attestation["provider"] == product.provider_key
+        assert attestation["agentSlug"] == snow._agent_slug(context)
+
+        for phase_id in (
+            "credential",
+            "topics",
+            "portal-url",
+        ):
+            if phase_id not in maker_group["phaseIds"]:
+                continue
+            state = snow._load_lifecycle_state(context)
+            state["phases"][phase_id]["status"] = "done"
+            state["phases"][phase_id]["checkpointResults"] = {
+                next(
+                    phase["checkpoints"][0]
+                    for phase in contract["phases"]
+                    if phase["id"] == phase_id
+                ): "Passed"
+            }
+            snow._write_lifecycle_state(context, state)
+            verified = verified | {phase_id}
+            resumed = snow.resume_handoff(context, verified_phases=verified)
+            assert resumed["transport"]["businessGroupAvailability"][
+                "question"
+            ] is None
+            assert MAKER_ROLE_QUESTION not in json.dumps(resumed)
+            assert snow._load_lifecycle_state(context)["roleAttestations"][
+                role
+            ]["verifiedBy"] == "attested"
 
 
 def test_rechecking_done_phase_requires_group_acknowledgement(
@@ -13778,7 +15500,7 @@ def test_schema_v10_does_not_migrate_global_role_acknowledgements(
     with snow.product_profile_context("hrsd"):
         migrated = snow._load_lifecycle_state(context)
 
-    assert migrated["schemaVersion"] == 12
+    assert migrated["schemaVersion"] == snow.LIFECYCLE_SCHEMA_VERSION
     assert migrated["businessGroupAcknowledgements"] == {}
     assert migrated["migration"]["schemaV11"][
         "legacyRoleAvailabilityMigrated"
@@ -13894,13 +15616,21 @@ def test_agent_chooser_lists_prepared_agents_without_remote_discovery(
     assert result["status"] == "choice-required"
     assert result["agents"][0]["id"] == AGENT_ID
     assert result["agents"][0]["status"] == "prepared"
-    assert "prepared in this workspace" in result["question"]["question"]
+    assert result["question"]["header"] == (
+        "Connect Employee Self-Service (IT) to ServiceNow?"
+    )
     assert result["question"]["allowFreeformInput"] is False
-    assert result["question"]["header"] != result["question"]["question"]
-    assert result["question"]["options"][-1] == {
-        "label": "Use another agent (paste link)",
-        "selectionKey": "another-agent",
-    }
+    assert result["question"]["options"] == [
+        {"label": "Yes", "selectionKey": f"prepared:{AGENT_ID}"},
+        {"label": "No", "selectionKey": "another-agent"},
+    ]
+    declined = snow.agent_chooser_handoff(
+        tmp_path,
+        selection_key="another-agent",
+    )
+    assert declined["status"] == "agent-link-required"
+    assert declined["question"]["allowFreeformInput"] is True
+    assert declined["question"]["options"] == []
     selected = snow.agent_chooser_handoff(
         tmp_path,
         selection_key=f"prepared:{AGENT_ID}",
@@ -13910,6 +15640,38 @@ def test_agent_chooser_lists_prepared_agents_without_remote_discovery(
     assert setup_path.read_text(encoding="utf-8") == setup_before
     assert config_path.read_text(encoding="utf-8") == config_before
     assert not (tmp_path / ".local" / "connect").exists()
+
+
+def test_agent_chooser_labels_show_only_names_unless_they_collide() -> None:
+    def choice(name: str, product: str) -> dict:
+        return {"name": name, "product": product}
+
+    assert snow._chooser_option_labels(
+        [
+            choice("Employee Self-Service (HR)", "ServiceNow HRSD"),
+            choice("Employee Self-Service (IT)", "ServiceNow ITSM"),
+        ]
+    ) == ["Employee Self-Service (HR)", "Employee Self-Service (IT)"]
+    assert snow._chooser_option_labels(
+        [
+            choice("Contoso Agent", "ServiceNow HRSD"),
+            choice("Contoso Agent", "ServiceNow ITSM"),
+            choice("Other Agent", "ServiceNow ITSM"),
+        ]
+    ) == [
+        "Contoso Agent — ServiceNow HRSD",
+        "Contoso Agent — ServiceNow ITSM",
+        "Other Agent",
+    ]
+    assert snow._chooser_option_labels(
+        [
+            choice("Contoso Agent", "ServiceNow HRSD"),
+            choice("Contoso Agent", "ServiceNow HRSD"),
+        ]
+    ) == [
+        "Contoso Agent — ServiceNow HRSD (1)",
+        "Contoso Agent — ServiceNow HRSD (2)",
+    ]
 
 
 def test_agent_chooser_offers_link_when_no_agent_is_prepared(
@@ -13931,22 +15693,11 @@ def test_agent_chooser_offers_link_when_no_agent_is_prepared(
 
     result = snow.agent_chooser_handoff(tmp_path)
 
-    assert result["agents"] == []
-    assert result["question"]["options"] == [
-        {
-            "label": "Use another agent (paste link)",
-            "selectionKey": "another-agent",
-        }
-    ]
-    assert "No Employee Self-Service agents are prepared" in (
-        result["question"]["question"]
-    )
-    link_question = snow.agent_chooser_handoff(
-        tmp_path,
-        selection_key="another-agent",
-    )
+    assert result["status"] == "agent-link-required"
+    assert result["branch"] == "explicit-agent-link"
+    link_question = result
     assert link_question["question"] == {
-        "header": "Use another agent",
+        "header": "What is the Copilot Studio link for the agent?",
         "question": (
             "Paste the full Copilot Studio link for the existing agent you "
             "want to use."
@@ -13994,6 +15745,52 @@ def test_agent_chooser_returns_typed_setup_handoff_for_new_workspace_link(
     assert not (tmp_path / ".local" / "connect").exists()
 
 
+def test_agent_chooser_hands_off_to_setup_when_workspace_is_not_prepared(
+    tmp_path: Path,
+) -> None:
+    result = snow.agent_chooser_handoff(tmp_path)
+
+    assert result["status"] == "setup-required"
+    assert result["branch"] == "workspace-not-prepared"
+    assert result["setupHandoff"] == {"command": "/setup"}
+    assert result["stateChanged"] is False
+    assert not (tmp_path / ".local").exists()
+
+
+def test_agent_chooser_carries_link_into_setup_for_unprepared_workspace(
+    tmp_path: Path,
+) -> None:
+    link = (
+        "https://copilotstudio.test.microsoft.com/environments/"
+        f"{ENVIRONMENT_ID}/bots/{AGENT_ID}"
+    )
+
+    result = snow.agent_chooser_handoff(
+        tmp_path,
+        selection_key="another-agent",
+        agent_link=link,
+    )
+
+    assert result["status"] == "setup-required"
+    assert result["branch"] == "workspace-not-prepared"
+    assert result["setupHandoff"]["targetUrl"] == link
+    assert result["setupHandoff"]["environmentId"] == ENVIRONMENT_ID
+    assert result["setupHandoff"]["agentId"] == AGENT_ID
+    assert not (tmp_path / ".local").exists()
+
+
+def test_agent_chooser_unprepared_workspace_still_rejects_bad_link(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(snow.ServiceNowConnectError, match="full Copilot Studio"):
+        snow.agent_chooser_handoff(
+            tmp_path,
+            selection_key="another-agent",
+            agent_link="https://example.com/not-an-agent",
+        )
+    assert not (tmp_path / ".local").exists()
+
+
 def test_agent_chooser_resolves_prepared_agent_link_without_duplicate_setup(
     tmp_path: Path,
 ) -> None:
@@ -14018,6 +15815,570 @@ def test_agent_chooser_resolves_prepared_agent_link_without_duplicate_setup(
     assert not (tmp_path / ".local" / "connect").exists()
 
 
+def _mark_it_setup_pending(setup_path: Path, **agent_overrides: object) -> None:
+    state = json.loads(setup_path.read_text(encoding="utf-8"))
+    agent = state["agents"][AGENT_ID]
+    agent["steps"]["SETUP-02.1"] = {"state": "pending"}
+    agent["agent"].update(agent_overrides)
+    setup_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def test_agent_chooser_reports_setup_incomplete_for_pending_agent(
+    tmp_path: Path,
+) -> None:
+    setup_path, config_path = _seed_it_setup(tmp_path)
+    _mark_it_setup_pending(setup_path)
+    setup_before = setup_path.read_text(encoding="utf-8")
+    config_before = config_path.read_text(encoding="utf-8")
+
+    result = snow.agent_chooser_handoff(
+        tmp_path,
+        selection_key=f"prepared:{AGENT_ID}",
+    )
+
+    assert result["status"] == "setup-incomplete"
+    assert result["branch"] == "setup-not-finished"
+    assert result["agent"]["id"] == AGENT_ID
+    assert result["setupHandoff"]["agentId"] == AGENT_ID
+    assert result["stateChanged"] is False
+    assert "no longer available" not in result["message"]
+    listing = snow.agent_chooser_handoff(tmp_path)
+    assert listing["status"] == "agent-link-required"
+    assert listing["question"]["allowFreeformInput"] is True
+    link = (
+        "https://copilotstudio.test.microsoft.com/environments/"
+        f"{ENVIRONMENT_ID}/bots/{AGENT_ID}"
+    )
+    linked = snow.agent_chooser_handoff(
+        tmp_path,
+        selection_key="another-agent",
+        agent_link=link,
+    )
+    assert linked["status"] == "setup-incomplete"
+    assert linked["setupHandoff"]["targetUrl"] == link
+    assert setup_path.read_text(encoding="utf-8") == setup_before
+    assert config_path.read_text(encoding="utf-8") == config_before
+    assert not (tmp_path / ".local" / "connect").exists()
+
+
+def test_agent_chooser_reports_unsupported_agent_for_link_to_other_agent_type(
+    tmp_path: Path,
+) -> None:
+    setup_path, config_path = _seed_it_setup(tmp_path)
+    state = json.loads(setup_path.read_text(encoding="utf-8"))
+    state["agents"][AGENT_ID]["agent"]["schema_name"] = "cr123_customAgent"
+    state["agents"][AGENT_ID]["agent"]["display_name"] = "Contoso Custom Agent"
+    setup_path.write_text(json.dumps(state), encoding="utf-8")
+    setup_before = setup_path.read_text(encoding="utf-8")
+    config_before = config_path.read_text(encoding="utf-8")
+    link = (
+        "https://copilotstudio.test.microsoft.com/environments/"
+        f"{ENVIRONMENT_ID}/bots/{AGENT_ID}"
+    )
+
+    result = snow.agent_chooser_handoff(
+        tmp_path,
+        selection_key="another-agent",
+        agent_link=link,
+    )
+
+    assert result["status"] == "unsupported-agent"
+    assert result["agent"] == {"id": AGENT_ID, "name": "Contoso Custom Agent"}
+    assert result["stateChanged"] is False
+    assert "setupHandoff" not in result
+    assert result["message"] == (
+        "We can connect **Employee Self-Service HR to ServiceNow HR Service "
+        "Delivery** or **Employee Self-Service IT to ServiceNow IT Service "
+        "Management**, one agent at a time. The selected agent isn't "
+        "supported.\n\nSelect Employee Self-Service HR or IT to continue."
+    )
+    assert "\u2019" not in result["message"]
+    assert setup_path.read_text(encoding="utf-8") == setup_before
+    assert config_path.read_text(encoding="utf-8") == config_before
+    assert not (tmp_path / ".local" / "connect").exists()
+
+
+def test_agent_chooser_reports_unsupported_for_a_named_agent_outside_hr_and_it(
+    tmp_path: Path,
+) -> None:
+    setup_path, config_path = _seed_it_setup(tmp_path)
+    state = json.loads(setup_path.read_text(encoding="utf-8"))
+    state_before = setup_path.read_text(encoding="utf-8")
+    config_before = config_path.read_text(encoding="utf-8")
+
+    result = snow.agent_chooser_handoff(tmp_path, agent_name="my Benefits agent")
+
+    assert result["status"] == "unsupported-agent"
+    assert result["message"] == snow.UNSUPPORTED_AGENT_MESSAGE
+    assert result["stateChanged"] is False
+    assert "question" not in result
+    assert "setupHandoff" not in result
+    assert setup_path.read_text(encoding="utf-8") == state_before
+    assert config_path.read_text(encoding="utf-8") == config_before
+    assert not (tmp_path / ".local" / "connect").exists()
+
+    state["agents"][AGENT_ID]["agent"]["schema_name"] = "cr123_customAgent"
+    state["agents"][AGENT_ID]["agent"]["display_name"] = "Contoso Custom Agent"
+    setup_path.write_text(json.dumps(state), encoding="utf-8")
+    workspace_agent = snow.agent_chooser_handoff(
+        tmp_path,
+        agent_name="the Contoso custom agent",
+    )
+    assert workspace_agent["status"] == "unsupported-agent"
+    assert workspace_agent["agent"] == {
+        "id": AGENT_ID,
+        "name": "Contoso Custom Agent",
+    }
+
+
+def _record_promoted_agent(
+    root: Path,
+    realm: str,
+    name: str,
+    agent_id: str,
+    slug: str = "employee-self-service-it",
+    provider: str = "servicenow-da-itsm",
+) -> None:
+    registry = snow.realms.load_registry(root, provider, slug)
+    registry["targets"][realm] = {
+        "identity": {
+            "environmentId": "00000000-0000-4000-8000-000000005555",
+            "agentId": agent_id,
+            "agentDisplayName": name,
+        }
+    }
+    snow.realms.save_registry(root, registry)
+
+
+def _rename_dev_agent(setup_path: Path, name: str) -> None:
+    state = json.loads(setup_path.read_text(encoding="utf-8"))
+    state["agents"][AGENT_ID]["agent"]["display_name"] = name
+    setup_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+PROD_AGENT_ID = "00000000-0000-4000-8000-000000004445"
+
+
+def test_agent_chooser_resolves_a_promoted_agent_with_a_different_name(
+    tmp_path: Path,
+) -> None:
+    setup_path, _ = _seed_it_setup(tmp_path)
+    _rename_dev_agent(setup_path, "Contoso Dev Helpdesk")
+    _record_promoted_agent(tmp_path, "prod", "Contoso Service Desk", PROD_AGENT_ID)
+
+    by_name = snow.agent_chooser_handoff(
+        tmp_path,
+        agent_name="the Contoso Service Desk agent",
+    )
+    assert by_name["status"] == "ready"
+    assert by_name["selectedAgent"]["id"] == AGENT_ID
+    assert by_name["resolvedBy"] == "promoted-name"
+    assert by_name["realmHint"] == "prod"
+    assert by_name["stateChanged"] is False
+
+    link = (
+        "https://copilotstudio.test.microsoft.com/environments/"
+        f"00000000-0000-4000-8000-000000005555/bots/{PROD_AGENT_ID}"
+    )
+    by_link = snow.agent_chooser_handoff(
+        tmp_path,
+        selection_key="another-agent",
+        agent_link=link,
+    )
+    assert by_link["status"] == "ready"
+    assert by_link["selectedAgent"]["id"] == AGENT_ID
+    assert by_link["resolvedBy"] == "promoted-link"
+    assert by_link["realmHint"] == "prod"
+
+
+def test_agent_chooser_resolves_a_bare_product_word_to_the_only_agent_of_that_kind(
+    tmp_path: Path,
+) -> None:
+    setup_path, _ = _seed_it_setup(tmp_path)
+    _rename_dev_agent(setup_path, "Contoso Dev Helpdesk")
+
+    ready = snow.agent_chooser_handoff(tmp_path, agent_name="the IT agent")
+    assert ready["status"] == "ready"
+    assert ready["selectedAgent"]["id"] == AGENT_ID
+    assert ready["resolvedBy"] == "product"
+    assert "realmHint" not in ready
+
+    other = snow.agent_chooser_handoff(tmp_path, agent_name="HR")
+    assert other["status"] == "agent-link-required"
+    assert other["requestedProduct"] == "HR"
+
+
+@pytest.mark.parametrize(
+    ("typed", "realm"),
+    [
+        ("the IT agent in Prod", "prod"),
+        ("IT agent in Production", "prod"),
+        ("test the IT agent in Test", "test"),
+        ("the IT agent on the Test environment", "test"),
+    ],
+)
+def test_agent_chooser_splits_a_named_destination_and_points_to_discovery(
+    tmp_path: Path, typed: str, realm: str
+) -> None:
+    setup_path, _ = _seed_it_setup(tmp_path)
+    _rename_dev_agent(setup_path, "Contoso Dev Helpdesk")
+
+    ready = snow.agent_chooser_handoff(tmp_path, agent_name=typed)
+    assert ready["status"] == "ready"
+    assert ready["selectedAgent"]["id"] == AGENT_ID
+    assert ready["realmHint"] == realm
+    assert f"discover-realm-target --realm {realm}" in ready["nextStep"]
+    assert "Do not ask the maker" in ready["nextStep"]
+
+
+@pytest.mark.parametrize(
+    ("typed", "realm"),
+    [
+        ("We've now promoted ESS IT to Prod. Check ServiceNow there too.", "prod"),
+        ("Help me check ServiceNow after promotion for IT in Test.", "test"),
+        ("Prod IT agent", "prod"),
+        ("Check the Production environment for the IT agent", "prod"),
+        ("We deployed the IT agent to Test. Validate ServiceNow.", "test"),
+        ("test the IT agent in Prod", "prod"),
+    ],
+)
+def test_agent_chooser_resolves_whole_sentences_to_agent_and_destination(
+    tmp_path: Path, typed: str, realm: str
+) -> None:
+    setup_path, _ = _seed_it_setup(tmp_path)
+    _rename_dev_agent(setup_path, "Contoso Dev Helpdesk")
+
+    ready = snow.agent_chooser_handoff(tmp_path, agent_name=typed)
+    assert ready["status"] == "ready"
+    assert ready["selectedAgent"]["id"] == AGENT_ID
+    assert ready["realmHint"] == realm
+    assert f"discover-realm-target --realm {realm}" in ready["nextStep"]
+
+
+@pytest.mark.parametrize(
+    ("typed", "realm", "product"),
+    [
+        ("We've now promoted ESS HR to Prod. Check ServiceNow there too.", "prod", "HR"),
+        ("deployed HR to Test", "test", "HR"),
+        ("Prod HR agent", "prod", "HR"),
+        ("promoted ESS IT to Test, check it", "test", "IT"),
+    ],
+)
+def test_destination_sentences_split_into_realm_and_one_product(
+    typed: str, realm: str, product: str
+) -> None:
+    destination, words = snow._split_destination(typed)
+    assert destination == realm
+    assert snow._product_word_in_sentence(words) == product
+
+
+def test_chooser_output_hands_a_skipping_model_the_discovery_command(
+    tmp_path: Path,
+) -> None:
+    setup_path, _ = _seed_it_setup(tmp_path)
+    _rename_dev_agent(setup_path, "Contoso Dev Helpdesk")
+
+    result = snow.agent_chooser_handoff(
+        tmp_path,
+        agent_name="We've now promoted ESS IT to Prod. Check ServiceNow there too.",
+    )
+    wrapped = snow._with_agent_rules(result, "agent-chooser")
+    assert wrapped["endTurn"] is False
+    command = wrapped["nextCommand"]
+    assert "discover-realm-target --realm prod" in command
+    assert "--provider servicenow-da-itsm" in command
+    assert "--agent-slug employee-self-service-it" in command
+    assert "never ask the maker for a link" in command
+
+    plain = snow._with_agent_rules(
+        snow.agent_chooser_handoff(tmp_path, agent_name="the IT agent"),
+        "agent-chooser",
+    )
+    assert "nextCommand" not in plain
+
+
+def test_product_word_never_reads_the_pronoun_or_two_agents() -> None:
+    assert snow._product_word_in_sentence("check it in Prod") is None
+    assert snow._product_word_in_sentence("Check HR and IT in Prod") is None
+
+
+_HR_CHOICE = {"id": "hr-id", "name": "Contoso Helpdesk", "profile": "hrsd"}
+_IT_CHOICE = {"id": "it-id", "name": "Fabrikam Desk", "profile": "itsm"}
+
+
+@pytest.mark.parametrize(
+    ("typed", "product"),
+    [
+        ("Connect ServiceNow for my HR agent.", "hrsd"),
+        ("Connect ServiceNow for my IT agent.", "itsm"),
+        ("Connect ServiceNow to the HR agent", "hrsd"),
+        ("connect servicenow for IT", "itsm"),
+        ("I want to set up ServiceNow for HR, please", "hrsd"),
+        ("my HR agent", "hrsd"),
+        ("HR agent", "hrsd"),
+        ("hr", "hrsd"),
+        ("my IT agent", "itsm"),
+        ("IT agent", "itsm"),
+        ("it", "itsm"),
+        ("ESS HR", "hrsd"),
+        ("Employee Self-Service IT", "itsm"),
+    ],
+)
+def test_agent_name_resolves_hr_and_it_phrasings_symmetrically(
+    typed: str, product: str
+) -> None:
+    result = snow._agent_name_result(typed, [_HR_CHOICE, _IT_CHOICE], [], [])
+
+    assert result is not None
+    assert result["status"] == "ready"
+    assert result["selectedAgent"]["profile"] == product
+    assert "realmHint" not in result
+
+
+@pytest.mark.parametrize(
+    "typed",
+    [
+        "Connect ServiceNow for my Benefits agent.",
+        "Connect ServiceNow for my HR Benefits agent",
+        "Connect ServiceNow for HR and IT",
+        "Connect ServiceNow for it",
+    ],
+)
+def test_agent_name_never_guesses_for_other_names_or_two_products(
+    typed: str,
+) -> None:
+    result = snow._agent_name_result(typed, [_HR_CHOICE, _IT_CHOICE], [], [])
+
+    assert result is None or result["status"] == "unsupported-agent"
+    if "Benefits" not in typed:
+        assert result is None or "selectedAgent" not in result
+
+
+def test_agent_chooser_hr_request_never_reports_unsupported_without_an_hr_agent(
+    tmp_path: Path,
+) -> None:
+    _seed_it_setup(tmp_path)
+
+    for typed in ("Connect ServiceNow for my HR agent.", "my HR agent", "HR agent"):
+        result = snow.agent_chooser_handoff(tmp_path, agent_name=typed)
+        assert result["status"] == "agent-link-required"
+        assert "selectedAgent" not in result
+
+    for typed in ("Connect ServiceNow for my IT agent.", "my IT agent", "IT agent"):
+        result = snow.agent_chooser_handoff(tmp_path, agent_name=typed)
+        assert result["status"] == "ready"
+        assert result["selectedAgent"]["id"] == AGENT_ID
+
+
+def _set_only_agent_to_hr(setup_path: Path) -> None:
+    state = json.loads(setup_path.read_text(encoding="utf-8"))
+    state["agents"][AGENT_ID]["agent"]["schema_name"] = snow.HR_SCHEMA_NAME
+    state["agents"][AGENT_ID]["agent"]["workspace_slug"] = (
+        "employee-self-service-hr"
+    )
+    setup_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def _add_hr_agent(setup_path: Path, config_path: Path) -> None:
+    state = json.loads(setup_path.read_text(encoding="utf-8"))
+    hr = json.loads(json.dumps(state["agents"][AGENT_ID]))
+    hr["agent"].update(
+        {
+            "id": OTHER_AGENT_ID,
+            "schema_name": snow.HR_SCHEMA_NAME,
+            "workspace_slug": "employee-self-service-hr",
+        }
+    )
+    hr["workspace"]["folder"] = "workspace/agents/employee-self-service-hr"
+    state["agents"][OTHER_AGENT_ID] = hr
+    setup_path.write_text(json.dumps(state), encoding="utf-8")
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["agents"].append(
+        {
+            "slug": "employee-self-service-hr",
+            "botId": OTHER_AGENT_ID,
+            "agentBuilderChangeSetPath": (
+                "workspace/agents/employee-self-service-hr/"
+                ".agentbuilder/components.json"
+            ),
+        }
+    )
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+
+_IT_REQUESTS = (
+    "Connect ServiceNow for my IT agent.",
+    "my IT agent",
+    "IT agent",
+    "IT",
+    "the IT agent in Prod",
+)
+_HR_REQUESTS = (
+    "Connect ServiceNow for my HR agent.",
+    "my HR agent",
+    "HR agent",
+    "HR",
+    "the HR agent in Prod",
+)
+
+
+@pytest.mark.parametrize(
+    ("requests", "product", "only_other"),
+    [(_IT_REQUESTS, "IT", "hr"), (_HR_REQUESTS, "HR", "it")],
+)
+def test_agent_chooser_asks_for_the_link_when_the_named_product_is_not_prepared(
+    tmp_path: Path,
+    requests: tuple[str, ...],
+    product: str,
+    only_other: str,
+) -> None:
+    setup_path, _ = _seed_it_setup(tmp_path)
+    if only_other == "hr":
+        _set_only_agent_to_hr(setup_path)
+
+    for typed in requests:
+        result = snow.agent_chooser_handoff(tmp_path, agent_name=typed)
+        assert result["status"] == "agent-link-required"
+        assert result["requestedProduct"] == product
+        assert "selectedAgent" not in result and "agents" not in result
+        question = result["question"]
+        assert f"ESS {product} agent" in question["header"]
+        assert "Paste the link" in question["question"]
+        assert "prepare one first" in question["question"]
+        other = "IT" if product == "HR" else "HR"
+        assert f"ESS {other}" not in json.dumps(result)
+
+        wrapped = snow._with_agent_rules(result, "agent-chooser")
+        assert wrapped["endTurn"] is True
+        assert "pendingCard" not in wrapped
+        assert wrapped["chatMessage"].startswith(
+            f"I can't find a prepared ESS {product} agent"
+        )
+        assert "never offer or select the other" in wrapped["afterReply"]
+
+
+def test_agent_chooser_keeps_the_named_product_when_both_are_prepared(
+    tmp_path: Path,
+) -> None:
+    setup_path, config_path = _seed_it_setup(tmp_path)
+    _add_hr_agent(setup_path, config_path)
+
+    for typed in _IT_REQUESTS[:4]:
+        result = snow.agent_chooser_handoff(tmp_path, agent_name=typed)
+        assert result["status"] == "ready"
+        assert result["selectedAgent"]["id"] == AGENT_ID
+    for typed in _HR_REQUESTS[:4]:
+        result = snow.agent_chooser_handoff(tmp_path, agent_name=typed)
+        assert result["status"] == "ready"
+        assert result["selectedAgent"]["id"] == OTHER_AGENT_ID
+
+
+def test_agent_chooser_with_a_destination_never_reports_unsupported(
+    tmp_path: Path,
+) -> None:
+    _seed_it_setup(tmp_path)
+
+    for typed in ("the HR agent in Prod", "agent in Prod"):
+        result = snow.agent_chooser_handoff(tmp_path, agent_name=typed)
+        assert result["status"] != "unsupported-agent"
+        assert "realmHint" not in result or result["status"] == "ready"
+
+
+def test_agent_chooser_never_guesses_between_promoted_or_unknown_names(
+    tmp_path: Path,
+) -> None:
+    setup_path, _ = _seed_it_setup(tmp_path)
+    _rename_dev_agent(setup_path, "Contoso Dev Helpdesk")
+    _record_promoted_agent(tmp_path, "prod", "Contoso Service Desk", PROD_AGENT_ID)
+
+    unknown = snow.agent_chooser_handoff(
+        tmp_path,
+        agent_name="Fabrikam Service Desk",
+    )
+    assert unknown["status"] == "unsupported-agent"
+
+    records = snow._promoted_agent_records(
+        tmp_path,
+        snow._prepared_agent_choices(tmp_path)[1],
+    )
+    duplicate = {**records[0], "choice": {**records[0]["choice"], "id": "other"}}
+    assert (
+        snow._agent_name_result(
+            "Contoso Service Desk",
+            snow._prepared_agent_choices(tmp_path)[1],
+            [],
+            [],
+            [records[0], duplicate],
+        )
+        is None
+    )
+
+
+def test_agent_chooser_resolves_a_named_ess_agent_without_a_card(
+    tmp_path: Path,
+) -> None:
+    _seed_it_setup(tmp_path)
+
+    ready = snow.agent_chooser_handoff(tmp_path, agent_name="the IT agent")
+    assert ready["status"] == "ready"
+    assert ready["selectedAgent"]["id"] == AGENT_ID
+
+    other = snow.agent_chooser_handoff(tmp_path, agent_name="HR")
+    assert other["status"] == "agent-link-required"
+
+    with pytest.raises(snow.ServiceNowConnectError):
+        snow.agent_chooser_handoff(
+            tmp_path,
+            agent_name="IT",
+            selection_key=f"prepared:{AGENT_ID}",
+        )
+
+
+def test_agent_chooser_keeps_unavailable_error_for_unknown_or_non_dev_agent(
+    tmp_path: Path,
+) -> None:
+    setup_path, _ = _seed_it_setup(tmp_path)
+    _mark_it_setup_pending(setup_path, realm="test")
+
+    for key in (
+        f"prepared:{AGENT_ID}",
+        "prepared:00000000-0000-4000-8000-000000000001",
+    ):
+        with pytest.raises(
+            snow.ServiceNowConnectError,
+            match="no longer available",
+        ):
+            snow.agent_chooser_handoff(tmp_path, selection_key=key)
+
+
+def test_agent_chooser_hands_off_to_setup_for_different_environment_link(
+    tmp_path: Path,
+) -> None:
+    setup_path, config_path = _seed_it_setup(tmp_path)
+    setup_before = setup_path.read_text(encoding="utf-8")
+    config_before = config_path.read_text(encoding="utf-8")
+    other_environment = "00000000-0000-4000-8000-000000009997"
+    link = (
+        "https://copilotstudio.test.microsoft.com/environments/"
+        f"{other_environment}/bots/{AGENT_ID}"
+    )
+
+    result = snow.agent_chooser_handoff(
+        tmp_path,
+        selection_key="another-agent",
+        agent_link=link,
+    )
+
+    assert result["status"] == "setup-required"
+    assert result["branch"] == "explicit-agent-link"
+    assert result["setupHandoff"]["environmentId"] == other_environment
+    assert result["setupHandoff"]["workspaceEnvironmentDiffers"] is True
+    assert result["stateChanged"] is False
+    assert setup_path.read_text(encoding="utf-8") == setup_before
+    assert config_path.read_text(encoding="utf-8") == config_before
+    assert not (tmp_path / ".local" / "connect").exists()
+
+
 def test_agent_chooser_rejects_invalid_or_cross_environment_link_without_write(
     tmp_path: Path,
 ) -> None:
@@ -14032,10 +16393,9 @@ def test_agent_chooser_rejects_invalid_or_cross_environment_link_without_write(
             "full Copilot Studio link",
         ),
         (
-            "https://copilotstudio.test.microsoft.com/environments/"
-            "00000000-0000-4000-8000-000000009997"
-            f"/bots/{AGENT_ID}",
-            "different environment",
+            "https://copilotstudio.preprod.microsoft.com/environments/"
+            f"{ENVIRONMENT_ID}/bots/{AGENT_ID}",
+            "different Copilot Studio ring",
         ),
     ):
         with pytest.raises(snow.ServiceNowConnectError, match=message):
@@ -14701,10 +17061,10 @@ def test_inspect_admin_timeout_preserves_error_and_allows_manual_target(
         "category": "timeout",
         "mutationMayHaveOccurred": False,
     }
-    assert "not an empty inventory" in (
+    assert "couldn't check your existing connections" in (
         discovery["instanceQuestion"]["question"]
     )
-    assert "not an empty inventory" in (
+    assert "couldn't check your existing connections" in (
         discovery["manualInstanceQuestion"]["question"]
     )
     assert "**Problem**" not in discovery["instanceQuestion"]["question"]
@@ -14992,6 +17352,7 @@ def test_record_checkpoint_results_walks_every_phase_without_hand_edits(
 ) -> None:
     context, contract, _ = _recording_setup(monkeypatch, tmp_path, profile)
     assert contract["checkpointRecording"] == "provider-command-v1"
+    walked: list[str] = []
     for phase_contract in contract["phases"]:
         phase = phase_contract["id"]
         status = (phase_contract.get("completionStatuses") or ["Passed"])[0]
@@ -15008,7 +17369,10 @@ def test_record_checkpoint_results_walks_every_phase_without_hand_edits(
         )
         assert result["schemaVersion"] == "servicenow.checkpoint-recording.v1"
         assert result["outcome"] == "done", result["reasons"]
-        assert result["resumeArguments"] == ["--verified-phase", phase]
+        walked.append(phase)
+        assert result["resumeArguments"] == [
+            item for done_phase in walked for item in ("--verified-phase", done_phase)
+        ]
         recorded = _recorded_phase(context, profile, phase)
         assert recorded["status"] == "done"
         assert recorded["lastVerifiedAt"]
@@ -15294,13 +17658,17 @@ def test_every_command_output_carries_agent_rules(
     ) == 0
     output = json.loads(capsys.readouterr().out)
     rules = " ".join(output["agentRules"])
-    assert len(output["agentRules"]) <= 5
+    assert len(output["agentRules"]) <= 8
     assert "launcher resolved by /setup" in rules
     assert "renderBlock.text" in rules
     assert "lifecycle.json by hand" in rules
     assert "*> $null" in rules
     assert "lifecycle-runner.md" in rules
-    assert next(iter(output)) == "agentRules"
+    assert list(output)[:2] == ["endTurn", "nextCommand"]
+    assert output["endTurn"] is False
+    assert "resume-handoff" in output["nextCommand"]
+    assert "--verified-phase preflight" in output["nextCommand"]
+    assert list(output).index("agentRules") == 2
 
     assert snow.main(
         [
@@ -15320,12 +17688,64 @@ def test_every_command_output_carries_agent_rules(
     assert error["agentRules"] == output["agentRules"]
 
 
-def test_agent_rules_put_render_block_first_and_skip_adapt_question() -> None:
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_record_outputs_carry_exact_resume_flags_so_preflight_does_not_loop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    profile: str,
+) -> None:
+    context, _, _ = _recording_setup(monkeypatch, tmp_path, profile)
+    monkeypatch.setattr(snow, "load_context", lambda **_kwargs: context)
+    monkeypatch.setattr(snow, "ACTIVE_PROFILE", snow.ACTIVE_PROFILE)
+    provider = context["provider"] if "provider" in context else None
+    provider = provider or (
+        "servicenow-da-hrsd" if profile == "hrsd" else "servicenow-da-itsm"
+    )
+    base = ["--provider", provider]
+    capsys.readouterr()
+    checkpoint = (
+        "SN-DA-HRSD-ADMIN-PREFLIGHT-001"
+        if profile == "hrsd"
+        else "SN-DA-ITSM-ADMIN-PREFLIGHT-001"
+    )
+    assert snow.main(
+        [
+            *base,
+            "record-checkpoint-results",
+            "--phase",
+            "preflight",
+            "--result",
+            f"{checkpoint}=Passed",
+        ]
+    ) == 0
+    recorded = json.loads(capsys.readouterr().out)
+    assert recorded["endTurn"] is False
+    command = recorded["nextCommand"]
+    assert "resume-handoff" in command
+    assert "--verified-phase preflight" in command
+
+    flags = command.split("resume-handoff", 1)[1].split()
+    assert snow.main([*base, "resume-handoff"]) == 0
+    bare = json.loads(capsys.readouterr().out)
+    assert bare["lifecycle"]["phase"]["id"] == "preflight"
+    assert bare["lifecycle"]["phase"]["mode"] == "reverify-done"
+
+    assert snow.main([*base, "resume-handoff", *flags]) == 0
+    followed = json.loads(capsys.readouterr().out)
+    assert followed["lifecycle"]["phase"]["id"] != "preflight"
+
+
+def test_agent_rules_put_chat_message_first_and_skip_adapt_question() -> None:
     result = {"decision": "x", "renderBlock": {"text": "T"}, "progress": {}}
 
     ordered = snow._with_agent_rules(result, "resume-handoff")
 
-    assert list(ordered)[:3] == ["renderBlock", "agentRules", "decision"]
+    assert list(ordered)[:2] == ["chatMessage", "endTurn"]
+    assert ordered["chatMessage"] == "T"
+    assert list(ordered).index("renderBlock") < list(ordered).index(
+        "agentRules"
+    ) < list(ordered).index("decision")
     assert snow._with_agent_rules(result, "adapt-question") is result
 
 
@@ -15397,6 +17817,115 @@ def test_resume_handoff_render_block_is_one_ready_to_emit_message(
     )
     assert "assistant message" in block["instruction"]
     assert "Replace the leading `python`" in (result["checkpoints"]["interpreterNote"])
+
+
+@pytest.mark.parametrize(
+    ("profile", "agent", "purpose", "forbidden"),
+    [
+        ("hrsd", "Employee Self-Service HR", "HR cases", "IT"),
+        (
+            "itsm",
+            "Employee Self-Service IT",
+            "ServiceNow IT tickets",
+            "HR",
+        ),
+    ],
+)
+def test_dev_opening_is_rendered_once_at_fresh_start(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    agent: str,
+    purpose: str,
+    forbidden: str,
+) -> None:
+    context, _, profile = _recording_setup(monkeypatch, tmp_path, profile)
+    context["environment"]["display_name"] = "Contoso Dev"
+    with snow.product_profile_context(profile):
+        first = snow.resume_handoff(context, executed_actions=frozenset())
+        second = snow.resume_handoff(context, executed_actions=frozenset())
+        state = snow._load_lifecycle_state(context)
+
+    text = first["renderBlock"]["text"]
+    assert text.startswith(
+        f"We'll connect **{agent}** to ServiceNow in **Contoso Dev** so "
+        f"employees can create and track their own {purpose}."
+    )
+    assert (
+        "You'll need help from your ServiceNow and Microsoft Entra "
+        "administrators. We'll confirm their setup, create the connection "
+        "in Copilot Studio, then test it with your account."
+    ) in text
+    assert (
+        "We're checking whether your account can configure this agent in "
+        "Contoso Dev before setup begins."
+    ) in text
+    assert "**ServiceNow instance:**" not in text
+    assert f"{forbidden} cases" not in text.split("\n\n")[0]
+    assert "We'll connect" not in second["renderBlock"]["text"]
+    assert state["openingShown"]["shownAt"]
+
+
+def test_dev_opening_includes_instance_and_omits_unrecorded_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, _, profile = _recording_setup(monkeypatch, tmp_path, "hrsd")
+    context["environment"].pop("display_name", None)
+    context["environment"].pop("displayName", None)
+    context["environment"].pop("name", None)
+    with snow.product_profile_context(profile):
+        state = snow._load_lifecycle_state(context)
+        state["adminSetup"]["preflight"]["instanceName"] = "dev184242"
+        text = snow._dev_opening_text(context, state)
+
+    assert "to ServiceNow so employees can" in text
+    assert "**ServiceNow instance:** https://dev184242.service-now.com" in text
+    assert "can configure this agent before setup begins." in text
+    assert context["environment"]["id"] not in text
+
+
+def test_dev_opening_is_not_shown_on_resume(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, _, profile = _recording_setup(monkeypatch, tmp_path, "hrsd")
+    context["environment"]["display_name"] = "Contoso Dev"
+    with snow.product_profile_context(profile):
+        state = snow._load_lifecycle_state(context)
+        state["phases"]["preflight"]["status"] = "done"
+        snow._write_lifecycle_state(context, state)
+        result = snow.resume_handoff(
+            context,
+            executed_actions=frozenset({"preflight"}),
+        )
+
+    assert result["progress"]["mode"] == "resume"
+    assert "We'll connect" not in result["renderBlock"]["text"]
+
+
+@pytest.mark.parametrize(
+    ("profile", "lookup", "records"),
+    [("hrsd", "HR case lookup", "cases"), ("itsm", "IT ticket lookup", "tickets")],
+)
+def test_dev_final_message_follows_spec_and_omits_unrecorded_environment(
+    profile: str,
+    lookup: str,
+    records: str,
+) -> None:
+    with snow.product_profile_context(profile):
+        named = snow._dev_final_message("Contoso Dev")
+        unnamed = snow._dev_final_message(None)
+
+    assert named.startswith(
+        f"**Your ServiceNow connection worked for the {lookup} in Contoso Dev.**"
+    )
+    assert f"returned the {records} you expected in the Test pane." in named
+    assert named.endswith(
+        f"Creating {records} and sign-in for other employees haven't been "
+        "verified."
+    )
+    assert f"for the {lookup}.**" in unnamed
 
 
 @pytest.mark.parametrize(
@@ -15513,14 +18042,22 @@ def test_resume_render_block_final_is_grouped_final_text() -> None:
 
 
 def _assert_grouped_phase_view(text: str, contract: dict) -> None:
-    assert "**Phases**" in text
-    assert "Connection progress:" not in text
-    assert "Complete — admin confirmed or reused" in text
-    for index, group in enumerate(snow._business_groups(contract), start=1):
-        assert (
-            f"{index}. **{group['label']}** — Responsible role: {group['role']}"
-            in text
-        )
+    assert text.startswith("**Set up ServiceNow")
+    assert "Complete these tasks to finish setup." in text
+    for removed in (
+        "Connection progress:",
+        "**Phases**",
+        "Responsible role:",
+        "Automatic setup",
+        "Pending",
+        "admin confirmed or reused",
+    ):
+        assert removed not in text
+    task_lines = [line for line in text.splitlines() if line.startswith("- ")]
+    expected = sum(
+        len(group["phaseIds"]) for group in snow._business_groups(contract)
+    )
+    assert len(task_lines) == expected
 
 
 @pytest.mark.parametrize(
@@ -15547,7 +18084,7 @@ def test_progress_render_block_is_grouped_and_shows_reused_status(
     progress = snow._build_phase_progress(
         contract,
         state,
-        {"decision": "run-action", "phase": {"id": "agent-connection"}},
+        {"decision": "run-action", "phase": {"id": "topics"}},
         executed_actions=frozenset(),
         verified_phases=frozenset(done),
     )
@@ -15560,9 +18097,10 @@ def test_progress_render_block_is_grouped_and_shows_reused_status(
 
     assert block["kind"] == "progress"
     _assert_grouped_phase_view(block["text"], contract)
-    assert "- ✅ Check ServiceNow connection — Reused — checked" in block["text"]
+    assert "- ✅ Create and connect ServiceNow\n" in block["text"]
+    assert "Reused" not in block["text"]
     assert block["text"].count("Starting:") == 1
-    assert block["text"].endswith("Starting: Connect this agent to ServiceNow")
+    assert block["text"].endswith("Starting: Turn on ServiceNow topics")
     serialized = json.dumps({"progress": progress, "block": block})
     for removed in (
         "checklistText",
@@ -15608,5 +18146,2368 @@ def test_checkpoint_recording_emits_grouped_waiting_and_error_blocks(
     block = failed["renderBlock"]
     assert block["kind"] == "error"
     _assert_grouped_phase_view(block["text"], contract)
-    assert "❌ Review the current setup — Needs attention" in block["text"]
+    assert "Review the current setup needs your review" in block["text"]
     assert list(failed)[0] == "renderBlock"
+
+
+def _profile_words(text: str, profile: str) -> str:
+    """Normalise the profile-specific words so HR and IT text can be compared."""
+    audience, record, records = (
+        ("HR", "case", "cases") if profile == "hrsd" else ("IT", "ticket", "tickets")
+    )
+    name = "Employee Self-Service " + audience
+    text = text.replace(name, "<agent>")
+    for word, token in ((records, "<records>"), (record, "<record>")):
+        text = text.replace(word, token)
+    return text.replace(audience, "<X>")
+
+
+def test_hr_and_it_maker_messages_share_the_same_wording(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(snow, "ACTIVE_PROFILE", snow.ACTIVE_PROFILE)
+    monkeypatch.setattr(snow, "ACTIVE_AGENT_NAME", None)
+    monkeypatch.setattr(snow, "_other_agent_already_connected", lambda *_: False)
+    context = _context()
+    context["root"] = tmp_path
+    rendered: dict[str, dict[str, str]] = {}
+    for profile in ("hrsd", "itsm"):
+        with snow.product_profile_context(profile):
+            rendered[profile] = {
+                "title": snow._setup_title(),
+                "ready": snow._dev_test_ready_message(),
+                "empty": snow._dev_empty_result_message(),
+                "untested": snow._dev_untested_message(),
+                "topics": snow._current_task_guidance(
+                    context, {}, phase_id="topics", role="Maker"
+                ),
+                "portal": snow._current_task_guidance(
+                    context, {}, phase_id="portal-url", role="Maker"
+                ),
+                "credential": snow._current_task_guidance(
+                    context, {}, phase_id="credential", role="Maker"
+                ),
+            }
+    for key in rendered["hrsd"]:
+        assert _profile_words(rendered["hrsd"][key], "hrsd") == _profile_words(
+            rendered["itsm"][key], "itsm"
+        ), key
+    assert rendered["hrsd"]["title"] == "Set up ServiceNow HR"
+    assert rendered["itsm"]["title"] == "Set up ServiceNow IT"
+
+
+@pytest.mark.parametrize("profile", ("hrsd", "itsm"))
+@pytest.mark.parametrize("step", snow.REDO_STEPS)
+def test_redo_step_notice_gives_safe_step_instructions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    step: str,
+) -> None:
+    monkeypatch.setattr(snow, "ACTIVE_AGENT_NAME", None)
+    monkeypatch.setattr(snow, "_other_agent_already_connected", lambda *_: False)
+    context = _context()
+    context["root"] = tmp_path
+    with snow.product_profile_context(profile):
+        result = snow.redo_step_notice(context, step)
+        wrapped = snow._with_agent_rules(result, "redo-step-notice")
+    assert result["status"] == "redo-step-notice"
+    assert result["recordsNothing"] is True
+    assert wrapped["endTurn"] is True
+    text = wrapped["chatMessage"]
+    assert text.startswith("That step didn't finish. Here's how to do it again.")
+    for forbidden in ("card", "secret:", "password:", "token:"):
+        assert forbidden not in text.lower()
+    if step == "connection":
+        assert "Microsoft Entra ID User Login" in text
+        assert "Resource URI" in text and "Instance name" in text
+        assert "stays out of this chat" in text
+    if step == "topics":
+        assert "Reply **Try again**" in text
+    assert not list(tmp_path.rglob("*.json"))
+
+
+def test_redo_step_notice_rejects_unknown_steps(tmp_path: Path) -> None:
+    context = _context()
+    context["root"] = tmp_path
+    with pytest.raises(snow.ServiceNowConnectError, match="Redo step"):
+        snow.redo_step_notice(context, "entra")
+
+
+@pytest.mark.parametrize(
+    ("profile", "slug", "title"),
+    (
+        ("hrsd", "employee-self-service-hr", "Set up ServiceNow HR"),
+        ("itsm", "employee-self-service-it", "Set up ServiceNow IT"),
+    ),
+)
+def test_setup_checklist_shows_on_every_resume(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    slug: str,
+    title: str,
+) -> None:
+    product = snow.HRSD_PROFILE if profile == "hrsd" else snow.ITSM_PROFILE
+    context = _profile_context(profile, agent_id=AGENT_ID, agent_slug=slug)
+    context["root"] = tmp_path
+    source_contract = (
+        snow.SOLUTION_ROOT / "src" / "skills" / "connect"
+        / product.provider_key / "contract.json"
+    )
+    contract = json.loads(source_contract.read_text(encoding="utf-8"))
+    target_contract = tmp_path / product.contract_path
+    target_contract.parent.mkdir(parents=True, exist_ok=True)
+    target_contract.write_bytes(source_contract.read_bytes())
+    monkeypatch.chdir(tmp_path)
+    with snow.product_profile_context(profile):
+        state = snow._state_base(
+            context,
+            _target_profile_components(profile, instance_name="dev123"),
+        )
+        state["attested"] = True
+        state["adminSetup"]["preflight"]["instanceName"] = "dev123"
+        state["attestedAt"] = "2026-11-02T00:00:00Z"
+        state["acceptedContractRevision"] = contract["contractRevision"]
+        state["phases"] = {
+            phase["id"]: {
+                "status": (
+                    "done" if phase["id"] == "preflight" else "pending"
+                ),
+                "checkpointResults": (
+                    {phase["checkpoints"][0]: "Passed"}
+                    if phase["id"] == "preflight"
+                    else {}
+                ),
+            }
+            for phase in contract["phases"]
+        }
+        snow._write_lifecycle_state(context, state)
+        lifecycle_before = snow._lifecycle_state_path(context).read_bytes()
+
+        def resume(verified: set[str]) -> str:
+            handoff = snow.resume_handoff(
+                context, verified_phases=frozenset(verified)
+            )
+            # The current question is kept even when the checklist is hidden.
+            assert handoff["transport"]["businessGroupAvailability"][
+                "question"
+            ]
+            return "\n".join(
+                [
+                    str((handoff.get("renderBlock") or {}).get("text") or ""),
+                    str(
+                        handoff["transport"]["internal"]["ordinaryReply"]
+                        ["text"]
+                    ),
+                ]
+            )
+
+        first = resume({"preflight"})
+        second = resume({"preflight"})
+        assert title in first
+        # A repeated resume still shows the checklist; the model may have
+        # skipped the earlier output.
+        assert title in second
+        assert snow._lifecycle_state_path(context).read_bytes() == (
+            lifecycle_before
+        )
+
+        state = json.loads(
+            snow._lifecycle_state_path(context).read_text(encoding="utf-8")
+        )
+        for phase_id in ("plugin-prerequisites", "entra-registration"):
+            if phase_id in state["phases"]:
+                state["phases"][phase_id]["status"] = "done"
+                state["phases"][phase_id]["checkpointResults"] = {
+                    "X": "Manual"
+                }
+        snow._write_lifecycle_state(context, state)
+        changed = resume(
+            {"preflight", "plugin-prerequisites", "entra-registration"}
+        )
+        assert title in changed
+        assert "✅" in changed
+        again = resume(
+            {"preflight", "plugin-prerequisites", "entra-registration"}
+        )
+        assert title in again
+        assert "✅" in again
+
+
+def test_record_commands_never_carry_a_checklist_block() -> None:
+    result = {
+        "status": "recorded",
+        "ordinaryReply": {"text": "Saved."},
+    }
+    wrapped = snow._with_agent_rules(
+        result, "record-identity-direct", SimpleNamespace(
+            provider=None, agent_slug=None, stage="servicenow"
+        )
+    )
+    assert wrapped["chatMessage"].startswith("Saved.")
+    assert "Set up ServiceNow" not in wrapped["chatMessage"]
+    assert "checklistBlock" not in wrapped
+    assert "pendingCard" not in wrapped
+    assert wrapped["endTurn"] is False
+    for removed in (
+        "_checklist_due",
+        "_checklist_snapshot",
+        "_keep_checklist_only_when_turn_final",
+        "_with_state_checklist",
+        "_CHECKLIST_RECORD_COMMANDS",
+    ):
+        assert not hasattr(snow, removed)
+
+
+def test_pasted_admin_reply_is_never_followed_by_an_availability_card() -> None:
+    root = snow.SOLUTION_ROOT / "src" / "skills" / "connect"
+    for provider in ("servicenow-da-hrsd", "servicenow-da-itsm"):
+        for guide in ("guide-servicenow-oidc.md", "guide-entra-registration.md"):
+            text = " ".join(
+                (root / provider / "actions" / guide)
+                .read_text(encoding="utf-8")
+                .split()
+            )
+            assert 'never write your own "Are you available' in text
+            assert "is evidence, never a reason to ask availability" in text
+    entry = " ".join(
+        (root / "servicenow" / "entry.md").read_text(encoding="utf-8").split()
+    )
+    assert "never a trigger for availability" in entry
+    assert (
+        "Every turn that shows a step update must include the latest "
+        "`renderBlock.text` verbatim"
+    ) in entry
+    assert "never deduplicated" in entry
+    assert "counts as shown only when the output ends the turn" not in entry
+    assert "every command that records a result carries it" not in entry
+    for provider in ("servicenow-da-hrsd", "servicenow-da-itsm"):
+        skill = " ".join(
+            (root / provider / "SKILL.md").read_text(encoding="utf-8").split()
+        )
+        assert "never deduplicated" in skill
+    runner = " ".join(
+        (root / "shared" / "lifecycle-runner.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "counts as shown only when the output ends the turn" not in runner
+    for provider in ("servicenow-da-hrsd", "servicenow-da-itsm"):
+        preflight = " ".join(
+            (root / provider / "actions" / "admin-preflight.md")
+            .read_text(encoding="utf-8")
+            .split()
+        )
+        assert "never repeats the instance question" in preflight
+
+def test_progress_bar_carriers_match_main_and_have_no_dedupe_parameters() -> None:
+    import inspect
+
+    for name in ("_resume_render_block", "_checkpoint_render_block"):
+        assert "show_checklist" not in inspect.signature(
+            getattr(snow, name)
+        ).parameters
+    assert "dedupe_checklist" not in inspect.signature(
+        snow.resume_handoff
+    ).parameters
+    assert "show_checklist" not in inspect.signature(
+        snow._business_group_transport
+    ).parameters
+
+
+def test_record_preflight_output_does_not_repeat_the_saved_instance_question(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    state = snow._load_lifecycle_state(_context())
+    snow._admin_setup(state)["preflight"]["discovery"] = {
+        "instanceInputRequired": True,
+        "instanceQuestion": {
+            "header": "Which ServiceNow instance should Employee Self-Service HR use?",
+            "question": "Send its public HTTPS URL, not credentials.",
+            "allowFreeformInput": True,
+        },
+        "manualInstanceQuestion": {"header": "x", "question": "y"},
+        "instanceChoices": {"Yes": "https://dev123.service-now.com"},
+        "instanceFollowUps": [],
+    }
+    snow._write_lifecycle_state(_context(), state)
+
+    recorded = snow.record_preflight_instance(
+        _context(), instance_url="https://dev123.service-now.com"
+    )
+    wrapped = snow._with_agent_rules(
+        recorded, "record-preflight", SimpleNamespace(provider=None, agent_slug=None)
+    )
+
+    assert recorded["instanceName"] == "dev123"
+    assert recorded["discovery"]["instanceInputRequired"] is False
+    assert "instanceQuestion" not in recorded["discovery"]
+    assert "Which ServiceNow instance" not in wrapped.get("chatMessage", "")
+    assert "pendingCard" not in wrapped
+
+
+@pytest.mark.parametrize(
+    "provider", ["servicenow-da-hrsd", "servicenow-da-itsm"]
+)
+def test_claim_confirmation_skips_the_ask_when_entra_claim_is_recorded(
+    provider: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    context = {"agent": {"workspace_slug": "agent-one"}}
+    recorded = {
+        "adminSetup": {
+            "phaseHandoffs": {
+                "entra-registration": {
+                    "status": "completed",
+                    "evidence": {"selectedClaimName": "payrollid"},
+                }
+            }
+        }
+    }
+    monkeypatch.setattr(snow, "load_context", lambda **_: context)
+    monkeypatch.setattr(snow, "_load_lifecycle_state", lambda _ctx: recorded)
+    previous = snow.ACTIVE_PROFILE
+    try:
+        assert snow.main(
+            ["--provider", provider, "--agent-slug", "agent-one",
+             "claim-confirmation-handoff"]
+        ) == 0
+        skipped = json.loads(capsys.readouterr().out)
+        # A maker-stated changed claim still gets the custom-claim handoff.
+        assert snow.main(
+            ["--provider", provider, "--agent-slug", "agent-one",
+             "claim-confirmation-handoff", "--custom-claim"]
+        ) == 0
+        custom = json.loads(capsys.readouterr().out)
+        recorded["adminSetup"]["phaseHandoffs"]["entra-registration"][
+            "status"
+        ] = "pending"
+        assert snow.main(
+            ["--provider", provider, "--agent-slug", "agent-one",
+             "claim-confirmation-handoff"]
+        ) == 0
+        not_recorded = json.loads(capsys.readouterr().out)
+    finally:
+        snow.ACTIVE_PROFILE = previous
+
+    assert skipped["status"] == "claim-already-recorded"
+    assert skipped["endTurn"] is False
+    assert "resume-handoff" in skipped["nextCommand"]
+    assert "--agent-slug agent-one" in skipped["nextCommand"]
+    assert "administrator to confirm" not in skipped["chatMessage"]
+    assert custom["endTurn"] is True
+    assert not_recorded["status"] == "claim-confirmation-required"
+    assert not_recorded["endTurn"] is True
+
+
+def test_target_options_are_accepted_after_the_subcommand() -> None:
+    assert snow._hoist_global_options(
+        ["resume-handoff", "--agent-slug", "ess-it", "--verified-phase", "preflight"]
+    ) == [
+        "--agent-slug", "ess-it", "resume-handoff",
+        "--verified-phase", "preflight",
+    ]
+    assert snow._hoist_global_options(
+        ["--provider", "servicenow-da-itsm", "resume-handoff", "--agent-slug=ess-it"]
+    ) == ["--provider", "servicenow-da-itsm", "--agent-slug=ess-it", "resume-handoff"]
+    args = snow.build_parser().parse_args(
+        snow._hoist_global_options(
+            ["resume-handoff", "--provider", "servicenow-da-itsm",
+             "--agent-slug", "ess-it"]
+        )
+    )
+    assert (args.provider, args.agent_slug, args.command) == (
+        "servicenow-da-itsm", "ess-it", "resume-handoff",
+    )
+
+
+@pytest.mark.parametrize(
+    "provider", ["servicenow-da-hrsd", "servicenow-da-itsm"]
+)
+def test_claim_confirmation_handoff_is_fixed_and_only_custom_claims_get_part_four(
+    provider: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    previous = snow.ACTIVE_PROFILE
+    try:
+        assert snow.main(["--provider", provider, "claim-confirmation-handoff", "--custom-claim"]) == 0
+        full = json.loads(capsys.readouterr().out)
+        assert snow.main(
+            [
+                "--provider",
+                provider,
+                "claim-confirmation-handoff",
+                "--custom-claim",
+                "--claim-name-given",
+                "--servicenow-confirmed",
+            ]
+        ) == 0
+        partial = json.loads(capsys.readouterr().out)
+        assert snow.main(["--provider", provider, "claim-confirmation-handoff"]) == 0
+        plain = json.loads(capsys.readouterr().out)
+    finally:
+        snow.ACTIVE_PROFILE = previous
+
+    assert full["chatMessage"] == (
+        "We need the Entra administrator to confirm the custom claim before "
+        "ServiceNow can use it to identify employees.\n\n"
+        "Ask them to complete the custom-claim work in Part 4 of their "
+        "instructions. Bring back the exact configured claim name and "
+        "confirmation that the setup is complete, including the appropriate "
+        "format and populated source attribute for every intended employee.\n\n"
+        "Then ask your ServiceNow administrator to confirm that the supported "
+        "configuration is saved, with the matching User Claim and User Field. "
+        "Don't send employee identifiers or secrets.\n\n"
+        "We'll keep the Client ID already supplied."
+    )
+    for output in (full, partial, plain):
+        assert output["endTurn"] is True
+        assert output["recordsNothing"] is True
+        assert "pendingCard" not in output
+        assert "email" not in output["chatMessage"].lower()
+    assert "Then ask your ServiceNow administrator" not in partial["chatMessage"]
+    assert partial["chatMessage"] == snow._custom_identifier_claim_planned_reply()[
+        "renderBlock"
+    ]["text"]
+    assert "exact configured claim name" in partial["chatMessage"]
+    assert "complete the custom-claim work in their message" in partial["chatMessage"]
+    assert "You don't need to resend the claim name" not in partial["chatMessage"]
+    assert "Part 4" not in plain["chatMessage"]
+    assert "tenant ID" not in plain["chatMessage"]
+
+
+_HR = ["--provider", "servicenow-da-hrsd"]
+
+
+def test_custom_claim_name_alone_is_not_recorded_until_setup_is_confirmed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(snow, "ACTIVE_PROFILE", snow.ACTIVE_PROFILE)
+    _write_foundation_context(tmp_path, components=_components())
+    context = _context_at(tmp_path)
+    with snow.product_profile_context("hrsd"):
+        state = snow._state_base(context, _components())
+    state["adminSetup"]["preflight"]["instanceName"] = "dev123"
+    snow._write_json_atomic(_lifecycle_path(tmp_path), state)
+    snow.main([*_HR, "identity-direct-handoff", "--stage", "entra"])
+    capsys.readouterr()
+    _ack_identity_availability(context, stage="entra")
+    snow.main([*_HR, "identity-direct-handoff", "--stage", "entra"])
+    snow.main(
+        [
+            *_HR,
+            "identity-direct-handoff",
+            "--stage",
+            "entra",
+            "--client-id",
+            APP_CLIENT_ID,
+        ]
+    )
+    capsys.readouterr()
+
+    args = [
+        *_HR,
+        "record-identity-direct",
+        "--stage",
+        "entra",
+        "--client-id",
+        APP_CLIENT_ID,
+        "--claim-name",
+        "employeeid",
+        "--yes",
+    ]
+    assert snow.main(args) == 0
+    pending = json.loads(capsys.readouterr().out)
+    assert pending["recordsNothing"] is True
+    assert pending["decision"] == "claim-confirmation-required"
+    assert pending["endTurn"] is True
+    assert pending["chatMessage"].startswith(
+        "We have the claim name `employeeid`. Ask your Entra administrator "
+        "to confirm that its setup is complete"
+    )
+    for banned in ("email", "Part 4", "ServiceNow administrator"):
+        assert banned not in pending["chatMessage"]
+    persisted = json.loads(_lifecycle_path(tmp_path).read_text("utf-8"))
+    assert (
+        persisted["adminSetup"]["phaseHandoffs"]["entra-registration"].get(
+            "status"
+        )
+        != "completed"
+    )
+
+    assert snow.main([*args, "--claim-setup-confirmed"]) == 0
+    recorded = json.loads(capsys.readouterr().out)
+    assert recorded["candidates"] == ["employeeid"]
+    assert recorded["entraAdministratorConfirmed"] is True
+
+
+_TENANT_PLACEHOLDER = "22222222-2222-4222-8222-222222222222"
+
+
+@pytest.mark.parametrize(
+    "provider", ["servicenow-da-hrsd", "servicenow-da-itsm"]
+)
+def test_v2_metadata_url_gets_the_fixed_spec_reply(
+    provider: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    previous = snow.ACTIVE_PROFILE
+    try:
+        reported = (
+            f"https://login.microsoftonline.com/{_TENANT_PLACEHOLDER}"
+            "/v2.0/.well-known/openid-configuration"
+        )
+        assert snow.main(
+            ["--provider", provider, "metadata-url-handoff", "--metadata-url", reported]
+        ) == 0
+        out = json.loads(capsys.readouterr().out)
+    finally:
+        snow.ACTIVE_PROFILE = previous
+    assert out["endTurn"] is True
+    assert out["recordsNothing"] is True
+    assert "pendingCard" not in out and "nextCommand" not in out
+    assert "any message means they want to continue" in out["afterReply"]
+    assert out["chatMessage"] == (
+        "That metadata URL contains `/v2.0`, which is a known setup problem "
+        "for this connection.\n\n"
+        "Ask your ServiceNow administrator to review the saved URL against "
+        "the supported ESS metadata URL below, coordinating compatibility "
+        "with your Entra administrator before any repair:\n\n"
+        f"`https://login.microsoftonline.com/{_TENANT_PLACEHOLDER}"
+        "/.well-known/openid-configuration`\n\n"
+        "Don't change an existing configuration serving SSO or the Microsoft "
+        "Graph connector. If compatibility is unresolved, the administrators "
+        "need to resolve it manually.\n\n"
+        "Bring back their non-sensitive confirmation that the supported "
+        "configuration is saved and any changed setup values. We'll recheck "
+        "the affected setup before you repeat the request in this agent's "
+        "Test pane."
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://login.microsoftonline.com/22222222-2222-4222-8222-222222222222/.well-known/openid-configuration",
+        "https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration",
+        "https://example.invalid/22222222-2222-4222-8222-222222222222/v2.0/.well-known/openid-configuration",
+        "https://login.microsoftonline.com/22222222-2222-4222-8222-222222222222/v2.0/.well-known/openid-configuration?x=1",
+        "the connection failed",
+    ],
+)
+def test_metadata_url_diagnosis_needs_the_actual_v2_url(value: str) -> None:
+    result = snow.metadata_url_handoff(value)
+    assert result["decision"] == "no-v2-metadata-url"
+    assert result["recordsNothing"] is True
+    assert "renderBlock" not in result
+
+
+def test_empty_service_areas_reply_is_hr_only_and_fixed(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    previous = snow.ACTIVE_PROFILE
+    try:
+        assert snow.main(
+            ["--provider", "servicenow-da-hrsd", "empty-service-areas-handoff"]
+        ) == 0
+        dev = json.loads(capsys.readouterr().out)
+        assert snow.main(
+            [
+                "--provider",
+                "servicenow-da-hrsd",
+                "empty-service-areas-handoff",
+                "--realm",
+                "prod",
+            ]
+        ) == 0
+        prod = json.loads(capsys.readouterr().out)
+        assert snow.main(
+            ["--provider", "servicenow-da-itsm", "empty-service-areas-handoff"]
+        ) == 0
+        it = json.loads(capsys.readouterr().out)
+    finally:
+        snow.ACTIVE_PROFILE = previous
+    assert dev["endTurn"] is True and dev["recordsNothing"] is True
+    assert "pendingCard" not in dev and "nextCommand" not in dev
+    assert dev["chatMessage"] == (
+        "An empty HR service-area list can occur when the signed-in employee "
+        "doesn't have the required ServiceNow HR access.\n\n"
+        "Ask your ServiceNow administrator to review the access for the "
+        "account used in this request through your organization's normal "
+        "process. The administrator instructions identify the applicable "
+        "roles: `sn_hr_core.basic`, `sn_hr_core.manager`, or "
+        "`sn_hr_core.admin`.\n\n"
+        "Return with their non-sensitive reply after any required access "
+        "work is complete. We'll recheck the applicable setup. Then repeat "
+        "the HR request in this agent's Test pane and tell us whether the "
+        "service areas appear."
+    )
+    assert "any message means they want to continue" in dev["afterReply"]
+    assert prod["chatMessage"].startswith("The HR service-area list is empty.")
+    assert "destination agent's Test pane" in prod["chatMessage"]
+    assert it["decision"] == "not-an-hr-agent"
+    assert "chatMessage" not in it
+
+
+def test_target_change_notice_is_fixed_for_every_change_kind() -> None:
+    context = {
+        "environment": {"id": "env-1", "display_name": "Contoso Dev"},
+        "agent": {"id": "agent-1", "display_name": "Employee Self-Service HR"},
+    }
+    with snow.product_profile_context("hrsd"):
+        env = snow.target_change_handoff(context, "environment", "Contoso Dev 2")
+        agent = snow.target_change_handoff(context, "agent", "Other Agent")
+        user = snow.target_change_handoff(context, "user")
+        wrapped = snow._with_agent_rules(env, "target-change-handoff")
+        with pytest.raises(snow.ServiceNowConnectError):
+            snow.target_change_handoff(context, "environment")
+        with pytest.raises(snow.ServiceNowConnectError):
+            snow.target_change_handoff(context, "agent", "https://example.test")
+    assert env["renderBlock"]["text"] == (
+        "That changes the target environment. We'll check your permission for "
+        "**Employee Self-Service HR in Contoso Dev 2** and which earlier setup "
+        "information still applies.\n\n"
+        "We won't reuse evidence from Contoso Dev without those checks."
+    )
+    assert agent["renderBlock"]["text"].startswith(
+        "That changes the target agent. We'll check your permission for "
+        "**Other Agent in Contoso Dev**"
+    )
+    assert user["renderBlock"]["text"].endswith(
+        "We won't reuse evidence from the earlier account without those checks."
+    )
+    assert env["recordsNothing"] is True
+    assert wrapped["endTurn"] is False
+    assert "resume-handoff" in wrapped["nextCommand"]
+    assert "pendingCard" not in wrapped
+    assert "Do not reuse evidence from the earlier target" in wrapped["afterReply"]
+
+
+def test_target_change_notice_follows_payroll_and_second_agent_wording(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = {
+        "environment": {
+            "id": "env-1",
+            "display_name": "Contoso Dev",
+            "tenant_id": "22222222-2222-4222-8222-222222222222",
+        },
+        "agent": {"id": "agent-1", "display_name": "Employee Self-Service HR"},
+    }
+    with snow.product_profile_context("hrsd"):
+        monkeypatch.setattr(
+            snow, "_custom_identifier_active", lambda state: True
+        )
+        payroll = snow.target_change_handoff(
+            context, "environment", "Contoso Dev 2"
+        )
+        monkeypatch.setattr(
+            snow, "_custom_identifier_active", lambda state: False
+        )
+        monkeypatch.setattr(
+            snow, "_second_agent_audience", lambda ctx, state: "IT"
+        )
+        second = snow.target_change_handoff(
+            context, "environment", "Contoso Dev 2"
+        )
+    assert payroll["renderBlock"]["text"] == (
+        "That changes the target environment. We'll verify your permission "
+        "for **Employee Self-Service HR in Contoso Dev 2** and revalidate "
+        "which earlier setup information applies.\n\n"
+        "We won't assume the connection or test evidence from Contoso Dev "
+        "applies there."
+    )
+    assert second["renderBlock"]["text"] == (
+        "We'll use **Employee Self-Service HR in Contoso Dev 2**. We'll "
+        "check your permission there and which earlier setup information "
+        "still applies before continuing."
+    )
+
+
+_VALIDATION_CONTEXT = {
+    "environment": {
+        "id": "env-1",
+        "display_name": "Contoso Dev",
+        "tenant_id": "22222222-2222-4222-8222-222222222222",
+        "ring": "dev",
+    },
+    "agent": {"id": "agent-1", "display_name": "Employee Self-Service HR"},
+}
+_VALIDATION_CLIENT_ID = "11111111-1111-4111-8111-111111111111"
+
+
+def _validation_state() -> dict[str, Any]:
+    return {
+        "adminSetup": {
+            "phaseHandoffs": {
+                "entra-registration": {
+                    "evidence": {"clientId": _VALIDATION_CLIENT_ID}
+                }
+            },
+            "preflight": {"instanceName": "contoso"},
+        }
+    }
+
+
+def _notice(
+    profile: str,
+    situation: str,
+    scenario: str | None = None,
+    context: dict[str, Any] | None = _VALIDATION_CONTEXT,
+    state: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    with snow.product_profile_context(profile):
+        if context is not None:
+            context = {
+                **context,
+                "agent": {
+                    "id": "agent-1",
+                    "display_name": "Employee Self-Service "
+                    + ("HR" if profile == "hrsd" else "IT"),
+                },
+            }
+        with mock.patch.object(
+            snow, "_load_lifecycle_state", return_value=state or {}
+        ):
+            return snow.validation_notice(
+                context, situation, scenario, **kwargs
+            )
+
+
+def test_validation_notice_context_free_questions_and_exit() -> None:
+    first = _notice("hrsd", "agent-chooser", context=None)
+    second = _notice("itsm", "agent-chooser", "second-agent", context=None)
+    payroll = _notice("hrsd", "agent-chooser", "payroll", context=None)
+    exit_ = _notice("itsm", "knowledge-only-exit", context=None)
+    assert first["renderBlock"]["text"] == (
+        "Which Employee Self-Service HR or IT agent should we connect to "
+        "ServiceNow?"
+    )
+    assert second["renderBlock"]["text"] == (
+        "Which Employee Self-Service HR or IT agent are we adding to the "
+        "ServiceNow setup?"
+    )
+    assert payroll["renderBlock"]["text"] == (
+        "Which ESS agent should we connect to ServiceNow?"
+    )
+    assert "Do not show the Choose agent card" in first["afterReply"]
+    assert exit_["renderBlock"]["text"] == (
+        "We can connect Employee Self-Service HR or IT to ServiceNow, but we "
+        "can't configure the ServiceNow Knowledge connector.\n\n"
+        "Use the [ServiceNow Knowledge connector guidance]"
+        f"({snow._KNOWLEDGE_GUIDANCE_LINK}) for that setup."
+    )
+    for result in (first, second, payroll, exit_):
+        assert result["recordsNothing"] is True
+        wrapped = snow._with_agent_rules(result, "validation-notice")
+        assert wrapped["endTurn"] is True
+        assert "pendingCard" not in wrapped and "nextCommand" not in wrapped
+    assert "no setup starts" in exit_["afterReply"]
+
+
+def test_validation_notice_instance_question_is_first_agent_only() -> None:
+    result = _notice("itsm", "instance-question", "first-agent")
+    assert result["renderBlock"]["text"] == (
+        "Which ServiceNow instance should Employee Self-Service IT use? Send "
+        "its public HTTPS URL, not credentials."
+    )
+    assert "Never ask for or accept credentials" in result["afterReply"]
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice("itsm", "instance-question", "second-agent")
+
+
+@pytest.mark.parametrize(
+    ("scenario", "saved"),
+    [
+        ("first-agent", "saved-configuration confirmation"),
+        ("second-agent", "saved-configuration confirmation for HR"),
+    ],
+)
+def test_validation_notice_sso_conflict_wording(
+    scenario: str, saved: str
+) -> None:
+    result = _notice("hrsd", "sso-conflict", scenario)
+    assert result["renderBlock"]["text"] == (
+        "Send the reported conflict to your Entra and ServiceNow "
+        "administrators. Ask them to agree on a supported setup using the "
+        "compatibility guidance in their messages.\n\n"
+        "We won't change that configuration or troubleshoot the conflict. "
+        "Bring back their non-sensitive compatibility confirmation, "
+        f"{saved}, User Claim, User Field, and any changed registration or "
+        "claim values.\n\n"
+        "We'll recheck the affected setup before continuing. Don't include "
+        "employee identifiers or secrets."
+    )
+    assert "Do not ask a Yes/No question" in result["afterReply"]
+
+
+def test_validation_notice_payroll_conflict_and_claim_contradiction() -> None:
+    conflict = _notice("hrsd", "sso-conflict", "payroll")
+    assert conflict["renderBlock"]["text"].startswith(
+        "Send the reported conflict to your Entra and ServiceNow "
+        "administrators. They need to resolve it manually using the "
+        "coexistence guidance in their messages."
+    )
+    assert "exact saved User Claim and User Field" in (
+        conflict["renderBlock"]["text"]
+    )
+    for profile in ("hrsd", "itsm"):
+        result = _notice(
+            profile,
+            "claim-contradiction",
+            "payroll" if profile == "hrsd" else "first-agent",
+            entra_claim="claim_a",
+            servicenow_claim="claim_b",
+        )
+        assert result["renderBlock"]["text"].startswith(
+            "The administrator replies name different claims: Entra "
+            "confirmed `claim_a`, while ServiceNow reported `claim_b`."
+        )
+        assert result["renderBlock"]["text"].endswith(
+            "The confirmed Client ID stays in place."
+        )
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice(
+            "hrsd",
+            "claim-contradiction",
+            "first-agent",
+            entra_claim="claim_a",
+            servicenow_claim="CLAIM_A",
+        )
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice("hrsd", "claim-contradiction", entra_claim="claim_a")
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice("itsm", "sso-conflict", "payroll")
+
+
+def test_validation_notice_blocked_finish_wording_per_scenario() -> None:
+    first = _notice("hrsd", "blocked-finish", "first-agent")
+    second = _notice("itsm", "blocked-finish", "second-agent")
+    payroll = _notice("hrsd", "blocked-finish", "payroll")
+    assert first["renderBlock"]["text"] == (
+        "**Setup is paused:** we're still waiting for your ServiceNow "
+        "administrator's saved-configuration confirmation, User Claim, and "
+        "User Field for **Employee Self-Service HR in Contoso Dev**. The "
+        "integration remains untested; setup isn't complete.\n\n"
+        "Your progress is saved at that handoff. Bring back their "
+        "non-sensitive reply when it's ready. Don't include employee "
+        "identifiers or secrets."
+    )
+    assert second["renderBlock"]["text"].startswith(
+        "**Setup is paused:** we're still waiting for your ServiceNow "
+        "administrator to confirm the saved configuration, User Claim, and "
+        "User Field for **Employee Self-Service IT in Contoso Dev**. IT "
+        "remains untested; setup isn't complete."
+    )
+    assert payroll["renderBlock"]["text"] == (
+        "**Setup is paused:** we're still waiting for your Entra "
+        "administrator to confirm the completed custom-claim setup and exact "
+        "configured claim name for **Employee Self-Service HR in Contoso "
+        "Dev**. The integration remains untested; setup isn't complete.\n\n"
+        "Your progress is saved at that handoff. Bring back their "
+        "non-sensitive confirmation when it's ready, including the "
+        "appropriate format and populated source attribute for every "
+        "intended employee. Don't include employee identifiers or secrets."
+    )
+    assert "Do not claim the integration works" in first["afterReply"]
+    # The spec defines no wording for the Entra stage of the S1/S2 flows.
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice("hrsd", "blocked-finish", "first-agent", waiting_for="entra-claim")
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice("hrsd", "blocked-finish", "payroll", waiting_for="servicenow")
+
+
+def test_validation_notice_connection_situations() -> None:
+    first = _notice(
+        "hrsd", "connection-disconnected", "first-agent",
+        connection_name="Dev connection",
+    )
+    second = _notice(
+        "itsm", "connection-disconnected", "second-agent",
+        connection_name="Dev connection",
+    )
+    assert first["renderBlock"]["text"].startswith(
+        "**Dev connection is disconnected**, so the agent can't use it for "
+        "this request.\n\nIn Copilot Studio, open **Employee Self-Service HR "
+        "> Settings > Connection Settings > ServiceNow**."
+    )
+    assert first["renderBlock"]["text"].endswith(
+        "The administrator information and portal URL will stay in place."
+    )
+    assert second["renderBlock"]["text"] == (
+        "**Dev connection is disconnected.** This connection is also used by "
+        "HR, and IT can't use it while it's disconnected.\n\n"
+        "In Copilot Studio, open **Employee Self-Service IT > Settings > "
+        "Connection Settings > ServiceNow**. Reconnect the shared "
+        "connection, or create a separate supported connection for IT if "
+        "you don't want to change the shared connection.\n\n"
+        "Return here and tell us which connection you selected."
+    )
+    for bad in (None, "https://example.test", _VALIDATION_CLIENT_ID):
+        with pytest.raises(snow.ServiceNowConnectError):
+            _notice(
+                "hrsd", "connection-disconnected", "first-agent",
+                connection_name=bad,
+            )
+
+
+def test_validation_notice_no_usable_connection_and_resource_uri() -> None:
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice("itsm", "no-usable-connection", "second-agent")
+    state = _validation_state()
+    create = _notice("itsm", "no-usable-connection", "second-agent", state=state)
+    assert create["renderBlock"]["text"] == (
+        "We can't use an existing ServiceNow connection for this IT setup. "
+        "Create a supported connection in Copilot Studio:\n\n"
+        "1. Open **Employee Self-Service IT > Settings > Connection "
+        "Settings > ServiceNow > Connect > Create new connection**.\n"
+        "2. Use:\n"
+        "- **Authentication type:** Microsoft Entra ID User Login\n"
+        f"- **Resource URI:** `{_VALIDATION_CLIENT_ID}`\n"
+        "- **Instance name:** `contoso`\n"
+        "3. Return here and tell us which connection you created.\n\n"
+        "You don't need to repeat the administrator setup solely to create "
+        "this connection."
+    )
+    uri = _notice(
+        "hrsd", "resource-uri-claim-name", "payroll", state=state,
+        claim_name="claim_a",
+    )
+    assert uri["renderBlock"]["text"].startswith(
+        "The connection's **Resource URI** is set to `claim_a`. That field "
+        "needs the Entra app's **Client ID**, not the claim name."
+    )
+    assert f"correct it to `{_VALIDATION_CLIENT_ID}`" in (
+        uri["renderBlock"]["text"]
+    )
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice("hrsd", "no-usable-connection", "first-agent")
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice("hrsd", "resource-uri-claim-name", "first-agent",
+                claim_name="claim_a")
+
+
+def test_validation_notice_topic_link_retry_and_consent() -> None:
+    topic_it = _notice("itsm", "topic-off", "first-agent")
+    topic_pay = _notice("hrsd", "topic-off", "payroll")
+    link_first = _notice("hrsd", "agent-not-linked", "first-agent")
+    link_second = _notice("itsm", "agent-not-linked", "second-agent")
+    link_pay = _notice("hrsd", "agent-not-linked", "payroll")
+    retry = _notice("itsm", "retry-request", "second-agent")
+    consent = _notice("hrsd", "missing-consent", "first-agent")
+    assert topic_it["renderBlock"]["text"] == (
+        "A ServiceNow IT topic needed for this request is off. We'll turn on "
+        "that built-in topic and leave unrelated topics unchanged."
+    )
+    assert topic_pay["renderBlock"]["text"] == (
+        "A required ServiceNow HRSD topic is off, so Employee Self-Service "
+        "HR can't complete that request. We'll enable the affected built-in "
+        "topic and leave unrelated topics unchanged."
+    )
+    assert link_first["renderBlock"]["text"] == (
+        "**Employee Self-Service HR** isn't linked to the selected "
+        "ServiceNow connection. We'll link it and keep the completed "
+        "administrator setup."
+    )
+    assert link_second["renderBlock"]["text"] == (
+        "**Employee Self-Service IT** isn't linked to the selected "
+        "ServiceNow connection. We'll link this agent to it and keep the "
+        "completed administrator setup."
+    )
+    assert link_pay["renderBlock"]["text"] == (
+        "The selected ServiceNow connection isn't linked to **Employee "
+        "Self-Service HR**. We'll link this agent to the selected connection."
+    )
+    assert retry["renderBlock"]["text"] == (
+        "Try the IT request again in the Test pane and tell us whether it "
+        "returns the expected data."
+    )
+    assert consent["renderBlock"]["text"].startswith(
+        "The Entra setup is missing the required consent for the ServiceNow "
+        "connector, which blocks this sign-in setup."
+    )
+    assert "never infer it from a generic failure" in consent["afterReply"]
+    wrapped = snow._with_agent_rules(topic_it, "validation-notice")
+    assert wrapped["endTurn"] is False and "pendingCard" not in wrapped
+    assert "Do not wait for the maker" in wrapped["afterReply"]
+    assert snow._with_agent_rules(retry, "validation-notice")["endTurn"] is True
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice("hrsd", "missing-consent", "payroll")
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_validation_notice_multi_agent_is_the_spec_question(
+    profile: str,
+) -> None:
+    result = _notice(profile, "multi-agent", context=None)
+    assert result["renderBlock"]["text"] == (
+        "This skill validates one ESS agent per run. Which should we check "
+        "first\u2014**Employee Self-Service HR** or **Employee Self-Service "
+        "IT**?"
+    )
+    assert result["recordsNothing"] is True
+    wrapped = snow._with_agent_rules(result, "validation-notice")
+    assert wrapped["endTurn"] is True
+    assert wrapped["chatMessage"] == result["renderBlock"]["text"]
+    assert "pendingCard" not in wrapped and "nextCommand" not in wrapped
+    assert "no preselected choice" in result["afterReply"]
+    assert "start no run" in result["afterReply"]
+
+
+def test_validation_notice_multi_agent_cli_needs_no_agent(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    previous = snow.ACTIVE_PROFILE
+    try:
+        assert snow.main(
+            [
+                "--provider", "servicenow-da-hrsd", "validation-notice",
+                "--situation", "multi-agent",
+            ]
+        ) == 0
+        out = json.loads(capsys.readouterr().out)
+    finally:
+        snow.ACTIVE_PROFILE = previous
+    assert out["endTurn"] is True and out["recordsNothing"] is True
+    assert out["chatMessage"].startswith(
+        "This skill validates one ESS agent per run."
+    )
+    assert not (tmp_path / ".local").exists()
+
+
+def test_validation_notice_existing_identity_uses_its_own_command() -> None:
+    state = {"existingIdentity": {"kind": "knowledge"}}
+    with pytest.raises(snow.ServiceNowConnectError, match="existing-identity"):
+        _notice("hrsd", "blocked-finish", state=state)
+    with pytest.raises(snow.ServiceNowConnectError):
+        _notice("hrsd", "not-a-situation")
+    # S3 reuses the context-free texts.
+    assert _notice("hrsd", "agent-chooser", "existing-identity", None)[
+        "renderBlock"
+    ]["text"].startswith("Which Employee Self-Service HR or IT agent")
+
+
+def test_validation_notice_cli_context_free(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    previous = snow.ACTIVE_PROFILE
+    try:
+        assert snow.main(
+            [
+                "--provider", "servicenow-da-itsm", "validation-notice",
+                "--situation", "knowledge-only-exit",
+            ]
+        ) == 0
+        out = json.loads(capsys.readouterr().out)
+    finally:
+        snow.ACTIVE_PROFILE = previous
+    assert out["endTurn"] is True and out["recordsNothing"] is True
+    assert out["chatMessage"].startswith(
+        "We can connect Employee Self-Service HR or IT to ServiceNow"
+    )
+
+
+@pytest.mark.parametrize(
+    ("profile", "other", "agent", "audience", "purpose"),
+    [
+        (
+            "itsm",
+            "hrsd",
+            "Employee Self-Service IT",
+            "IT",
+            "ServiceNow IT tickets",
+        ),
+        ("hrsd", "itsm", "Employee Self-Service HR", "HR", "HR cases"),
+    ],
+)
+def test_dev_opening_for_second_agent_uses_reuse_wording(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    other: str,
+    agent: str,
+    audience: str,
+    purpose: str,
+) -> None:
+    monkeypatch.setattr(snow, "ACTIVE_AGENT_NAME", None)
+    other_context, _, other_profile = _recording_setup(monkeypatch, tmp_path, other)
+    with snow.product_profile_context(other_profile):
+        other_state = snow._load_lifecycle_state(other_context)
+        other_state["adminSetup"]["phaseHandoffs"] = {
+            "entra-registration": {
+                "status": "completed",
+                "evidence": {"clientId": "11111111-1111-4111-8111-111111111111"},
+            }
+        }
+        snow._write_lifecycle_state(other_context, other_state)
+    context, _, selected = _recording_setup(monkeypatch, tmp_path, profile)
+    context["environment"]["display_name"] = "Contoso Dev"
+    with snow.product_profile_context(selected):
+        assert snow._other_agent_already_connected(
+            context, snow._load_lifecycle_state(context)
+        )
+        text = snow.resume_handoff(context, executed_actions=frozenset())[
+            "renderBlock"
+        ]["text"]
+
+    assert text.startswith(
+        f"We'll add **{agent}** in **Contoso Dev** so employees can create "
+        f"and track their own {purpose}.\n\n"
+        f"Your administrators will confirm whether {audience} can use the "
+        f"existing sign-in setup. Then we'll select a connection, configure "
+        f"{audience}'s portal and topics, and test an {audience} request "
+        "with your account.\n\n"
+    )
+    assert (
+        f"We're checking whether your account can configure {agent} in "
+        "Contoso Dev before setup begins."
+    ) in text
+    assert "We'll connect" not in text
+
+
+def test_dev_opening_stays_generic_without_another_connected_agent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    other_context, _, _ = _recording_setup(monkeypatch, tmp_path, "hrsd")
+    context, _, profile = _recording_setup(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(profile):
+        assert not snow._other_agent_already_connected(
+            context, snow._load_lifecycle_state(context)
+        )
+        assert "We'll connect" in snow._dev_opening_text(context, None)
+    assert other_context["agent"]["id"] != context["agent"]["id"]
+
+
+_SAVED_MAPPING_STATE = {
+    "evidence": {
+        "identityMapping": {
+            "tokenClaimName": "email",
+            "serviceNowUserField": "email",
+        }
+    }
+}
+
+
+@pytest.mark.parametrize(
+    ("profile", "audience", "records", "record"),
+    [
+        ("itsm", "IT", "tickets", "ticket"),
+        ("hrsd", "HR", "cases", "case"),
+    ],
+)
+def test_test_failure_without_evidence_asks_for_the_specific_error(
+    profile: str, audience: str, records: str, record: str
+) -> None:
+    with snow.product_profile_context(profile):
+        result = snow.test_failure_handoff(_SAVED_MAPPING_STATE)
+        wrapped = snow._with_agent_rules(result, "test-failure-handoff")
+    assert result["recordsNothing"] is True
+    assert result["decision"] == "test-failure-information-required"
+    assert wrapped["endTurn"] is True
+    assert "pendingCard" not in wrapped and "nextCommand" not in wrapped
+    assert wrapped["chatMessage"] == (
+        f"The request didn't return the expected {records}. We'll check the "
+        "setup information already supplied to narrow down the problem.\n\n"
+        "If more information is needed, we'll ask for the specific error or "
+        "result\u2014not the whole setup history.\n\n"
+        "We haven't identified the cause yet.\n\n"
+        "Did the Test pane show an error, an empty result, or something "
+        "else? If there was an error, send only its text without "
+        f"{record} contents, employee identifiers, tokens, or other secrets."
+    )
+    assert audience not in wrapped["chatMessage"]
+    assert "Never infer a shared identity failure" in result["afterReply"]
+    assert "Yes/No" not in wrapped["chatMessage"]
+
+
+def test_test_failure_never_names_the_other_agent_without_a_connection() -> None:
+    for profile in ("itsm", "hrsd"):
+        with snow.product_profile_context(profile):
+            result = snow.test_failure_handoff(_SAVED_MAPPING_STATE)
+        text = result["renderBlock"]["text"]
+        assert "HR setup history" not in text
+        assert "IT setup history" not in text
+        assert "Knowledge" not in text
+
+
+@pytest.mark.parametrize(
+    ("profile", "audience", "other", "records"),
+    [("itsm", "IT", "HR", "tickets"), ("hrsd", "HR", "IT", "cases")],
+)
+def test_test_failure_names_the_other_agent_only_when_it_is_connected(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    audience: str,
+    other: str,
+    records: str,
+) -> None:
+    other_profile = "hrsd" if profile == "itsm" else "itsm"
+    context, selected = _existing_identity_context(
+        monkeypatch, tmp_path, profile, other_profile
+    )
+    with snow.product_profile_context(selected):
+        state = snow._load_lifecycle_state(context)
+        result = snow.test_failure_handoff(state, context=context)
+    assert result["renderBlock"]["text"].startswith(
+        f"{audience} didn't return the expected {records}. We'll check the "
+        f"{audience} setup information already supplied to narrow down the "
+        "problem.\n\n"
+        "If more information is needed, we'll ask for the specific error or "
+        f"result\u2014not the whole {other} setup history."
+    )
+
+
+@pytest.mark.parametrize(
+    ("profile", "audience", "records", "record"),
+    [("itsm", "IT", "tickets", "ticket"), ("hrsd", "HR", "cases", "case")],
+)
+def test_test_failure_existing_identity_uses_the_knowledge_variant(
+    profile: str, audience: str, records: str, record: str
+) -> None:
+    state = {**_SAVED_MAPPING_STATE, "existingIdentity": {"kind": "knowledge"}}
+    with snow.product_profile_context(profile):
+        result = snow.test_failure_handoff(state)
+    assert result["renderBlock"]["text"] == (
+        f"{audience} didn't return the expected {records}. We'll check the "
+        f"{audience} setup information already supplied to narrow down the "
+        "problem.\n\n"
+        "If more information is needed, we'll ask for the specific result "
+        "or error\u2014not the whole setup history.\n\n"
+        "We haven't identified the cause yet.\n\n"
+        "Did the Test pane show an error, an empty result, or something "
+        "else? If there was an error, send only its text without "
+        f"{record} contents, employee identifiers, tokens, or other secrets."
+    )
+
+
+@pytest.mark.parametrize(
+    ("profile", "records"), [("hrsd", "cases"), ("itsm", "tickets")]
+)
+def test_test_failure_custom_claim_uses_the_payroll_variant(
+    profile: str, records: str
+) -> None:
+    state = {
+        "evidence": {
+            "identityMapping": {
+                "tokenClaimName": "employee_id_claim",
+                "serviceNowUserField": "employee_number",
+            }
+        }
+    }
+    with snow.product_profile_context(profile):
+        unknown = snow.test_failure_handoff(state)
+        mismatch = snow.test_failure_handoff(
+            state, "employee_id_claim", "user_name"
+        )
+    text = unknown["renderBlock"]["text"]
+    assert text.startswith(
+        "That doesn't match the result you expected. We'll check the "
+        "available setup information before asking you for anything else.\n\n"
+        "We can't identify the cause from the information available yet.\n\n"
+        "Did the Test pane show an error or only an empty result? "
+    )
+    assert "tokens, or other secrets." in text
+    assert records not in text.split("\n\n")[0]
+    assert mismatch["decision"] == "identity-mapping-review-required"
+    assert "payroll claim value" in mismatch["renderBlock"]["text"]
+
+
+def test_test_failure_mismatch_text_for_the_first_agent() -> None:
+    with snow.product_profile_context("itsm"):
+        mismatch = snow.test_failure_handoff(
+            _SAVED_MAPPING_STATE, "employee_id", "employee_number"
+        )
+        same = snow.test_failure_handoff(_SAVED_MAPPING_STATE, "EMAIL", "Email")
+        no_mapping = snow.test_failure_handoff(
+            {"evidence": {}}, "employee_id", "employee_number"
+        )
+        with pytest.raises(snow.ServiceNowConnectError):
+            snow.test_failure_handoff(_SAVED_MAPPING_STATE, "employee_id")
+        with pytest.raises(snow.ServiceNowConnectError):
+            snow.test_failure_handoff(
+                _SAVED_MAPPING_STATE, "employee_id", "a secret value"
+            )
+    assert mismatch["decision"] == "identity-mapping-review-required"
+    text = mismatch["renderBlock"]["text"]
+    assert text.startswith(
+        "The request didn't return the expected tickets. We'll check the "
+        "setup information already supplied to narrow down the problem.\n\n"
+        "The supplied identity-mapping evidence shows that the token claim "
+        "and ServiceNow user field don't match, so ServiceNow can't "
+        "identify the signed-in employee."
+    )
+    assert text.endswith(
+        "We'll recheck the affected setup before you repeat the request in "
+        "this agent's Test pane."
+    )
+    assert "any message means they want to continue" in mismatch["afterReply"]
+    assert mismatch["recordsNothing"] is True
+    for fallback in (same, no_mapping):
+        assert fallback["decision"] == "test-failure-information-required"
+        assert "We haven't identified the cause yet." in fallback["renderBlock"]["text"]
+
+
+def test_test_failure_command_runs_after_context_without_a_card(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(snow, "ACTIVE_AGENT_NAME", None)
+    context, _, profile = _recording_setup(monkeypatch, tmp_path, "itsm")
+    previous = snow.ACTIVE_PROFILE
+    try:
+        with snow.product_profile_context(profile):
+            result = snow.test_failure_handoff(snow._load_lifecycle_state(context))
+    finally:
+        snow.ACTIVE_PROFILE = previous
+    assert result["renderBlock"]["text"].startswith(
+        "The request didn't return the expected tickets."
+    )
+
+
+def _existing_identity_context(monkeypatch, tmp_path, profile, other=None):
+    monkeypatch.setattr(snow, "ACTIVE_AGENT_NAME", None)
+    if other:
+        other_context, _, other_profile = _recording_setup(
+            monkeypatch, tmp_path, other
+        )
+        with snow.product_profile_context(other_profile):
+            other_state = snow._load_lifecycle_state(other_context)
+            other_state["adminSetup"]["phaseHandoffs"] = {
+                "entra-registration": {
+                    "status": "completed",
+                    "evidence": {
+                        "clientId": "11111111-1111-4111-8111-111111111111"
+                    },
+                }
+            }
+            snow._write_lifecycle_state(other_context, other_state)
+    context, _, selected = _recording_setup(monkeypatch, tmp_path, profile)
+    context["environment"]["display_name"] = "Example Dev"
+    with snow.product_profile_context(selected):
+        state = snow._load_lifecycle_state(context)
+        state.setdefault("adminSetup", {}).setdefault("preflight", {})[
+            "instanceName"
+        ] = "dev123456"
+        snow._write_lifecycle_state(context, state)
+    return context, selected
+
+
+@pytest.mark.parametrize(
+    ("profile", "agent", "purpose", "article", "audience"),
+    [
+        (
+            "itsm",
+            "Employee Self-Service IT",
+            "create and track their own ServiceNow IT tickets",
+            "an",
+            "IT",
+        ),
+        (
+            "hrsd",
+            "Employee Self-Service HR",
+            "manage their own ServiceNow HR cases",
+            "an",
+            "HR",
+        ),
+    ],
+)
+def test_existing_identity_opening_uses_s3_text_and_records_only_a_marker(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    agent: str,
+    purpose: str,
+    article: str,
+    audience: str,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, profile)
+    with snow.product_profile_context(selected):
+        result = snow.existing_identity_handoff(context, "knowledge")
+        wrapped = snow._with_agent_rules(result, "existing-identity-handoff")
+        state = snow._load_lifecycle_state(context)
+        resumed = snow.resume_handoff(context, executed_actions=frozenset())
+    text = result["renderBlock"]["text"]
+    assert text.startswith(f"We'll connect **{agent}** in **Example Dev** so employees can ")
+    assert (
+        "Your administrators will confirm whether ESS can use the existing "
+        "sign-in setup alongside Knowledge. The Knowledge connection itself "
+        "isn't the connection ESS needs.\n\n"
+        "We won't change the shared sign-in configuration. After "
+        f"administrator confirmation, we'll configure the ESS connection and "
+        f"test {article} {audience} request with your account.\n\n"
+        "**ServiceNow instance:** https://dev123456.service-now.com\n\n"
+        "We're checking whether your account can configure this agent in "
+        "Example Dev before setup begins."
+    ) in text
+    assert state["existingIdentity"]["kind"] == "knowledge"
+    assert set(state["existingIdentity"]) == {"kind", "recordedAt"}
+    assert state["openingShown"]
+    assert result["recordsIdentityValues"] is False
+    assert result["changesSharedConfiguration"] is False
+    assert wrapped["endTurn"] is False
+    assert "resume-handoff" in wrapped["nextCommand"]
+    assert "pendingCard" not in wrapped
+    assert "We'll connect" not in resumed["renderBlock"]["text"].split("\n\n")[0]
+
+
+@pytest.mark.parametrize(
+    ("kind", "phrase", "retest"),
+    [
+        ("sso", "alongside single sign-on", "Existing single sign-on wasn't retested."),
+        (
+            "graph",
+            "alongside the Microsoft Graph connector",
+            "The Microsoft Graph connector wasn't retested.",
+        ),
+    ],
+)
+def test_existing_identity_kinds_reuse_the_same_boundary_wording(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    kind: str,
+    phrase: str,
+    retest: str,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(selected):
+        result = snow.existing_identity_handoff(context, kind)
+        final = snow._dev_final_message("Example Dev", kind)
+    assert phrase in result["renderBlock"]["text"]
+    assert "We won't change the shared sign-in configuration." in result[
+        "renderBlock"
+    ]["text"]
+    assert final.endswith(retest)
+
+
+def test_existing_identity_disclosure_after_opening_returns_only_the_notice(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(selected):
+        snow.resume_handoff(context, executed_actions=frozenset())
+        later = snow.existing_identity_handoff(context, "knowledge")
+        state = snow._load_lifecycle_state(context)
+    text = later["renderBlock"]["text"]
+    assert text.startswith("Your administrators will confirm whether ESS can use")
+    assert "We'll connect" not in text
+    assert state["existingIdentity"]["kind"] == "knowledge"
+
+
+def test_existing_identity_second_agent_keeps_the_s3_opening(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(
+        monkeypatch, tmp_path, "itsm", other="hrsd"
+    )
+    with snow.product_profile_context(selected):
+        text = snow.existing_identity_handoff(context, "knowledge")["renderBlock"][
+            "text"
+        ]
+    assert text.startswith("We'll connect **Employee Self-Service IT**")
+    assert "already uses ServiceNow" not in text
+
+
+def _resume_with_disclosure(context, kind):
+    disclosure = snow._record_existing_disclosure(context, kind)
+    result = snow.resume_handoff(context, executed_actions=frozenset())
+    snow._prepend_existing_disclosure(result, disclosure)
+    return result
+
+
+@pytest.mark.parametrize("profile", ["itsm", "hrsd"])
+def test_resume_handoff_existing_flag_leads_with_the_s3_opening_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, profile)
+    with snow.product_profile_context(selected):
+        first = _resume_with_disclosure(context, "knowledge")
+        again = _resume_with_disclosure(context, "knowledge")
+        state = snow._load_lifecycle_state(context)
+    text = first["renderBlock"]["text"]
+    assert text.startswith("We'll connect **Employee Self-Service")
+    assert text.count("Your administrators will confirm whether ESS can use") == 1
+    assert "The Knowledge connection itself isn't the connection ESS needs." in text
+    assert "https://dev123456.service-now.com" in text
+    assert "Your administrators will confirm" not in again["renderBlock"]["text"]
+    assert state["existingIdentity"]["kind"] == "knowledge"
+    assert set(state["existingIdentity"]) == {"kind", "recordedAt"}
+
+
+def test_resume_handoff_existing_flag_leads_with_the_notice_after_the_opening(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(selected):
+        snow.resume_handoff(context, executed_actions=frozenset())
+        result = _resume_with_disclosure(context, "knowledge")
+    text = result["renderBlock"]["text"]
+    assert text.startswith("Your administrators will confirm whether ESS can use")
+    assert "We'll connect" not in text
+    assert result["recordsIdentityValues"] is False
+    assert result["changesSharedConfiguration"] is False
+
+
+def test_resume_handoff_without_existing_flag_is_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(selected):
+        result = _resume_with_disclosure(context, None)
+        state = snow._load_lifecycle_state(context)
+    assert "Your administrators will confirm" not in result["renderBlock"]["text"]
+    assert "existingIdentity" not in state
+
+
+def test_resume_handoff_parser_accepts_existing_kinds_only() -> None:
+    parser = snow.build_parser()
+    parsed = parser.parse_args(["resume-handoff", "--existing", "graph"])
+    assert parsed.existing == "graph"
+    assert parser.parse_args(["resume-handoff"]).existing is None
+    with pytest.raises(SystemExit):
+        parser.parse_args(["resume-handoff", "--existing", "oidc"])
+
+
+def _second_agent_context(monkeypatch, tmp_path, profile, other, mapping=True):
+    monkeypatch.setattr(snow, "ACTIVE_AGENT_NAME", None)
+    other_context, _, other_profile = _recording_setup(monkeypatch, tmp_path, other)
+    with snow.product_profile_context(other_profile):
+        other_state = snow._load_lifecycle_state(other_context)
+        other_state["adminSetup"]["phaseHandoffs"] = {
+            "entra-registration": {
+                "status": "completed",
+                "evidence": {"clientId": "11111111-1111-4111-8111-111111111111"},
+            }
+        }
+        if mapping:
+            other_state.setdefault("evidence", {})["identityMapping"] = {
+                "tokenClaimName": "email",
+                "serviceNowUserField": "Email",
+            }
+        snow._write_lifecycle_state(other_context, other_state)
+    context, _, selected = _recording_setup(monkeypatch, tmp_path, profile)
+    context["environment"]["display_name"] = "Example Dev"
+    with snow.product_profile_context(selected):
+        state = snow._load_lifecycle_state(context)
+        state.setdefault("adminSetup", {}).setdefault("preflight", {})[
+            "instanceName"
+        ] = "dev123456"
+        snow._write_lifecycle_state(context, state)
+    return context, selected
+
+
+def _second_agent_walkthrough(context, selected, claim_name="email"):
+    with snow.product_profile_context(selected):
+        _ack_identity_availability(context, stage="entra")
+        entra = snow.identity_direct_handoff(context, stage="entra")
+        snow.record_identity_direct(
+            context,
+            stage="entra",
+            client_id=APP_CLIENT_ID,
+            claim_name=claim_name,
+            user_field=None,
+            confirmed=True,
+        )
+        _complete_entra_admin(context, client_id=APP_CLIENT_ID)
+        _ack_identity_availability(context, stage="servicenow")
+        oidc = snow.identity_direct_handoff(context, stage="servicenow")
+        snow.record_identity_direct(
+            context,
+            stage="servicenow",
+            client_id=None,
+            claim_name=None,
+            user_field="Email",
+            confirmed=True,
+        )
+        _complete_servicenow_admin(context)
+        guidance = snow._current_task_guidance(
+            context,
+            snow._load_lifecycle_state(context),
+            phase_id="credential",
+            role="maker",
+        )
+    return entra["ordinaryReply"]["text"], oidc["ordinaryReply"]["text"], guidance
+
+
+@pytest.mark.parametrize(
+    ("profile", "other", "agent"),
+    [
+        ("itsm", "hrsd", "Employee Self-Service IT"),
+        ("hrsd", "itsm", "Employee Self-Service HR"),
+    ],
+)
+def test_second_agent_reuse_handoffs_follow_the_s2_review_pattern(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    other: str,
+    agent: str,
+) -> None:
+    audience = "IT" if profile == "itsm" else "HR"
+    earlier = "HR" if profile == "itsm" else "IT"
+    context, selected = _second_agent_context(monkeypatch, tmp_path, profile, other)
+    entra, oidc, guidance = _second_agent_walkthrough(context, selected)
+    tenant = context["environment"]["tenant_id"]
+
+    prefix = "The HR prerequisite is confirmed. " if profile == "hrsd" else ""
+    assert entra.startswith(
+        f"{prefix}{earlier} is already using ServiceNow. Your administrators "
+        f"still need to confirm that the shared sign-in setup can also serve "
+        f"{audience}. This doesn't necessarily mean creating or changing "
+        "anything.\n\n"
+        "Send this message to your Microsoft Entra administrator. It "
+        f"includes the earlier {earlier} values for review.\n\n"
+        "When they reply, paste their confirmation here without secrets. "
+        "They'll coordinate reuse with your ServiceNow administrator; you "
+        "don't need to interpret the settings."
+    )
+    for expected in (
+        f"Employee Self-Service {earlier} already uses "
+        "**https://dev123456.service-now.com**. We're adding "
+        f"**{agent}** so employees can ",
+        f"**Earlier {earlier} values\u2014review before using for {audience}**",
+        "- **Client ID:** `11111111-1111-4111-8111-111111111111`",
+        f"- **Tenant ID:** `{tenant}`",
+        "- **Claim setup:** standard email claim; no custom claim",
+        f"These are the values confirmed for {earlier}, not yet confirmed for "
+        f"{audience}.",
+        "**Review the existing setup first**",
+        "State whether the configuration was reused or newly created. If "
+        "reuse is unresolved, tell us what remains to be agreed.",
+        "**Setup instructions\u2014only for work you determine is needed**",
+        f"Do not repeat completed steps solely to add {audience}.",
+        "**Part 1: Register the app**",
+    ):
+        assert expected in entra
+    assert "Review compatibility before setup" not in entra
+
+    assert oidc.startswith(
+        f"The Entra administrator has confirmed that {audience} can use the "
+        "existing registration, including its Client ID and "
+        "standard email claim.\n\n"
+        "Next, send this message to your ServiceNow administrator to "
+        f"confirm the saved sign-in setup and employee matching for "
+        f"{audience}.\n\n"
+        f"It includes the Entra values just confirmed and the earlier "
+        f"{earlier} mapping for review. Paste their reply here without "
+        "secrets."
+    )
+    for expected in (
+        f"**Entra values confirmed for {audience}**",
+        f"- **Client ID:** `{APP_CLIENT_ID}`",
+        "- **Custom claim:** none; standard email claim confirmed",
+        f"**Earlier {earlier} mapping\u2014review before using for "
+        f"{audience}**",
+        "- **User Claim:** `email`",
+        "- **User Field:** **Email**",
+        f"This mapping was confirmed for {earlier}, not yet confirmed for "
+        f"{audience}.",
+        "**Review the existing setup first**",
+        "**don't change it**",
+        "**Setup instructions\u2014only for work you determine is needed**",
+        "**Configure ServiceNow**",
+        "Select **Submit**.",
+    ):
+        assert expected in oidc
+    assert ("sn_hr_core.basic" in oidc) is (profile == "hrsd")
+
+    assert guidance.startswith(
+        "Both administrators have confirmed the shared sign-in setup for "
+        f"{audience}, using `email` as the User Claim and **Email** as the "
+        "User Field.\n\n"
+        f"Next, select a ServiceNow connection for {agent}. We'll then "
+        f"configure and test the {audience} agent.\n\n"
+        "In Copilot Studio:"
+    )
+    assert "3. Select an existing ServiceNow connection available for this agent." in guidance
+    assert (
+        f'The connection may still have "{earlier}" in its name; you don\'t '
+        f"need to rename it or create a duplicate solely to add {audience}."
+    ) in guidance
+    assert "Return here and tell us which connection you selected." in guidance
+    assert "Create new connection" not in guidance
+
+
+def test_second_agent_reuse_tolerates_missing_earlier_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _second_agent_context(
+        monkeypatch, tmp_path, "itsm", "hrsd", mapping=False
+    )
+    entra, oidc, _ = _second_agent_walkthrough(context, selected)
+    assert "**Earlier HR values\u2014review before using for IT**" in entra
+    assert "Claim setup" not in entra
+    assert "Earlier HR mapping" not in oidc
+    assert "**Entra values confirmed for IT**" in oidc
+
+
+@pytest.mark.parametrize(
+    ("profile", "other", "lookup", "records", "earlier"),
+    [
+        ("itsm", "hrsd", "IT ticket lookup", "tickets", "HR"),
+        ("hrsd", "itsm", "HR case lookup", "cases", "IT"),
+    ],
+)
+def test_second_agent_final_message_names_the_agent_that_was_not_retested(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    other: str,
+    lookup: str,
+    records: str,
+    earlier: str,
+) -> None:
+    context, selected = _second_agent_context(monkeypatch, tmp_path, profile, other)
+    with snow.product_profile_context(selected):
+        state = snow._load_lifecycle_state(context)
+        audience = snow._second_agent_audience(context, state)
+        final = snow._dev_final_message("Example Dev", None, audience)
+        first_agent = snow._dev_final_message("Example Dev")
+    assert audience == earlier
+    assert final.startswith(
+        f"**Your ServiceNow connection worked for the {lookup} in Example "
+        "Dev.**"
+    )
+    assert final.endswith(
+        f"Creating {records} and sign-in for other employees haven't been "
+        f"verified. {earlier} wasn't retested in this setup."
+    )
+    assert "retested" not in first_agent
+
+
+def test_second_agent_wording_never_replaces_first_agent_or_s3_flows(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    first, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(selected):
+        _ack_identity_availability(first, stage="entra")
+        text = snow.identity_direct_handoff(first, stage="entra")["ordinaryReply"][
+            "text"
+        ]
+        assert snow._second_agent_reuse(first, snow._load_lifecycle_state(first)) is None
+    assert "already using ServiceNow" not in text
+    assert "Earlier HR values" not in text
+
+    context, selected = _second_agent_context(monkeypatch, tmp_path, "hrsd", "itsm")
+    with snow.product_profile_context(selected):
+        snow.existing_identity_handoff(context, "knowledge")
+        state = snow._load_lifecycle_state(context)
+        assert snow._second_agent_reuse(context, state) is None
+        _ack_identity_availability(context, stage="entra")
+        entra = snow.identity_direct_handoff(context, stage="entra")["ordinaryReply"][
+            "text"
+        ]
+    assert "Review compatibility before setup" in entra
+    assert "Earlier IT values" not in entra
+
+
+@pytest.mark.parametrize("profile", ["itsm", "hrsd"])
+def test_existing_identity_mode_switches_both_admin_packets_to_compatibility_review(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, profile)
+    with snow.product_profile_context(selected):
+        _ack_identity_availability(context, stage="entra")
+        before = snow.identity_direct_handoff(context, stage="entra")
+        snow.existing_identity_handoff(context, "knowledge")
+        entra = snow.identity_direct_handoff(context, stage="entra")
+        snow.record_identity_direct(
+            context,
+            stage="entra",
+            client_id=APP_CLIENT_ID,
+            claim_name="employee_id",
+            user_field=None,
+            confirmed=True,
+        )
+        _ack_identity_availability(context, stage="servicenow")
+        oidc = snow.identity_direct_handoff(context, stage="servicenow")
+    entra_text = entra["ordinaryReply"]["text"]
+    oidc_text = oidc["ordinaryReply"]["text"]
+    assert before["ordinaryReply"]["text"] != entra_text
+    assert "Review compatibility before setup" in entra_text
+    assert "not a request to create or overwrite shared configuration" in entra_text
+    assert "already uses ServiceNow Knowledge" in entra_text
+    assert entra["runtimeInstructionSha256"] == before["runtimeInstructionSha256"]
+    assert oidc_text.startswith(
+        "The Entra administrator has confirmed the registration for ESS, "
+        "including its Client ID and custom claim `employee_id`."
+    )
+    assert "compatibility" in oidc_text
+    assert "Setup reference" in oidc_text
+    assert "employee_id" in oidc_text
+
+
+def test_existing_identity_marker_is_never_cleared_by_later_identity_steps(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(selected):
+        snow.existing_identity_handoff(context, "knowledge")
+        snow.existing_identity_handoff(context, "knowledge", "waiting")
+        _ack_identity_availability(context, stage="entra")
+        snow.identity_direct_handoff(context, stage="entra")
+        snow.resume_handoff(context, executed_actions=frozenset())
+        state = snow._load_lifecycle_state(context)
+    assert snow._existing_identity_kind(state) == "knowledge"
+
+
+@pytest.mark.parametrize("profile", ["itsm", "hrsd"])
+def test_custom_identifier_flag_switches_both_admin_packets_and_persists(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, profile)
+    audience = "HR" if profile == "hrsd" else "IT"
+    with snow.product_profile_context(selected):
+        _ack_identity_availability(context, stage="entra")
+        standard = snow.identity_direct_handoff(context, stage="entra")
+        assert "customIdentifier" not in snow._load_lifecycle_state(context)
+        entra = snow.identity_direct_handoff(
+            context, stage="entra", custom_identifier=True
+        )
+        state = snow._load_lifecycle_state(context)
+        assert set(state["customIdentifier"]) == {"recordedAt"}
+        snow.record_identity_direct(
+            context,
+            stage="entra",
+            client_id=APP_CLIENT_ID,
+            claim_name="payrollid",
+            user_field=None,
+            confirmed=True,
+        )
+        _ack_identity_availability(context, stage="servicenow")
+        oidc = snow.identity_direct_handoff(context, stage="servicenow")
+        resumed = snow._load_lifecycle_state(context)
+    entra_text = entra["ordinaryReply"]["text"]
+    oidc_text = oidc["ordinaryReply"]["text"]
+    assert entra_text != standard["ordinaryReply"]["text"]
+    assert "exact configured **custom claim name**" in entra_text
+    assert "Review sign-in and employee matching" in entra_text
+    assert "do not repeat completed work" in entra_text
+    assert f"supports this ESS {audience} setup" in entra_text
+    assert "payroll ID" in entra_text
+    assert "Confirmed custom claim:** `payrollid`" in oidc_text
+    assert "Review sign-in and employee matching" in oidc_text
+    assert "Do not substitute `email` or `upn`" in oidc_text
+    assert ("sn_hr_core.basic" in oidc_text) is (profile == "hrsd")
+    assert "customIdentifier" in resumed
+    assert entra["runtimeInstructionSha256"] == standard["runtimeInstructionSha256"]
+
+
+def test_custom_identifier_is_not_active_for_a_custom_claim_alone(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "hrsd")
+    with snow.product_profile_context(selected):
+        snow.record_identity_direct(
+            context,
+            stage="entra",
+            client_id=APP_CLIENT_ID,
+            claim_name="employee_id",
+            user_field=None,
+            confirmed=True,
+        )
+        _ack_identity_availability(context, stage="servicenow")
+        oidc = snow.identity_direct_handoff(context, stage="servicenow")
+        state = snow._load_lifecycle_state(context)
+    assert "customIdentifier" not in state
+    assert "Review sign-in and employee matching" not in oidc["ordinaryReply"]["text"]
+
+
+def test_existing_identity_wins_over_custom_identifier(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(selected):
+        snow.existing_identity_handoff(context, "knowledge")
+        _ack_identity_availability(context, stage="entra")
+        entra = snow.identity_direct_handoff(
+            context, stage="entra", custom_identifier=True
+        )
+    assert "Review compatibility before setup" in entra["ordinaryReply"]["text"]
+
+
+@pytest.mark.parametrize("profile", ["itsm", "hrsd"])
+def test_custom_identifier_connection_step_selects_or_creates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, profile)
+    with snow.product_profile_context(selected):
+        before = snow._current_task_guidance(
+            context,
+            snow._load_lifecycle_state(context),
+            phase_id="credential",
+            role="maker",
+        )
+        _ack_identity_availability(context, stage="entra")
+        snow.identity_direct_handoff(context, stage="entra", custom_identifier=True)
+        text = snow._current_task_guidance(
+            context,
+            snow._load_lifecycle_state(context),
+            phase_id="credential",
+            role="maker",
+        )
+    assert "Use a supported ESS ServiceNow connection if one is available" in text
+    assert "A custom employee identifier doesn't automatically require" in text
+    assert "ServiceNow Knowledge connection uses a different connector" in text
+    assert "select **Create new connection**" in text
+    assert "Use a supported ESS ServiceNow connection" not in before
+
+
+@pytest.mark.parametrize(
+    "provider", ["servicenow-da-hrsd", "servicenow-da-itsm"]
+)
+def test_custom_claim_planned_but_not_configured_asks_for_the_completed_work(
+    provider: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    previous = snow.ACTIVE_PROFILE
+    try:
+        assert snow.main(
+            [
+                "--provider",
+                provider,
+                "claim-confirmation-handoff",
+                "--custom-claim",
+                "--claim-name-given",
+            ]
+        ) == 0
+        output = json.loads(capsys.readouterr().out)
+    finally:
+        snow.ACTIVE_PROFILE = previous
+    assert output["chatMessage"] == (
+        "We have the proposed name, but the custom claim isn't confirmed as "
+        "configured.\n\n"
+        "Ask your Entra administrator to complete the custom-claim work in "
+        "their message and return non-sensitive confirmation that the setup "
+        "is complete, plus the exact configured claim name. We'll keep the "
+        "Client ID while we wait. Don't include employee "
+        "identifiers or secrets."
+    )
+    assert output["endTurn"] is True
+    assert output["recordsNothing"] is True
+    assert "pendingCard" not in output
+
+
+@pytest.mark.parametrize(
+    ("profile", "audience", "records", "lookup"),
+    [
+        ("hrsd", "HR", "cases", "HR case lookup"),
+        ("itsm", "IT", "tickets", "IT ticket lookup"),
+    ],
+)
+def test_payroll_id_messages_follow_the_spec_wording(
+    profile: str, audience: str, records: str, lookup: str
+) -> None:
+    with snow.product_profile_context(profile):
+        untested = snow._dev_untested_message(None, True)
+        clarify = snow._dev_test_clarifying_question(None, True)
+        ready = snow._dev_test_ready_message(custom_identifier=True)
+        final = snow._dev_final_message("Contoso Dev", None, None, True)
+        standard_untested = snow._dev_untested_message(None)
+        second_untested = snow._dev_untested_message(None, False, audience)
+        standard_clarify = snow._dev_test_clarifying_question(None)
+    assert untested.startswith(
+        "**The setup steps are finished, but this integration hasn't been "
+        "tested.**"
+    )
+    assert standard_untested.startswith(
+        "**The setup steps are finished, but the integration hasn't been "
+        "tested.**"
+    )
+    assert second_untested.startswith(
+        f"**The {audience} setup steps are finished"
+    )
+    assert clarify == (
+        "What did the request return, and was that what you expected?"
+    )
+    assert "your expected" in standard_clarify
+    assert "or your payroll ID." in ready
+    assert final.startswith(f"**Your {lookup} worked in Contoso Dev.**")
+    assert (
+        "This confirms the lookup for your tested account, agent, and "
+        f"environment\u2014not {records[:-1]} creation or other employees' "
+        "sign-in and payroll mapping."
+    ) in final
+
+
+@pytest.mark.parametrize(
+    "provider", ["servicenow-da-hrsd", "servicenow-da-itsm"]
+)
+def test_second_agent_custom_claim_confirmation_keeps_the_existing_values(
+    provider: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    previous = snow.ACTIVE_PROFILE
+    try:
+        assert snow.main(
+            [
+                "--provider",
+                provider,
+                "claim-confirmation-handoff",
+                "--custom-claim",
+                "--second-agent",
+            ]
+        ) == 0
+        output = json.loads(capsys.readouterr().out)
+    finally:
+        snow.ACTIVE_PROFILE = previous
+    audience = "HR" if provider.endswith("hrsd") else "IT"
+    message = output["chatMessage"]
+    assert f"can serve {audience}" in message
+    assert "The Client ID already supplied stays in place." in message
+    assert output["recordsNothing"] is True
+
+
+_EXISTING_SITUATIONS_WITH_TEXT = {
+    "setup-incomplete": "waiting",
+    "setup-complete": None,
+    "entra-incomplete": "waiting",
+    "two-client-ids": "waiting",
+    "servicenow-incomplete": "waiting",
+    "servicenow-fields-unnamed": "waiting",
+    "coexistence-conflict": "waiting",
+    "replace-configuration": "waiting",
+    "waiting": "waiting",
+    "resumed": None,
+    "resolution-missing-mapping": "waiting",
+    "different-registration": "waiting",
+    "custom-claim": "waiting",
+    "knowledge-connector": "waiting",
+    "existing-connection": None,
+    "connection-disconnected": "waiting",
+    "missing-consent": "waiting",
+    "blocked-finish": None,
+    "hr-prerequisite-self-confirmed": "waiting",
+    "topic-off": None,
+    "binding-missing": None,
+    "retry-after-fix": "waiting",
+}
+
+
+@pytest.mark.parametrize("situation", sorted(_EXISTING_SITUATIONS_WITH_TEXT))
+@pytest.mark.parametrize("profile", ["itsm", "hrsd"])
+def test_existing_identity_recovery_messages_are_fixed_text_without_cards(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    situation: str,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, profile)
+    if situation == "hr-prerequisite-self-confirmed" and profile != "hrsd":
+        with snow.product_profile_context(selected):
+            with pytest.raises(snow.ServiceNowConnectError):
+                snow.existing_identity_handoff(context, "knowledge", situation)
+        return
+    with snow.product_profile_context(selected):
+        result = snow.existing_identity_handoff(
+            context, "knowledge", situation, connection_name="Example connection"
+        )
+        wrapped = snow._with_agent_rules(result, "existing-identity-handoff")
+    text = result["renderBlock"]["text"]
+    assert text.strip()
+    assert "pendingCard" not in wrapped
+    assert "Yes/No" not in text
+    assert result["recordsIdentityValues"] is False
+    assert result["changesSharedConfiguration"] is False
+    for banned in ("record-", "--", "state file", ".json", "ask_user"):
+        assert banned not in text
+    if _EXISTING_SITUATIONS_WITH_TEXT[situation] == "waiting":
+        assert wrapped["endTurn"] is True
+        assert result["afterReply"]
+
+
+def test_existing_identity_metadata_url_reuses_the_v2_validation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    url = (
+        "https://login.microsoftonline.com/22222222-2222-4222-8222-222222222222"
+        "/v2.0/.well-known/openid-configuration"
+    )
+    with snow.product_profile_context(selected):
+        result = snow.existing_identity_handoff(
+            context, "knowledge", "metadata-url", metadata_url=url
+        )
+        unrelated = snow.existing_identity_handoff(
+            context, "knowledge", "metadata-url", metadata_url="not a url"
+        )
+        wrapped = snow._with_agent_rules(result, "existing-identity-handoff")
+    assert "contains `/v2.0`" in result["renderBlock"]["text"]
+    assert unrelated["decision"] == "no-v2-metadata-url"
+    assert "renderBlock" not in unrelated
+    assert wrapped["endTurn"] is True
+    assert "any message means they want to continue" in result["afterReply"]
+
+
+@pytest.mark.parametrize(
+    ("profile", "agent", "audience"),
+    [
+        ("itsm", "Employee Self-Service IT", "IT"),
+        ("hrsd", "Employee Self-Service HR", "HR"),
+    ],
+)
+def test_existing_identity_incomplete_setup_messages_follow_spec(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    agent: str,
+    audience: str,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, profile)
+    with snow.product_profile_context(selected):
+        topic = snow.existing_identity_handoff(context, "knowledge", "topic-off")
+        binding = snow.existing_identity_handoff(
+            context, "knowledge", "binding-missing"
+        )
+        retry = snow.existing_identity_handoff(
+            context, "knowledge", "retry-after-fix"
+        )
+    assert topic["renderBlock"]["text"] == (
+        f"A ServiceNow {audience} topic needed for this request is off. "
+        "We'll turn on that built-in topic and leave unrelated topics "
+        "unchanged."
+    )
+    assert binding["renderBlock"]["text"] == (
+        f"**{agent}** isn't linked to the selected ServiceNow connection. "
+        "We'll link this agent to it and keep the completed administrator "
+        "setup."
+    )
+    assert retry["renderBlock"]["text"] == (
+        f"Try the {audience} request again in the Test pane and tell us "
+        "whether it returns the expected data."
+    )
+    assert "record-test" in retry["afterReply"]
+
+
+@pytest.mark.parametrize(
+    ("profile", "audience", "records"),
+    [("itsm", "IT", "tickets"), ("hrsd", "HR", "cases")],
+)
+def test_existing_identity_portal_confirmation_asks_the_spec_question(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile: str,
+    audience: str,
+    records: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    context, path = _write_shared_target_state(
+        tmp_path,
+        profile=profile,
+        agent_id=AGENT_ID,
+        agent_slug="employee-self-service-hr",
+        instance_name="dev123",
+    )
+    state = json.loads(path.read_text(encoding="utf-8"))
+    state["existingIdentity"] = {"kind": "knowledge"}
+    path.write_text(json.dumps(state), encoding="utf-8")
+    with snow.product_profile_context(profile):
+        result = snow.portal_url_confirmation(
+            context, "dev123.service-now.com/sp"
+        )
+    assert result["question"] == (
+        "Is **https://dev123.service-now.com/sp** the portal employees "
+        f"should use for {audience} {records}?"
+    )
+    assert result["options"] == PORTAL_CONFIRMATION_OPTIONS
+
+
+def test_target_change_notice_for_existing_identity_uses_the_spec_line(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(selected):
+        generic = snow.target_change_handoff(context, "environment", "Dev 2")
+        snow.existing_identity_handoff(context, "knowledge")
+        existing = snow.target_change_handoff(context, "environment", "Dev 2")
+    assert generic["renderBlock"]["text"].endswith(
+        "without those checks."
+    )
+    assert existing["renderBlock"]["text"].endswith(
+        "We won't assume that the connection or test evidence from Example "
+        "Dev applies there."
+    )
+
+
+def test_existing_identity_mode_changes_later_progress_wording(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(selected):
+        generic = snow._dev_test_ready_message()
+        existing = snow._dev_test_ready_message("knowledge")
+        untested = snow._dev_untested_message("knowledge")
+        waiting = snow._existing_waiting_text()
+    assert "the integration will remain untested" in generic
+    assert "the ESS integration will remain untested" in existing
+    assert untested.startswith("**The ESS setup steps are finished")
+    assert waiting.startswith(
+        "We're waiting for your administrators to confirm a compatible setup for"
+    )
+
+
+def test_existing_identity_command_requires_context_and_valid_choices(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context, selected = _existing_identity_context(monkeypatch, tmp_path, "itsm")
+    with snow.product_profile_context(selected):
+        with pytest.raises(snow.ServiceNowConnectError):
+            snow.existing_identity_handoff(context, "unknown")
+        with pytest.raises(snow.ServiceNowConnectError):
+            snow.existing_identity_handoff(context, "knowledge", "unknown")
+
+
+@pytest.mark.parametrize("profile", ["hrsd", "itsm"])
+def test_admin_packets_never_ask_for_a_directory_tenant_id(
+    profile: str,
+) -> None:
+    with snow.product_profile_context(profile):
+        entra = snow._first_agent_entra_packet("dev123")
+        service_now = snow._first_agent_servicenow_packet(
+            instance_name="dev123",
+            client_id=APP_CLIENT_ID,
+            tenant_id=TENANT_ID,
+            claim_name="employee_id",
+        )
+    for text in (entra, service_now):
+        assert "Directory (tenant) ID" not in text
+        assert "send back the tenant" not in text.lower()
+    assert "Application (client) ID" in entra
+    assert f"**Tenant ID:** `{TENANT_ID}`" in service_now
+
+
+def test_typed_questions_are_plain_chat_and_end_the_turn() -> None:
+    link = snow._with_agent_rules(
+        {"status": "agent-link-required", "question": snow._agent_link_question()},
+        "agent-chooser",
+    )
+    manual = snow._with_agent_rules(
+        {
+            "status": "ready",
+            "question": {
+                "header": "Which ServiceNow instance should the agent use?",
+                "question": "Send its public HTTPS URL, not credentials.",
+                "options": [],
+                "allowFreeformInput": True,
+            },
+        },
+        "instance-discovery",
+    )
+
+    for wrapped, header in (
+        (link, "What is the Copilot Studio link for the agent?"),
+        (manual, "Which ServiceNow instance should the agent use?"),
+    ):
+        assert "pendingCard" not in wrapped
+        assert wrapped["endTurn"] is True
+        assert wrapped["chatMessage"].startswith(header)
+        assert "nextCommand" not in wrapped
+
+
+def test_yes_no_cards_stay_cards_and_typed_questions_do_not_become_cards() -> None:
+    yes_no = {
+        "header": "Connect the agent to ServiceNow?",
+        "question": "Connect the agent to ServiceNow?",
+        "options": [{"label": "Yes"}, {"label": "No"}],
+        "allowFreeformInput": False,
+    }
+
+    wrapped = snow._with_agent_rules({"question": yes_no}, "agent-chooser")
+
+    assert wrapped["pendingCard"]["canonicalQuestion"]["options"] == [
+        {"label": "Yes"},
+        {"label": "No"},
+    ]
+    assert wrapped["endTurn"] is False
+
+
+def test_message_only_stop_outputs_carry_chat_message_and_end_the_turn() -> None:
+    unsupported = snow._with_agent_rules(
+        snow._unsupported_agent_result({"id": "x", "name": "Benefits"}),
+        "agent-chooser",
+    )
+    open_reply = snow._with_agent_rules(
+        {"status": "open", "recorded": False, "message": "Did the test run?"},
+        "record-test",
+    )
+    untested = snow._with_agent_rules(
+        {
+            "kind": "maker-attestation",
+            "result": "untested",
+            "message": "Run the test, then tell me the result.",
+        },
+        "record-test",
+    )
+
+    assert unsupported["chatMessage"] == snow.UNSUPPORTED_AGENT_MESSAGE
+    assert open_reply["chatMessage"] == "Did the test run?"
+    assert untested["chatMessage"] == "Run the test, then tell me the result."
+    for wrapped in (unsupported, open_reply, untested):
+        assert wrapped["endTurn"] is True
+
+
+def test_setup_handoffs_are_not_stops_and_messages_are_not_leaked() -> None:
+    incomplete = snow._setup_incomplete_result({"id": "x", "name": "HR"})
+
+    wrapped = snow._with_agent_rules(incomplete, "agent-chooser")
+
+    assert wrapped.get("endTurn") is not True
+    assert "chatMessage" not in wrapped
+    plain = snow._with_agent_rules(
+        {"status": "ready", "message": "internal note"}, "topics-status"
+    )
+    assert "chatMessage" not in plain
+
+
+def test_explicit_wait_flag_overrides_the_wait_cue_guess() -> None:
+    question_but_continue = {
+        "renderBlock": {"kind": "progress", "text": "Checking next step?"},
+        "waitsForMaker": False,
+        "decision": "x",
+    }
+    stop_without_cue = {
+        "renderBlock": {"kind": "progress", "text": "Details are ready."},
+        "waitsForMaker": True,
+        "decision": "x",
+    }
+
+    assert snow._with_agent_rules(question_but_continue, "resume-handoff")[
+        "endTurn"
+    ] is False
+    assert snow._with_agent_rules(stop_without_cue, "resume-handoff")[
+        "endTurn"
+    ] is True

@@ -58,7 +58,7 @@ AGENT_SLUG = SELECTED_AGENT_SLUG
 The shared runner's `connect_lifecycle.py next-step` command is mandatory.
 Never jump directly from a result to another checkpoint or infer that
 `actionApplied` skips an incomplete provider action.
-**STOP — render before acting.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant message — before any other tool call — must contain `renderBlock.text` verbatim (the grouped phases view; it already ends with the current step line). `renderBlock.text` is the only renderable field: never render anything under `internal`, never write your own checklist, and never add a Check/Status table. Never summarize it or write "render the plan" instead.
+**STOP — render before acting.** After every `resume-handoff` or `record-checkpoint-results`, your very next assistant message — before any other tool call — must contain `renderBlock.text` verbatim (the setup checklist; it already ends with the current step line). `renderBlock.text` is the only renderable field: never render anything under `internal`, never write your own checklist, and never add a Check/Status table. Never summarize it or write "render the plan" instead. Every turn that shows a step update must include the latest `renderBlock.text` verbatim; it is returned every time and never deduplicated, so never skip it or reuse an older copy. At the start of a fresh run `renderBlock.text` begins with the connection opening ("We'll connect ... so employees can ...", or "We'll add ..." when another ESS agent in the same environment already has shared sign-in setup); emit it verbatim as part of the same message, and never write your own opening or repeat it later. The Test-pane ready message in the current-task lead-in is controller-built: show it verbatim and never reword it, and when `record-test --result untested` or `--result empty` returns `message`, show that `message` verbatim (for `empty`, nothing is recorded and the Test step stays open; ask the result question again) and never claim the integration works.
 
 **Hard rules.** Read `src/skills/connect/shared/lifecycle-runner.md` before the first action. When `resume-handoff` returns `renderBlock`, emit `renderBlock.text` verbatim as an assistant message; terminal output does not count. Never edit `lifecycle.json` by hand; record results with `record-checkpoint-results`. Run every command with the launcher resolved by `/setup` (`py -3`, `python3`, then `python`), never assuming bare `python`.
 
@@ -66,8 +66,12 @@ Render the ServiceNow `resume-handoff.progress` checklist and current-step
 updates exactly as the shared runner specifies; do not suppress them under
 the ordinary Message-block silence rule.
 
-On every first run and resume, show the controller's HR collaboration groups
-and nested internal-step statuses as an ordinary response. Preflight and
+**Existing sign-in setup.** When the maker said the organization already uses ServiceNow Knowledge, single sign-on, or the Microsoft Graph connector, the first `resume-handoff` must carry `--existing knowledge` (or `sso`, `graph`). Its `renderBlock.text` then starts with the fixed compatibility opening; send it verbatim, never write it yourself, never inspect existing Entra or OIDC configuration, and never skip the administrator handoffs because Knowledge already works.
+
+**More than one agent.** A request naming both ESS agents or all of them (for example "Check HR and IT in Prod") is answered only by `validation-notice --situation multi-agent`: send `chatMessage` verbatim with no preamble or trailer, end the turn, start no run, and record nothing. This is the first action, before any capability emit, `realm-status`, preflight, or checklist.
+
+On every first run and resume, show the controller's flat setup checklist
+(`renderBlock.text`) as an ordinary response. Preflight and
 instance input run without an availability question. When the controller
 enters HR prerequisite, Entra identity, ServiceNow SSO/user mapping, or Maker
 configuration, ask only that group's returned Yes/No question. A No answer
@@ -79,21 +83,26 @@ consent, or Test completion.
 The runner loads
 `src/skills/connect/servicenow-da-hrsd/contract.json`, persists state at
 `.local/connect/servicenow-da-hrsd/agents/{AGENT_SLUG}/lifecycle.json`, and
-live-reverifies every phase. Agent binding and Test pane results remain
-maker-confirmed evidence; topic mutation requires explicit confirmation.
+live-reverifies every phase. The connection and the agent's saved binding are
+verified together by ADK; Test pane results remain maker-confirmed evidence; topic mutation requires explicit confirmation.
 Publishing is outside ServiceNow Connect. Parameter-sharing is not a
 standalone lifecycle phase; legacy
 evidence is retained only as historical state and never treated as proof that
 the direct connector-action path was independently verified.
 
-**Agent Binding:** The Maker binds the verified ServiceNow connection to the
-selected ESS agent in Copilot Studio. FlightCheck checks the Maker’s
-confirmation as Manual evidence. Connect does not enable ServiceNow topics
-before binding is confirmed.
+**Create and connect ServiceNow:** The Maker creates the ServiceNow connection from
+the agent's Copilot Studio Connection Settings, which also selects it for the
+agent, then confirms it shows Connected. FlightCheck verifies one exact healthy
+connection and that the agent's saved draft uses it in a single check. Connect
+does not enable ServiceNow topics before this check passes.
 
-**Topics and Portal:** After binding is confirmed, Connect reads the topic
+**Topics and Portal:** After the connection check passes, Connect reads the topic
 states for Maker review and saves only approved changes. It also saves the
-administrator-provided portal URL after Maker confirmation. FlightCheck
+administrator-provided portal URL after Maker confirmation. The controller asks
+for the URL as plain chat text and the agent waits for the typed reply; it does
+not call a question card for the URL. The confirmation
+question comes from `portal-url-confirmation`: show its `question` and
+`options` verbatim, and save nothing before the Maker selects Yes. FlightCheck
 verifies the resulting topic states and portal value.
 
 **Dev Test:** After topic and portal configuration is complete, the Maker runs
@@ -104,6 +113,10 @@ result"; administrator-supplied items as "Confirmed by the administrator" and
 Maker-supplied items as "Confirmed by the Maker". Manual means human-verified,
 never Passed, and never proof of business success; Passed means verified by
 Connect checks.
+
+**Later realms:** A promoted agent in a later realm is checked on its own by
+`src/skills/connect/servicenow/realms.md`; it does not depend on this
+lifecycle.
 
 Only report the integration connected after the runner completes all nine
 phases, including explicit remote reuse approval and the four admin

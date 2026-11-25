@@ -26,6 +26,7 @@ from urllib3.util.retry import Retry
 CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
 DEFAULT_API_VERSION = "2024-10-01"
 NATIVE_ALM_API_VERSION = "2022-03-01-preview"
+M365_PUBLISH_STATUS_API_VERSION = "2024-10-01"
 COPILOT_STUDIO_CLIENT_NAME = "CopilotStudio"
 AGENT_LIST_CREATION_SOURCES = ("CopilotStudio", "AgentBuilder")
 DEFAULT_TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
@@ -594,10 +595,11 @@ def _acquire_token(
     emit_account_identity: bool = True,
     return_account_identity: bool = False,
     require_account_identity: bool = False,
+    client_id: str = CLIENT_ID,
 ) -> str | tuple[str, str | None]:
     cache = _load_token_cache(cache_path)
     app = msal.PublicClientApplication(
-        CLIENT_ID,
+        client_id,
         authority=authority,
         token_cache=cache,
     )
@@ -739,10 +741,13 @@ def authenticate_flightcheck_dependency(
 ) -> str:
     """Acquire one dependency-read audience for the already selected operator.
 
-    ENV-004 requests Flow or Dataverse access only after discovering an active
-    flow dependency. A different or unverifiable account must not satisfy that
-    dependency on behalf of the selected agent.
+    Power Apps/BAP uses the existing Power Platform public client: the
+    AgentBuilder client is not preauthorized for that resource in all tenants.
+    Other audiences retain their existing client. A different or unverifiable
+    account must not satisfy a dependency on behalf of the selected agent.
     """
+    from flightcheck.pp_admin_client import CLIENT_ID as POWER_PLATFORM_CLIENT_ID, PP_SCOPE
+
     if not account_hint:
         raise ValueError("Dependency reads require a verified account identity.")
     tenant_id = str(uuid.UUID(tenant_id))
@@ -756,6 +761,7 @@ def authenticate_flightcheck_dependency(
         emit_account_identity=False,
         return_account_identity=True,
         require_account_identity=True,
+        client_id=POWER_PLATFORM_CLIENT_ID if scope == PP_SCOPE else CLIENT_ID,
     )
     if not account or account.casefold() != account_hint.casefold():
         raise AgentBuilderError("Dependency authentication selected a different or unverifiable account.")
@@ -1433,6 +1439,35 @@ class AgentBuilderClient:
             raise AgentBuilderError("Component fetch returned an invalid shape.")
         return body
 
+    def get_m365_publish_status(self, agent_id: str) -> dict[str, Any]:
+        """Read M365 channel status; its titleId identifies the LOB registration.
+
+        This is the Studio fetchM365PublishStatus route, verified by read-only
+        probes, not a public API contract. Never POST this publication route.
+        """
+        agent_id = str(uuid.UUID(agent_id))
+        response = self.session.request(
+            "GET",
+            f"{self.host}/copilotstudio/agents/{agent_id}/channels/m365/publish",
+            params={"api-version": M365_PUBLISH_STATUS_API_VERSION},
+            headers={**self.headers, "X-CCI-CdsBotId": agent_id},
+            timeout=120,
+            allow_redirects=False,
+        )
+        if not 200 <= response.status_code < 300:
+            _response_error(response, "M365 publish status")
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise AgentBuilderError(
+                "M365 publish status returned a non-JSON response."
+            ) from exc
+        if not isinstance(body, dict):
+            raise AgentBuilderError(
+                "M365 publish status returned an invalid shape."
+            )
+        return body
+
     def update_components(
         self,
         agent_id: str,
@@ -1452,6 +1487,43 @@ class AgentBuilderClient:
         if not isinstance(body, dict):
             raise AgentBuilderError("Component update returned an invalid shape.")
         return body
+
+    def update_components_once(
+        self,
+        agent_id: str,
+        change_set: dict[str, Any],
+    ) -> None:
+        """One isolated submission, without redirects or any transport replay.
+
+        This is a transport primitive, not Manage topics release admission. It
+        deliberately leaves existing Workday and shared-client defaults intact.
+        """
+        agent_id = str(uuid.UUID(agent_id))
+        if not isinstance(change_set, dict):
+            raise ValueError("Component change set must be a JSON object.")
+        with requests.Session() as session:
+            session.mount("https://", HTTPAdapter(max_retries=Retry(total=0)))
+            session.trust_env = self.session.trust_env
+            session.verify = self.session.verify
+            session.cert = self.session.cert
+            session.proxies.update(self.session.proxies)
+            response = session.request(
+                "PUT",
+                f"{self.host}/copilotstudio/minimalBots/api/{agent_id}/components",
+                params={"api-version": NATIVE_ALM_API_VERSION},
+                headers={**self.headers, "Content-Type": "application/json"},
+                json=change_set,
+                timeout=180,
+                allow_redirects=False,
+            )
+            if not 200 <= response.status_code < 300:
+                _response_error(response, "Component submission")
+            try:
+                body = response.json()
+            except ValueError:
+                raise AgentBuilderError("Component submission acknowledgement was invalid.") from None
+            if not isinstance(body, dict):
+                raise AgentBuilderError("Component submission acknowledgement was invalid.")
 
     def update_bot_entity(
         self,

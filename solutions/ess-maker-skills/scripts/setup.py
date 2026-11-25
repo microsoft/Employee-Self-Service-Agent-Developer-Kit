@@ -580,12 +580,22 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
     local_dir = ".local"
     config_path = os.path.join(local_dir, "config.json")
     existing = {}
-    if os.path.exists(config_path):
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                existing = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            existing = {}
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            existing = json.load(f)
+    except FileNotFoundError:
+        pass
+    if not isinstance(existing, dict):
+        raise ValueError("Existing .local/config.json must be a JSON object; it was not overwritten.")
+
+    endpoint = agent_info["url"].rstrip("/")
+    # A top-level environmentId recorded for a different environment URL must
+    # not be carried over to this one.
+    existing_endpoint = str(existing.get("dataverseEndpoint") or "").rstrip("/")
+    existing_matches_endpoint = (
+        not existing_endpoint
+        or existing_endpoint.casefold() == endpoint.casefold()
+    )
 
     bot_id = agent_info["botId"]
     existing_agents = existing.get("agents", [])
@@ -642,7 +652,7 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
         "agent": agent_entry,             # backward compat: active agent
         "activeAgent": slug,              # slug of the active agent
         "agents": agents,                 # all discovered agents
-        "dataverseEndpoint": agent_info["url"],
+        "dataverseEndpoint": endpoint,
         "templateConfigsDiscovered": template_configs_discovered,
         "templateConfigCount": template_config_count,
         "workflowCount": workflow_count,
@@ -654,8 +664,14 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
         # Mirror the active agent's own value rather than a stale top-level
         # environmentId that may belong to a previously onboarded agent.
         config["environmentId"] = agent_entry["environmentId"]
-    elif existing.get("environmentId"):
+    elif existing.get("environmentId") and existing_matches_endpoint:
         config["environmentId"] = existing["environmentId"]
+    else:
+        print(
+            "NOTE: The environment URL is saved, but its ID has not been verified. "
+            "Confirm the environment ID before sharing setup completion.",
+            file=sys.stderr,
+        )
 
     # Preserve existing connections and other user-set fields
     for key in ("connections", "workdayTestEmployeeId", "referenceSource", "environmentSku"):

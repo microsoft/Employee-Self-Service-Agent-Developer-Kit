@@ -40,12 +40,9 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-sl
 
 Before running discovery, tell the Maker:
 
-> Preparing read-only ServiceNow connection discovery. If Microsoft sign-in
-> opens, complete it; while the browser is waiting, setup is waiting for
-> authorization, not processing the ServiceNow API. After authorization, the
-> connection inventory request uses a 60-second HTTP connect/read timeout.
-> That is not a 60-second limit for the whole invocation, and a server that
-> continues returning bytes may keep a read active.
+> We're checking your ServiceNow connections, read-only. If a Microsoft
+> sign-in window opens, please complete it, and we'll continue once you're
+> signed in.
 
 Parse the first `DA_ADMIN_PREFLIGHT_PROGRESS_JSON:` marker with
 `stage: authentication` as client/auth preparation. Do not say that the HTTP
@@ -89,32 +86,38 @@ If `instanceInputRequired` is `false`, reuse the valid prior confirmation,
 briefly summarize discovery, and do not ask again. A newly visible connection
 never changes the confirmed instance automatically.
 
-When `instanceInputRequired` is `true`, send the exact returned
-`instanceQuestion` through the shared lifecycle runner's `adapt-question`
-path:
+When `instanceInputRequired` is `true`, send the returned `chatMessage` as
+plain chat text, then ask the returned `pendingCard` with one `ask_user` call
+using `pendingCard.askUserArguments` exactly as given (the shared lifecycle
+runner's `adapt-question` shape):
 
-- With candidates, every normalized URL is a separate **Use <URL>** choice,
-  even when there is only one, plus **Provide another ServiceNow instance
-  URL**. Translate the selected label through `instanceChoices`; never ask the
-  Maker to copy an internal key.
-- **Provide another ServiceNow instance URL** opens the exact returned
-  `manualInstanceQuestion`. Do not construct or shorten another free-form
-  question.
-- With no candidates, the returned question is already that free-form URL
-  question.
-- Discovery errors remain visible in the question. Manual target confirmation
+- Every candidate card is a Yes/No question ("Should <agent> use the
+  ServiceNow instance <name>?"); the card never lists several instances.
+  **Yes** confirms that candidate: translate it through `instanceChoices` (the
+  **Yes** value is the instance URL); never ask the Maker to copy an internal
+  key. **No** with several candidates asks the next returned
+  `followUpQuestions` entry the same way (pass its `question` through
+  `adapt-question`; its `choiceValues` hold the **Yes** URL and the **No**
+  target). **No** on the last candidate, or the only candidate, opens the exact
+  returned `manualInstanceQuestion`, which is typed in plain chat.
+- With no candidates, the returned question is already the free-form URL
+  question. The controller puts it in `chatMessage` with `endTurn: true`, so
+  the Maker types the URL in the normal chat box; there is no card and no
+  body, example, or note to add.
+- Discovery errors stay visible in `chatMessage`. Manual target confirmation
   does not prove connection health, select/reuse a credential, create an
   instance, or bind the agent.
 
-The no-candidate/manual-URL form uses this supported visible shape. The
-runtime-rendered question may add the bounded discovery error:
+The no-candidate/manual-URL card uses this supported visible shape. The
+explanation in `question` is sent as the chat message; the card shows only
+`header`:
 
 <!-- visible-handoff-question:v1 -->
 ```json
 [
   {
-    "header": "ServiceNow instance",
-    "question": "For {AGENT_DISPLAY_NAME} (`{SELECTED_AGENT_SLUG}`) in environment `{ENVIRONMENT_ID}` and {REALM} realm, enter the intended public ServiceNow HTTPS root URL.\n\nExample: `https://<your-instance>.service-now.com`\n\nUse only the instance root (`https://<instance>.service-now.com`). Do not enter a portal or module path such as `/sp`, `/esc`, or `/now/...`. Do not enter a username, password, credential, token, secret, or certificate. If you do not know the URL, ask your ServiceNow administrator for the public instance root.\n\n{DISCOVERY_ERROR_IF_ANY}",
+    "header": "Which ServiceNow instance should {AGENT_DISPLAY_NAME} use?",
+    "question": "Send its public HTTPS URL, not credentials.\n\nExample: `https://<your-instance>.service-now.com`\n\nUse only the instance address, without a portal path such as `/sp` or `/esc`. If you don't know it, ask your ServiceNow administrator.\n\n{DISCOVERY_ERROR_IF_ANY}",
     "allowFreeformInput": true
   }
 ]
@@ -135,7 +138,10 @@ python scripts/connect_servicenow_da.py --provider servicenow-da-hrsd --agent-sl
 ```
 
 If the refreshed result contains `links.serviceNowInstance`, preserve it for
-later phases and do not display an action link before the Entra step.
+later phases and do not display an action link before the Entra step. Once
+`record-preflight` has recorded the instance, its output never repeats the
+instance question; send its `chatMessage` verbatim and continue with the next
+command.
 
 Return `ACTION_RESULT = "recorded"` after discovery is persisted. The
 subsequent plugin, Entra, OIDC, and credential phases independently reverify

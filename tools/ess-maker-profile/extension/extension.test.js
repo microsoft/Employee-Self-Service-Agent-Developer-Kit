@@ -86,8 +86,8 @@ function test(name, fn) {
 
 console.log('ACTIONS structure:');
 
-test('has 8 actions', () => {
-    assert.strictEqual(ACTIONS.length, 8);
+test('has 9 actions', () => {
+    assert.strictEqual(ACTIONS.length, 9);
 });
 
 test('every action has required fields', () => {
@@ -108,11 +108,28 @@ test('landing-page action sends the slash command', () => {
     assert.deepStrictEqual(landingPage.requires, ['setup']);
 });
 
-test('topic actions send explicit intent through the not-yet-available gates', () => {
+test('announcements action sends the skill-triggering query', () => {
+    const announcements = ACTIONS.find(a => a.id === 'announcements');
+    assert.strictEqual(announcements.label, 'Post an announcement');
+    assert.strictEqual(announcements.query, 'Create an organization announcement');
+    assert.strictEqual(announcements.sub, 'Reach audiences in the selected agent');
+    assert.deepStrictEqual(announcements.requires, ['setup']);
+});
+
+test('announcement tutorial explains agent scope without tenant-wide promises', () => {
+    assert.ok(src.includes('<strong>Agent-scoped</strong>'));
+    assert.ok(src.includes('100-current/50-archived'));
+    assert.ok(!src.includes('shared by every ESS agent'));
+    assert.ok(!src.includes('Reach your whole organization'));
+    assert.ok(src.includes('Audiences (optional)'));
+    assert.ok(src.includes('all users of this agent'));
+});
+
+test('topic actions send explicit intent to the normal authoring owners', () => {
     const create = ACTIONS.find(a => a.id === 'create');
     const update = ACTIONS.find(a => a.id === 'update');
-    assert.strictEqual(create.label, 'Create a topic (Coming Soon)');
-    assert.strictEqual(update.label, 'Update a topic (Coming Soon)');
+    assert.strictEqual(create.label, 'Create a topic');
+    assert.strictEqual(update.label, 'Update a topic');
     assert.strictEqual(create.query, 'Create a topic');
     assert.strictEqual(update.query, 'Update a topic');
 });
@@ -285,17 +302,17 @@ test('view container is in activitybar (primary sidebar)', () => {
     assert.strictEqual(pkg.contributes.viewsContainers.activitybar[0].id, 'essMakerActions');
 });
 
-test('topic command titles are marked coming soon', () => {
+test('topic command titles expose the supported authoring actions', () => {
     const commands = new Map(pkg.contributes.commands.map(command => [
         command.command, command.title,
     ]));
     assert.strictEqual(
         commands.get('essMaker.runCreate'),
-        'ESS Maker: Create a topic (Coming Soon)',
+        'ESS Maker: Create a topic',
     );
     assert.strictEqual(
         commands.get('essMaker.runUpdate'),
-        'Agent Developer Kit: Modify a topic (Coming Soon)',
+        'Agent Developer Kit: Modify a topic',
     );
 });
 
@@ -321,9 +338,9 @@ test('activates during startup so the guided layout is ready before startup sett
 });
 
 test('package version matches the current Maker artifact release', () => {
-    assert.strictEqual(pkg.version, '0.4.37');
+    assert.strictEqual(pkg.version, '0.4.39');
     assert.ok(fs.existsSync(path.join(__dirname, `ess-maker-profile-${pkg.version}.vsix`)));
-    assert.ok(!fs.existsSync(path.join(__dirname, 'ess-maker-profile-0.4.36.vsix')));
+    assert.ok(!fs.existsSync(path.join(__dirname, 'ess-maker-profile-0.4.37.vsix')));
 });
 
 test('updates layout settings concurrently during startup', () => {
@@ -465,6 +482,12 @@ test('landing-page package prompts existing 0.4.33 installs to reinstall', () =>
     const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
     assert.strictEqual(extensionIsStale('0.4.33', packageJson.version), true);
     assert.ok(ACTIONS.some((action) => action.id === 'landingPage'));
+});
+
+test('announcement package prompts existing 0.4.25 installs to reinstall', () => {
+    assert.strictEqual(compareVersions(pkg.version, '0.4.25'), 1);
+    assert.strictEqual(extensionIsStale('0.4.25', pkg.version), true);
+    assert.ok(ACTIONS.some((action) => action.id === 'announcements'));
 });
 
 test('extensionIsStale false when a version is missing', () => {

@@ -23,7 +23,7 @@ from typing import Any
 from urllib.parse import quote
 
 import requests
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import ExifTags, Image, ImageOps, UnidentifiedImageError
 
 from adk_telemetry import emit_capability_use
 from agentbuilder import (
@@ -267,22 +267,23 @@ def _image(data: bytes, *, size: int | None = None, png_only: bool = False) -> b
                     for index in range(frames):
                         image.seek(index)
                         image.load()
+                        rgba = ImageOps.exif_transpose(image).convert("RGBA")
                         fingerprint.update(
                             _digest(
                                 {
-                                    "size": image.size,
+                                    "size": rgba.size,
                                     "duration": image.info.get("duration"),
                                 }
                             ).encode("ascii")
                         )
-                        fingerprint.update(image.convert("RGBA").tobytes())
+                        fingerprint.update(rgba.tobytes())
                     return fingerprint.digest()
                 image.load()
-                rgba = image.convert("RGBA")
+                rgba = ImageOps.exif_transpose(image).convert("RGBA")
                 pixels = rgba.tobytes()
                 return (
-                    image.width.to_bytes(4, "big")
-                    + image.height.to_bytes(4, "big")
+                    rgba.width.to_bytes(4, "big")
+                    + rgba.height.to_bytes(4, "big")
                     + pixels
                 )
     except (
@@ -322,11 +323,15 @@ def _preview_image(data: bytes, root: Path, review_id: str, suffix: str) -> Path
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{review_id}-{suffix}.png"
     with Image.open(io.BytesIO(data)) as image:
-        if image.format == "PNG" and image.size == LOGO_PREVIEW_SIZE:
+        if (
+            image.format == "PNG"
+            and image.size == LOGO_PREVIEW_SIZE
+            and image.getexif().get(ExifTags.Base.Orientation, 1) == 1
+        ):
             path.write_bytes(data)
         else:
             ImageOps.pad(
-                image.convert("RGBA"),
+                ImageOps.exif_transpose(image).convert("RGBA"),
                 LOGO_PREVIEW_SIZE,
                 method=Image.Resampling.LANCZOS,
                 color=(0, 0, 0, 0),
@@ -774,10 +779,11 @@ def review_output(plan: dict[str, Any], root: Path) -> dict[str, Any]:
         data = _decode(plan["desired"]["logo"])
         path = _preview_image(data, root, plan["reviewId"], "proposed-color")
         with Image.open(io.BytesIO(data)) as image:
+            oriented = ImageOps.exif_transpose(image)
             proposed["logoDetails"] = {
                 "format": image.format,
-                "width": image.width,
-                "height": image.height,
+                "width": oriented.width,
+                "height": oriented.height,
                 "frames": getattr(image, "n_frames", 1),
             }
         proposed["logoPreviewMarkdown"] = f"![Proposed agent logo]({path.as_uri()})"

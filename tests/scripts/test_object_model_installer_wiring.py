@@ -32,7 +32,12 @@ def test_macos_full_installer_provisions_object_model_dependencies() -> None:
     installer = (REPO_ROOT / "setup" / "install-ess-adk.sh").read_text(
         encoding="utf-8"
     )
-    assert 'install_optional_brew_cask "dotnet-runtime"' in installer
+    assert 'dotnet --list-sdks' in installer
+    assert "https://dot.net/v1/dotnet-install.sh" in installer
+    assert '--channel 10.0' in installer
+    assert '--install-dir "$HOME/.dotnet"' in installer
+    assert 'install_optional_brew_cask "dotnet-sdk"' not in installer
+    assert 'export DOTNET_ROOT="$HOME/.dotnet"' in installer
     assert "install_optional_brew_pkg" in installer
     assert '"nuget"' in installer
     assert "install_agentbuilder_object_model.py" in installer

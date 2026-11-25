@@ -13,22 +13,20 @@ Two pure text transforms over a topic's botcomponent ``data`` YAML:
                      all whose activity carries the DBG marker). Byte-reversible
                      against the pre-plant data.
 
-Round-trip invariant: strip(plant(data)) == data (byte-identical) — the
-guaranteed-revert property the live orchestration relies on.
+Round-trip invariant: strip(plant(data)) == data (byte-identical).
+These tests exercise local text only, not a deployed-topic cleanup path.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
+import yaml
 
 from debug_plant import (
     DebugPlantError,
-    NoAnchorError,
-    PlantProvenance,
-    PlantSpec,
     plant_debug_node,
-    plant_debug_nodes_live,
     strip_debug_nodes,
-    strip_debug_nodes_live,
 )
 
 # A minimal topic with two actions at different indents (a SetVariable inside a
@@ -145,6 +143,45 @@ def test_strip_round_trip_is_byte_identical():
     assert out == _TOPIC   # guaranteed-revert property
 
 
+@pytest.mark.parametrize("binding", ["{}", "\n            {}"])
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_empty_mapping_stays_inside_anchor_and_cleanup_round_trips(binding, newline):
+    source = (
+        "kind: AdaptiveDialog\n"
+        "beginDialog:\n"
+        "  kind: OnRecognizedIntent\n"
+        "  actions:\n"
+        "    - kind: BeginDialog\n"
+        "      id: anchor\n"
+        "      output:\n"
+        f"        binding: {binding}\n"
+        "    # Keep the following action's comment.\n"
+        "    - kind: EndDialog\n"
+        "      id: end\n"
+    ).replace("\n", newline)
+    planted, count = plant_debug_node(
+        source, after_action_id="anchor", node_id="owned_probe", activity="DBG probe",
+    )
+    actions = yaml.safe_load(planted)["beginDialog"]["actions"]
+    assert count == 1
+    assert [action["id"] for action in actions] == ["anchor", "owned_probe", "end"]
+    assert actions[0]["output"]["binding"] == {}
+    cleaned, removed = strip_debug_nodes(planted, node_ids=["owned_probe"])
+    assert (cleaned.encode(), removed) == (source.encode(), ["owned_probe"])
+
+
+def test_serialized_activity_preserves_colon_and_interpolation():
+    message = "DBG Ready for review: total={Topic.Total}"
+    planted, count = plant_debug_node(
+        _TOPIC, after_action_id="beginDialog_fetch",
+        node_id="owned_probe", activity=json.dumps(message),
+    )
+    actions = yaml.safe_load(planted)["beginDialog"]["actions"][0]["elseActions"]
+    assert count == 1 and actions[1]["activity"] == message
+    cleaned, removed = strip_debug_nodes(planted, node_ids=["owned_probe"])
+    assert (cleaned, removed) == (_TOPIC, ["owned_probe"])
+
+
 def test_strip_by_marker_removes_all_dbg_nodes():
     p1, _ = plant_debug_node(_TOPIC, after_action_id="setVariable_cacheHit",
                              node_id="sendActivity_DBG_a", activity="DBG branch=a")
@@ -181,97 +218,141 @@ def test_multi_plant_then_marker_strip_round_trips():
     assert stripped == _TOPIC
 
 
-# --------------------------------------------------------------------------- #
-# Live orchestration — plant_debug_nodes_live / strip_debug_nodes_live
-# (deterministic; fakes the Dataverse via a structural client)
-# --------------------------------------------------------------------------- #
-
-class FakeDataverse:
-    def __init__(self, topics):
-        self._topics = topics            # schemaname -> {"id", "data"}
-        self.patches = []
-        self.published = []
-
-    def get_topic(self, schemaname):
-        t = self._topics[schemaname]
-        return t["id"], t["data"]
-
-    def patch_topic(self, record_id, content):
-        self.patches.append((record_id, content))
-        for t in self._topics.values():
-            if t["id"] == record_id:
-                t["data"] = content
-
-    def publish_bot(self, bot_id):
-        self.published.append(bot_id)
+def test_plant_rejects_duplicate_anchor_ids_across_branches():
+    duplicate = _TOPIC.replace("id: beginDialog_fetch", "id: 'setVariable_cacheHit'")
+    with pytest.raises(DebugPlantError, match="Duplicate anchor"):
+        plant_debug_node(
+            duplicate, after_action_id="setVariable_cacheHit",
+            node_id="owned_probe", activity="DBG probe",
+        )
 
 
-def _dv():
-    return FakeDataverse({"snow_sys": {"id": "rec-1", "data": _TOPIC}})
+@pytest.mark.parametrize("node_id", ["setVariable_cacheHit", "beginDialog_fetch"])
+def test_plant_rejects_existing_action_identity(node_id):
+    with pytest.raises(DebugPlantError, match="already exists"):
+        plant_debug_node(
+            _TOPIC, after_action_id="setVariable_cacheHit",
+            node_id=node_id, activity="DBG probe",
+        )
 
 
-def test_plant_live_patches_and_returns_provenance():
-    dv = _dv()
-    specs = [
-        PlantSpec(after_action_id="setVariable_cacheHit",
-                  node_id="sendActivity_DBG_cacheHit", activity="DBG branch=cache-hit"),
-        PlantSpec(after_action_id="beginDialog_fetch",
-                  node_id="sendActivity_DBG_fetch", activity="DBG branch=fetch"),
-    ]
-    prov = plant_debug_nodes_live(dv, "snow_sys", specs)
-    assert isinstance(prov, PlantProvenance)
-    assert prov.topic == "snow_sys"
-    assert prov.record_id == "rec-1"
-    assert prov.planted_node_ids == ["sendActivity_DBG_cacheHit", "sendActivity_DBG_fetch"]
-    # one PATCH carrying both planted nodes
-    assert len(dv.patches) == 1
-    assert "sendActivity_DBG_cacheHit" in dv.patches[0][1]
-    assert "sendActivity_DBG_fetch" in dv.patches[0][1]
+def test_message_literal_ids_are_not_action_identities():
+    source = """\
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnRecognizedIntent
+  actions:
+    - id: 'real_anchor'
+      kind: SendActivity
+      activity: |
+        id: fake_anchor
+        - kind: SendActivity
+          id: owned_probe
+          activity: literal text
+"""
+    unchanged, count = plant_debug_node(
+        source, after_action_id="fake_anchor", node_id="unused", activity="DBG probe",
+    )
+    assert (unchanged, count) == (source, 0)
+    planted, count = plant_debug_node(
+        source, after_action_id="real_anchor", node_id="owned_probe", activity="DBG probe",
+    )
+    assert count == 1
+    cleaned, removed = strip_debug_nodes(planted, node_ids=["owned_probe"])
+    assert cleaned == source and removed == ["owned_probe"]
 
 
-def test_plant_live_emits_verifier_specs():
-    # the returned provenance carries {nodeId, topic, marker} specs a verifier
-    # consumes, so plant -> verify -> run is one loop.
-    dv = _dv()
-    specs = [PlantSpec(after_action_id="setVariable_cacheHit",
-                       node_id="sendActivity_DBG_cacheHit", activity="DBG branch=cache-hit")]
-    prov = plant_debug_nodes_live(dv, "snow_sys", specs)
-    vs = prov.verifier_specs()
-    assert vs == [{"nodeId": "sendActivity_DBG_cacheHit", "topic": "snow_sys",
-                   "marker": "DBG branch=cache-hit"}]
+@pytest.mark.parametrize("duplicate_kind", ["SendActivity", "SetVariable"])
+def test_explicit_cleanup_rejects_duplicate_identity_in_any_action(duplicate_kind):
+    planted, _ = plant_debug_node(
+        _TOPIC, after_action_id="setVariable_cacheHit",
+        node_id="owned_probe", activity="DBG probe",
+    )
+    duplicate = planted.replace(
+        "kind: BeginDialog\n          id: beginDialog_fetch",
+        f"kind: {duplicate_kind}\n          id: owned_probe",
+    )
+    with pytest.raises(DebugPlantError, match="Duplicate cleanup"):
+        strip_debug_nodes(duplicate, node_ids=["owned_probe"])
 
 
-def test_plant_live_raises_when_anchor_missing_and_does_not_patch():
-    dv = _dv()
-    specs = [PlantSpec(after_action_id="setVariable_nonexistent",
-                       node_id="sendActivity_DBG_x", activity="DBG x")]
-    with pytest.raises(NoAnchorError):
-        plant_debug_nodes_live(dv, "snow_sys", specs)
-    assert dv.patches == []            # no partial write on a mis-targeted plant
-    assert dv._topics["snow_sys"]["data"] == _TOPIC
+def test_guarded_cleanup_preserves_intervening_fix_after_yaml_projection():
+    planted, _ = plant_debug_node(
+        _TOPIC, after_action_id="setVariable_cacheHit",
+        node_id="owned_probe", activity='"DBG value={Topic.ProbeLabel}"',
+    )
+    parsed = yaml.safe_load(planted)
+    branch = parsed["beginDialog"]["actions"][0]["conditions"][0]["actions"]
+    owned = branch[1].copy()
+    branch[0]["value"] = '="legitimate correction"'
+    branch.append({
+        "kind": "SendActivity", "id": "other_diagnostic", "activity": "DBG keep this",
+    })
+    current = yaml.safe_dump(parsed, sort_keys=False)
+    cleaned, removed = strip_debug_nodes(
+        current, node_ids=["owned_probe"], expected_nodes={"owned_probe": owned},
+    )
+    assert removed == ["owned_probe"]
+    del branch[1]
+    assert yaml.safe_load(cleaned) == parsed
+    assert '="legitimate correction"' in cleaned
+    assert "DBG keep this" in cleaned
 
 
-def test_strip_live_restores_original_byte_identical():
-    dv = _dv()
-    specs = [
-        PlantSpec(after_action_id="setVariable_cacheHit",
-                  node_id="sendActivity_DBG_cacheHit", activity="DBG branch=cache-hit"),
-        PlantSpec(after_action_id="beginDialog_fetch",
-                  node_id="sendActivity_DBG_fetch", activity="DBG branch=fetch"),
-    ]
-    prov = plant_debug_nodes_live(dv, "snow_sys", specs)
-    assert "sendActivity_DBG_cacheHit" in dv._topics["snow_sys"]["data"]
-    count = strip_debug_nodes_live(dv, prov)
-    assert count == 2
-    assert dv._topics["snow_sys"]["data"] == _TOPIC   # guaranteed byte-identical revert
+@pytest.mark.parametrize("change", ["activity", "extra_field", "absent"])
+def test_guarded_cleanup_rejects_changed_or_missing_owned_content(change):
+    planted, _ = plant_debug_node(
+        _TOPIC, after_action_id="setVariable_cacheHit",
+        node_id="owned_probe", activity="DBG probe",
+    )
+    parsed = yaml.safe_load(planted)
+    branch = parsed["beginDialog"]["actions"][0]["conditions"][0]["actions"]
+    owned = branch[1].copy()
+    if change == "absent":
+        del branch[1]
+    else:
+        branch[1][change] = "authoring change"
+    current = yaml.safe_dump(parsed, sort_keys=False)
+    with pytest.raises(DebugPlantError, match="absent or changed"):
+        strip_debug_nodes(
+            current, node_ids=["owned_probe"], expected_nodes={"owned_probe": owned},
+        )
 
 
-def test_strip_live_is_idempotent():
-    dv = _dv()
-    specs = [PlantSpec(after_action_id="setVariable_cacheHit",
-                       node_id="sendActivity_DBG_cacheHit", activity="DBG branch=cache-hit")]
-    prov = plant_debug_nodes_live(dv, "snow_sys", specs)
-    strip_debug_nodes_live(dv, prov)
-    # second strip: nodes already gone -> no-op, returns 0, does not raise
-    assert strip_debug_nodes_live(dv, prov) == 0
-    assert dv._topics["snow_sys"]["data"] == _TOPIC
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_multiline_activity_cleanup_preserves_original_line_endings(newline):
+    source = _TOPIC.replace("\n", newline)
+    planted, _ = plant_debug_node(
+        source, after_action_id="beginDialog_fetch",
+        node_id="owned_probe", activity='"DBG first\\n\\nlast"',
+    )
+    planted = planted.replace(
+        'activity: "DBG first\\n\\nlast"',
+        "activity: |-" + newline + "            DBG first"
+        + newline + newline + "            last",
+    )
+    cleaned, removed = strip_debug_nodes(planted, node_ids=["owned_probe"])
+    assert (cleaned, removed) == (source, ["owned_probe"])
+
+
+def test_parsed_action_boundaries_preserve_comments_and_literal_content():
+    source = """\
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnRecognizedIntent
+  actions:
+    - kind: SendActivity
+      id: anchor
+# A dedented comment does not terminate the action mapping.
+      activity: Real message
+    # This comment belongs to the following authoring content.
+    - kind: EndDialog
+      id: end
+"""
+    planted, _ = plant_debug_node(
+        source, after_action_id="anchor", node_id="owned_probe", activity="DBG probe",
+    )
+    parsed = yaml.safe_load(planted)["beginDialog"]["actions"]
+    assert [action["id"] for action in parsed] == ["anchor", "owned_probe", "end"]
+    cleaned, removed = strip_debug_nodes(planted, node_ids=["owned_probe"])
+    assert (cleaned, removed) == (source, ["owned_probe"])

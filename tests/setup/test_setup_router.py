@@ -269,7 +269,12 @@ def test_saved_branding_uses_previous_current_table_without_published_guess() ->
     assert "Include only changed, confirmed properties" in skill
     assert "never put an unverified proposal in the **Current** column" in skill
     assert "comparison image copies until the next maker interaction" in skill
-    assert "Not published. The published version was not updated by this save." in prompt
+    for guidance in (skill, prompt):
+        assert "Use the property-specific success sentence verbatim" in guidance
+        assert "Your agent name was updated successfully." in guidance
+        assert "Your logo was updated successfully." in guidance
+        assert "Your agent name and logo were updated successfully." in guidance
+        assert "These changes are not published." in guidance
     assert 'Do not speculate that the "published logo may differ"' in prompt
     for guidance in (skill, prompt):
         assert "omit Test/Prod reassurance" in guidance
@@ -363,7 +368,7 @@ def test_name_input_enforces_thirty_character_limit_in_the_existing_flow() -> No
     assert "not a confirmed native service maximum" in prompt
 
 
-def test_logo_guidance_is_only_shown_after_an_invalid_upload() -> None:
+def test_logo_size_recommendation_is_visible_without_requiring_it() -> None:
     skill = " ".join(
         (_SOLUTION / "src" / "skills" / "agent-basics" / "SKILL.md")
         .read_text(encoding="utf-8")
@@ -379,21 +384,24 @@ def test_logo_guidance_is_only_shown_after_an_invalid_upload() -> None:
     ].split("### Keep input and approval dialogs simple", 1)[0]
     assert "existing input dialog's plain-text description" in help_section
     assert "only when asking for a missing name" in help_section
+    for guidance in (help_section, prompt):
+        assert "Recommended logo size: 192 x 192 pixels (not required)." in guidance
+        assert "existing file-selection dialog's context" in guidance
+        assert "If the logo was already supplied" in guidance
+        assert "once beside the existing visual review instead" in guidance
+        assert "do not ask for the file again" in guidance
+        assert "Show the size recommendation only once per proposal" in guidance
+        assert "never in a name-only question" in guidance
     assert (
-        "When asking for a missing logo, use a simple file-selection question without"
+        "Other logo requirements, format lists and correction recommendations"
         in help_section
     )
-    assert "upload requirements, format lists or recommendations" in help_section
-    assert (
-        "Show logo requirements and recommendations only after an uploaded image "
-        "fails validation or the service rejects the upload" in help_section
-    )
-    assert "A valid logo proceeds to review without this guidance" in help_section
+    assert "appear only after an uploaded image fails validation" in help_section
     assert (
         "For values already supplied, proceed directly to validation and review"
         in help_section
     )
-    assert "Do not repeat their input help or recommendations in chat" in help_section
+    assert "do not repeat their input help or recommendations in chat" in help_section
     assert (
         "Show correction guidance only for a relevant validation problem"
         in help_section
@@ -420,12 +428,11 @@ def test_logo_guidance_is_only_shown_after_an_invalid_upload() -> None:
     assert "Show the skill's **Name requirements** help" in prompt
     assert "in the existing input dialog's plain-text description" in prompt
     assert "only when asking for a missing name" in prompt
-    assert "For a missing logo, ask for the file without upload requirements" in prompt
+    assert "Do not require 192x192 or add a new input or confirmation step" in prompt
     assert (
         "only after an uploaded image fails validation or the service rejects the upload"
         in prompt
     )
-    assert "A valid logo proceeds to review without this guidance" in prompt
     assert "do not repeat input help or recommendations in chat" in prompt
     assert "Show correction guidance only for a relevant validation problem" in prompt
     assert "show the relevant help in chat" not in prompt
@@ -613,6 +620,13 @@ def test_uncertain_update_uses_one_immediate_studio_confirmation_not_resume_dial
     assert "confirm-logo --decision yes --approval" in confirmation
     assert "confirm-logo --decision no --approval" in confirmation
     assert "It performs no service write or publication" in confirmation
+    for guidance in (confirmation, prompt):
+        assert "Your logo was updated successfully." in guidance
+        assert "Your agent name and logo were updated successfully." in guidance
+        assert "These changes are not published." in guidance
+        assert "Your DEV logo is confirmed." not in guidance
+        assert "Your DEV name and logo are confirmed." not in guidance
+    assert "successful review-bound Studio confirmation" in prompt
     assert (
         "Never resend the old upload or approve a replacement automatically"
         in confirmation
@@ -654,9 +668,19 @@ def test_branding_messages_keep_requested_property_scope_throughout() -> None:
     assert "Save this reviewed logo change to the DEV draft?" in skill
     assert "Internal reads and safety checks remain unchanged" in skill
     assert "Match every user-facing message and dialog to the requested properties" in prompt
+    for guidance in (skill, prompt):
+        assert "Keep script commands, raw progress/result JSON" in guidance
+        assert "internal status labels out of routine chat narration" in guidance
+        assert "Host-owned tool-execution cards may still be visible" in guidance
+        assert "do not promise to hide them" in guidance
 
 
 def test_branding_dialogs_keep_visual_review_in_chat() -> None:
+    instructions = " ".join(
+        (_SOLUTION / ".github" / "copilot-instructions.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
     skill = " ".join(
         (_SOLUTION / "src" / "skills" / "agent-basics" / "SKILL.md")
         .read_text(encoding="utf-8")
@@ -676,6 +700,16 @@ def test_branding_dialogs_keep_visual_review_in_chat() -> None:
     assert "This does not publish." in skill
     assert "Keep dialogs text-only: no tables, images, HTML" in prompt
     assert "Keep the existing explicit approval choices" in prompt
+    assert "Use normal chat for genuine free-text-only exchanges" in instructions
+    exception = instructions.split("**Agent Basics input exception:**", 1)[1].split(
+        "- **Never expose internal terminology", 1
+    )[0]
+    assert "input, correction and approval dialogs" in exception
+    assert "including free-text name and agent-URL questions" in exception
+    assert "Do not replace these dialogs with chat-only prompts" in exception
+    assert "existing chat attachment and local-path handoffs" in exception
+    assert "This exception applies only to Agent Basics" in exception
+    assert "other flows keep the chat-first guidance above" in exception
 
 
 def test_branding_dialog_context_uses_supported_message_and_separate_paragraphs() -> (
@@ -723,7 +757,7 @@ def test_branding_dialog_context_uses_supported_message_and_separate_paragraphs(
     assert "For name-only approval, replace the selected-image line" in normalized_skill
     assert "For combined approval, include both value lines" in normalized_skill
     assert (
-        "Do not add logo requirements, format lists or recommendations"
+        "Do not add logo requirements or format lists"
         in normalized_skill
     )
     assert (
@@ -735,6 +769,11 @@ def test_branding_dialog_context_uses_supported_message_and_separate_paragraphs(
     assert "`message` for the context paragraphs" in prompt
     assert "unsupported question-level `description` field" in prompt
     assert "Keep helper-returned Studio confirmation dialogs verbatim" in prompt
+    for guidance in (normalized_skill, prompt):
+        assert "`logoConfirmation.dialog.title` to `header`" in guidance
+        assert "`logoConfirmation.dialog.question` to `question`" in guidance
+        assert "`logoConfirmation.dialog.description` to `message`" in guidance
+        assert "Keep the exact returned agent URL in its own paragraph" in guidance
 
 
 def test_agent_basics_setup_return_requires_completed_setup() -> None:

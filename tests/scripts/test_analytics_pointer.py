@@ -203,8 +203,7 @@ def test_read_association_accepts_current_da_setup_config_without_maker(
 
 
 def test_read_association_accepts_env_id_on_agent(tmp_path: Path):
-    """Some setups nest ``environmentId`` under ``agent``. That should also
-    resolve — mirrors drive_topic.py's fallback."""
+    """Resolve ``environmentId`` when supplied under ``agent``."""
     import analytics_pointer
 
     cfg_path = tmp_path / ".local" / "config.json"

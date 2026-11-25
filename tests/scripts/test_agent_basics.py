@@ -23,7 +23,7 @@ from types import SimpleNamespace
 
 import pytest
 import requests
-from PIL import Image, PngImagePlugin
+from PIL import ExifTags, Image, PngImagePlugin
 
 import agent_basics as basics
 from agentbuilder import AgentBuilderHTTPError
@@ -68,6 +68,18 @@ def animated_png(*, second_color="blue", duration=100, loop=0) -> bytes:
         duration=duration,
         loop=loop,
     )
+    return stream.getvalue()
+
+
+def exif_logo(size, *, format, orientation):
+    image = Image.new("RGB", size, "blue")
+    image.paste("red", (0, 0, size[0] // 2, size[1] // 2))
+    image.paste("yellow", (size[0] // 2, 0, size[0], size[1] // 2))
+    image.paste("green", (size[0] // 2, size[1] // 2, *size))
+    exif = Image.Exif()
+    exif[ExifTags.Base.Orientation] = orientation
+    stream = io.BytesIO()
+    image.save(stream, format=format, exif=exif)
     return stream.getvalue()
 
 
@@ -378,6 +390,93 @@ def test_logo_review_previews_share_a_canvas_without_distorting_source(
     assert plan["desired"]["logo"] == encoded(data)
     assert source.read_bytes() == data
     assert not client.writes
+
+
+@pytest.mark.parametrize("format", ["JPEG", "PNG"])
+@pytest.mark.parametrize(
+    ("orientation", "transform"),
+    [
+        (6, Image.Transpose.ROTATE_270),
+        (2, Image.Transpose.FLIP_LEFT_RIGHT),
+        (3, Image.Transpose.ROTATE_180),
+        (4, Image.Transpose.FLIP_TOP_BOTTOM),
+        (5, Image.Transpose.TRANSPOSE),
+        (7, Image.Transpose.TRANSVERSE),
+        (8, Image.Transpose.ROTATE_90),
+    ],
+)
+def test_exif_orientation_change_is_reviewed_and_uploaded(
+    client, tmp_path, format, orientation, transform
+):
+    data = exif_logo((192, 192), format=format, orientation=orientation)
+    source = tmp_path / f"oriented.{format.lower()}"
+    source.write_bytes(data)
+    with Image.open(io.BytesIO(data)) as decoded:
+        raw = Image.frombytes("RGBA", decoded.size, decoded.convert("RGBA").tobytes())
+    current = io.BytesIO()
+    raw.save(current, format="PNG")
+    client.state["bot"]["iconBase64"] = encoded(current.getvalue())
+    expected = raw.transpose(transform)
+
+    plan = basics.prepare(client, TARGET, logo=str(source))
+    review = basics.review_output(plan, tmp_path)
+    assert review["status"] == "review"
+    assert review["changedProperties"] == ["logo"]
+    proposed = (
+        tmp_path / basics.PREVIEW_DIRECTORY / f"{review['reviewId']}-proposed-color.png"
+    )
+    with Image.open(proposed) as preview:
+        assert preview.convert("RGBA").tobytes() == expected.tobytes()
+        assert preview.getexif().get(ExifTags.Base.Orientation, 1) == 1
+    assert plan["desired"]["logo"] == encoded(data)
+
+    saved = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert saved["status"] == "saved"
+    assert saved["properties"] == {"logo": "saved"}
+    assert len(client.writes) == 1
+    assert client.writes[0]["iconBase64"] == encoded(data)
+    assert source.read_bytes() == data
+
+
+@pytest.mark.parametrize("format", ["JPEG", "PNG"])
+def test_exif_equivalent_logo_is_unchanged_with_oriented_dimensions(
+    client, tmp_path, format
+):
+    data = exif_logo((192, 96), format=format, orientation=6)
+    source = tmp_path / f"oriented.{format.lower()}"
+    source.write_bytes(data)
+    with Image.open(io.BytesIO(data)) as decoded:
+        raw = Image.frombytes("RGBA", decoded.size, decoded.convert("RGBA").tobytes())
+    oriented = raw.transpose(Image.Transpose.ROTATE_270)
+    current = io.BytesIO()
+    oriented.save(current, format="PNG")
+    client.state["bot"]["iconBase64"] = encoded(current.getvalue())
+
+    plan = basics.prepare(client, TARGET, logo=str(source))
+    review = basics.review_output(plan, tmp_path)
+    assert review["status"] == "no_change"
+    assert review["changedProperties"] == []
+    assert review["proposed"]["logoDetails"] == {
+        "format": format,
+        "width": 96,
+        "height": 192,
+        "frames": 1,
+    }
+    proposed = (
+        tmp_path / basics.PREVIEW_DIRECTORY / f"{review['reviewId']}-proposed-color.png"
+    )
+    expected = Image.new("RGBA", (192, 192), (0, 0, 0, 0))
+    expected.paste(oriented, (48, 0))
+    with Image.open(proposed) as preview:
+        assert preview.convert("RGBA").tobytes() == expected.tobytes()
+    saved = basics.save(
+        client, plan, plan["reviewId"], current_target=TARGET, root=tmp_path
+    )
+    assert saved["status"] == "no_change"
+    assert not client.writes
+    assert source.read_bytes() == data
 
 
 @pytest.mark.parametrize(

@@ -359,6 +359,71 @@ def _non_auth_headers(call: dict[str, Any]) -> dict[str, str]:
     return headers
 
 
+def test_m365_publish_status_is_the_exact_read_only_studio_route() -> None:
+    session = FakeSession([FakeResponse({"titleId": "lob-title"})])
+    client = agentbuilder.AgentBuilderClient(
+        HOST, "fake-token", ring="test",
+        tenant_id="00000000-0000-4000-8000-000000003333",
+        api_version="unrelated-client-version", session=session,
+    )
+    assert client.get_m365_publish_status(AGENT_ID.replace("-", "")) == {
+        "titleId": "lob-title",
+    }
+    assert len(session.calls) == 1
+    call = session.calls[0]
+    assert (call["method"], call["url"]) == (
+        "GET", f"{HOST}/copilotstudio/agents/{AGENT_ID}/channels/m365/publish",
+    )
+    assert call["params"] == {"api-version": "2024-10-01"}
+    assert _non_auth_headers(call) == {
+        "Accept": "application/json",
+        "x-ms-client-name": "CopilotStudio",
+        "X-CCI-CdsBotId": AGENT_ID,
+    }
+    assert call["allow_redirects"] is False
+    assert call["timeout"] == 120
+    assert "json" not in call and "realm" not in call["params"]
+
+
+@pytest.mark.parametrize("status", [302, 401, 403, 404, 500])
+def test_m365_publish_status_never_turns_http_failure_into_empty_status(status) -> None:
+    session = FakeSession([FakeResponse({"titleId": "untrusted-title"}, status)])
+    client = agentbuilder.AgentBuilderClient(
+        HOST, "fake-token", ring="test",
+        tenant_id="00000000-0000-4000-8000-000000003333", session=session,
+    )
+    with pytest.raises(agentbuilder.AgentBuilderHTTPError) as caught:
+        client.get_m365_publish_status(AGENT_ID)
+    assert caught.value.status_code == status
+    assert len(session.calls) == 1
+
+
+@pytest.mark.parametrize("body", [None, [], "not-an-object"])
+def test_m365_publish_status_requires_an_object(body) -> None:
+    client = agentbuilder.AgentBuilderClient(
+        HOST, "fake-token", ring="test",
+        tenant_id="00000000-0000-4000-8000-000000003333",
+        session=FakeSession([FakeResponse(body)]),
+    )
+    with pytest.raises(agentbuilder.AgentBuilderError, match="invalid shape"):
+        client.get_m365_publish_status(AGENT_ID)
+
+
+def test_native_inventory_scopes_and_environment_identity_helpers() -> None:
+    assert agentbuilder.environment_id_from_host(HOST, "test") == ENVIRONMENT_ID
+    assert agentbuilder.agent_inventory_read_scopes("preprod") == (
+        "https://api.preprod.powerplatform.com/CopilotStudio.MakerOperations.Read",
+        "https://api.preprod.powerplatform.com/CopilotStudio.MinimalBot.Read",
+    )
+    for bad_host in (
+        "https://unbound.environment.api.test.powerplatform.com",
+        HOST.replace("0111.", "011g."),
+        f"{HOST}/unexpected-path",
+    ):
+        with pytest.raises(ValueError):
+            agentbuilder.environment_id_from_host(bad_host, "test")
+
+
 def test_host_derivation_probes_primary_split_first() -> None:
     attempted: list[str] = []
 
@@ -1654,8 +1719,12 @@ def test_agentbuilder_rejects_unreadable_token_tenant() -> None:
     (None, False),
     ("maker@example.com", True),
 ])
+@pytest.mark.parametrize("scope", [
+    "read-scope",
+    "https://service.powerapps.com//.default",
+])
 def test_dependency_auth_is_pinned_to_selected_account_and_tenant(
-    monkeypatch, tmp_path, account, other_tenant,
+    monkeypatch, tmp_path, account, other_tenant, scope,
 ):
     from unittest.mock import Mock
 
@@ -1674,12 +1743,61 @@ def test_dependency_auth_is_pinned_to_selected_account_and_tenant(
 
     if account != "maker@example.com" or other_tenant:
         with pytest.raises(agentbuilder.AgentBuilderError, match="different"):
-            agentbuilder.authenticate_flightcheck_dependency("read-scope", **kwargs)
+            agentbuilder.authenticate_flightcheck_dependency(scope, **kwargs)
     else:
-        assert agentbuilder.authenticate_flightcheck_dependency("read-scope", **kwargs) == token
+        assert agentbuilder.authenticate_flightcheck_dependency(scope, **kwargs) == token
     assert acquire.call_args.kwargs["authority"].endswith(tenant)
     assert acquire.call_args.kwargs["cache_path"] == kwargs["cache_path"]
-    assert acquire.call_args.kwargs["scopes"] == ("read-scope",)
+    assert acquire.call_args.kwargs["scopes"] == (scope,)
+
+
+@pytest.mark.parametrize("cached", [False, True])
+@pytest.mark.parametrize("scope,powerapps", [
+    ("https://service.powerapps.com//.default", True),
+    ("https://service.flow.microsoft.com//.default", False),
+    ("https://orgmocktenant.crm.dynamics.com/user_impersonation", False),
+    ("https://api.powerplatform.com/CopilotStudio.MinimalBot.Read", False),
+])
+def test_dependency_auth_selects_client_for_resource(
+    monkeypatch, tmp_path, cached, scope, powerapps,
+):
+    from unittest.mock import ANY, Mock
+
+    from flightcheck.pp_admin_client import CLIENT_ID as POWER_PLATFORM_CLIENT_ID
+
+    account = {"username": "maker@example.test"}
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"tid": ENVIRONMENT_ID}).encode()
+    ).decode().rstrip("=")
+    token = f"header.{payload}.signature"
+    app = Mock()
+    app.get_accounts.return_value = [account] if cached else []
+    app.acquire_token_silent.return_value = {"access_token": token}
+    app.acquire_token_interactive.return_value = {
+        "access_token": token,
+        "id_token_claims": {"preferred_username": account["username"]},
+    }
+    factory = Mock(return_value=app)
+    monkeypatch.setattr(agentbuilder.msal, "PublicClientApplication", factory)
+
+    assert agentbuilder.authenticate_flightcheck_dependency(
+        scope, tenant_id=ENVIRONMENT_ID, ring="prod",
+        account_hint=account["username"], cache_path=tmp_path / "cache.bin",
+    ) == token
+
+    factory.assert_called_once_with(
+        POWER_PLATFORM_CLIENT_ID if powerapps else agentbuilder.CLIENT_ID,
+        authority=f"https://login.microsoftonline.com/{ENVIRONMENT_ID}",
+        token_cache=ANY,
+    )
+    if cached:
+        app.acquire_token_silent.assert_called_once_with([scope], account=account)
+        app.acquire_token_interactive.assert_not_called()
+    else:
+        app.acquire_token_silent.assert_not_called()
+        app.acquire_token_interactive.assert_called_once_with(
+            scopes=[scope], login_hint=account["username"],
+        )
 
 
 def test_dependency_auth_requires_known_account_before_login(monkeypatch):

@@ -169,7 +169,6 @@ def test_all_hrsd_blocking_phase_outputs_include_actionable_recovery() -> None:
         "TOPICS",
         "PORTAL",
         "CREDENTIAL",
-        "AGENT-CONNECTION",
         "TEST",
     }
     assert {
@@ -814,9 +813,11 @@ def _write_state(
     )
     binding_identity_sha256 = snow._canonical_json_hash(binding_identity)
     state["evidence"]["agentConnection"] = {
-        "kind": "maker-attestation",
+        "kind": "binding-proof",
         "status": "completed",
-        "makerAttested": True,
+        "mode": "adk-verified",
+        "verificationSource": "saved-draft-connection-reference",
+        "bindingVerified": True,
         "physicalStatus": "Connected",
         "authMode": snow.AUTH_MODE,
         "connectionId": CONNECTION_ID,
@@ -963,10 +964,7 @@ def test_hrsd_checks_preserve_manual_maker_evidence(
     assert statuses["SN-DA-HRSD-TOPICS-001"] == Status.PASSED.value
     assert statuses["SN-DA-HRSD-PORTAL-001"] == Status.PASSED.value
     assert statuses["SN-DA-HRSD-CREDENTIAL-001"] == Status.PASSED.value
-    assert (
-        statuses["SN-DA-HRSD-AGENT-CONNECTION-001"]
-        == Status.MANUAL.value
-    )
+    assert "SN-DA-HRSD-AGENT-CONNECTION-001" not in statuses
     assert "SN-DA-HRSD-PARAMETER-SHARING-001" not in statuses
     assert "SN-DA-HRSD-PUBLISH-001" not in statuses
     assert statuses["SN-DA-HRSD-TEST-001"] == Status.MANUAL.value
@@ -986,20 +984,16 @@ def test_hrsd_package_and_topics_remain_dynamic_with_one_matching_topic() -> Non
     assert package.result.endswith("contains 1 ServiceNow HRSD topic(s).")
     assert topics.status == Status.PASSED.value
     assert topics.result == "1/1 ServiceNow HRSD topics are Active."
-    for checkpoint_id in (
-        "SN-DA-HRSD-AGENT-CONNECTION-001",
-        "SN-DA-HRSD-TEST-001",
-    ):
-        assert by_id[checkpoint_id].status == Status.ERROR.value
-        assert "binding/final-configuration identity" in (
-            by_id[checkpoint_id].result
-        )
+    assert by_id["SN-DA-HRSD-TEST-001"].status == Status.ERROR.value
+    assert "binding/final-configuration identity" in (
+        by_id["SN-DA-HRSD-TEST-001"].result
+    )
 
 
 @pytest.mark.parametrize(
     "target",
     (
-        "SN-DA-HRSD-AGENT-CONNECTION-001",
+        "SN-DA-HRSD-CREDENTIAL-001",
         "SN-DA-HRSD-TEST-001",
     ),
 )
@@ -1102,7 +1096,7 @@ def test_test_checkpoint_propagates_connectivity_error(
     [
         ("credential-pending", "credential"),
         ("topics-inactive", "topics"),
-        ("agent-binding-stale", "Agent Connect"),
+        ("agent-binding-stale", "credential"),
     ],
 )
 def test_test_checkpoint_blocks_noncompleted_prerequisite(
@@ -2161,7 +2155,6 @@ def test_entra_phase_evaluation_uses_one_logical_read_set(
         ("SN-DA-HRSD-OIDC-001", 1, 0, 0),
         ("SN-DA-HRSD-CREDENTIAL-001", 1, 1, 0),
         ("SN-DA-HRSD-TOPICS-001", 1, 0, 0),
-        ("SN-DA-HRSD-AGENT-CONNECTION-001", 1, 1, 0),
         ("SN-DA-HRSD-TEST-001", 1, 1, 0),
     ],
 )
@@ -2417,10 +2410,7 @@ def test_hrsd_checks_use_connector_scoped_connections_only(
 
     assert calls == [(ENVIRONMENT_ID, snow.CONNECTOR_NAME)]
     assert statuses["SN-DA-HRSD-CREDENTIAL-001"] == Status.PASSED.value
-    assert (
-        statuses["SN-DA-HRSD-AGENT-CONNECTION-001"]
-        == Status.MANUAL.value
-    )
+    assert "SN-DA-HRSD-AGENT-CONNECTION-001" not in statuses
 
 
 @pytest.mark.parametrize("status_code", [429, 401, 403, 500])
@@ -2477,12 +2467,10 @@ def test_hrsd_checks_reopen_stale_maker_evidence(
     results = run_servicenow_da_hrsd_checks(_runner(components))
     statuses = {result.checkpoint_id: result.status for result in results}
 
-    assert (
-        statuses["SN-DA-HRSD-AGENT-CONNECTION-001"]
-        == Status.MANUAL.value
-    )
+    assert "SN-DA-HRSD-AGENT-CONNECTION-001" not in statuses
     assert "SN-DA-HRSD-PARAMETER-SHARING-001" not in statuses
     assert "SN-DA-HRSD-PUBLISH-001" not in statuses
+    assert statuses["SN-DA-HRSD-CREDENTIAL-001"] == Status.PASSED.value
     assert statuses["SN-DA-HRSD-TEST-001"] == Status.NOT_CONFIGURED.value
 
 
@@ -2510,10 +2498,10 @@ def test_agent_connection_accepts_legacy_root_only_connection_id(
     result = next(
         item
         for item in results
-        if item.checkpoint_id == "SN-DA-HRSD-AGENT-CONNECTION-001"
+        if item.checkpoint_id == "SN-DA-HRSD-CREDENTIAL-001"
     )
 
-    assert result.status == Status.MANUAL.value
+    assert result.status == Status.PASSED.value
 
 
 def test_agent_connection_rejects_conflicting_nested_and_root_ids(
@@ -2542,7 +2530,7 @@ def test_agent_connection_rejects_conflicting_nested_and_root_ids(
     result = next(
         item
         for item in results
-        if item.checkpoint_id == "SN-DA-HRSD-AGENT-CONNECTION-001"
+        if item.checkpoint_id == "SN-DA-HRSD-CREDENTIAL-001"
     )
 
     assert result.status == Status.NOT_CONFIGURED.value
@@ -2585,11 +2573,11 @@ def test_agent_connection_rejects_wrong_selected_connection_id(
     result = next(
         item
         for item in results
-        if item.checkpoint_id == "SN-DA-HRSD-AGENT-CONNECTION-001"
+        if item.checkpoint_id == "SN-DA-HRSD-CREDENTIAL-001"
     )
 
     assert result.status == Status.NOT_CONFIGURED.value
-    assert "different selected credential" in result.result
+    assert "different selected connection" in result.result
 
 
 def test_agent_connection_survives_authored_topic_revision(
@@ -2607,11 +2595,11 @@ def test_agent_connection_survives_authored_topic_revision(
     result = next(
         item
         for item in results
-        if item.checkpoint_id == "SN-DA-HRSD-AGENT-CONNECTION-001"
+        if item.checkpoint_id == "SN-DA-HRSD-CREDENTIAL-001"
     )
 
-    assert result.status == Status.MANUAL.value
-    assert "currently shows Connected" in result.result
+    assert result.status == Status.PASSED.value
+    assert "saved draft references the selected Connected" in result.result
 
 
 def test_hrsd_package_absence_is_not_configured(
@@ -2727,10 +2715,6 @@ def test_target_test_reuses_profile_definition_and_invalidates_stale_binding():
         Status.PASSED.value,
         "SN-DA-HRSD-CREDENTIAL-001",
     )
-    binding = _target_check(
-        Status.MANUAL.value,
-        "SN-DA-HRSD-AGENT-CONNECTION-001",
-    )
     expected_binding = {
         "provider": snow.PROVIDER_KEY,
         "profile": "hrsd",
@@ -2768,7 +2752,6 @@ def test_target_test_reuses_profile_definition_and_invalidates_stale_binding():
         topics,
         portal,
         credential,
-        binding,
         profile=hrsd_checks.HR_CHECK_PROFILE,
     )
     stale_context = json.loads(json.dumps(context))
@@ -2780,7 +2763,6 @@ def test_target_test_reuses_profile_definition_and_invalidates_stale_binding():
         topics,
         portal,
         credential,
-        binding,
         profile=hrsd_checks.HR_CHECK_PROFILE,
     )
 

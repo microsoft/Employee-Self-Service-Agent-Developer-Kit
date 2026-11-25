@@ -4,7 +4,7 @@
 """DriveSurface — the automated drive+capture contract for topic debugging.
 
 Sends a turn to a deployed topic and returns its full reply as aggregated text,
-so the diagnostic tools (reply_signal / flow_run_inspect / plant_debug) run
+so reply classification and read-only diagnostics can run
 without a human pasting the reply. The contract is deliberately browser-agnostic:
 a caller depends only on ``DriveResult`` text, never on how the reply was driven.
 
@@ -14,11 +14,11 @@ Layers:
     reply, not a dropped bubble).
   * ``turn_complete`` — the turn-completion decision as a pure state function.
   * ``DriveSurface`` — orchestrates a ``Driver`` (the browser seam) into
-    ``DriveResult``s. The concrete browser ``Driver`` is a separate adapter,
-    validated live; this module is fully unit-testable with a fake driver.
+    ``DriveResult``s. The concrete browser ``Driver`` is a separate adapter;
+    this module is fully unit-testable with a fake driver.
 
-The chosen driver is Python launch + CDP-attach; the contract here keeps that
-decision swappable.
+Browser lifecycle policy belongs to each concrete adapter, not this shared
+contract.
 """
 from __future__ import annotations
 
@@ -112,7 +112,7 @@ class Driver(Protocol):
 
     def start(self) -> None: ...
     def send(self, text: str, timeout_s: int) -> tuple[list[Bubble], bool]: ...
-    def reset(self) -> bool: ...
+    def newChat(self) -> bool: ...
     def close(self) -> None: ...
 
 
@@ -120,7 +120,7 @@ class DriveSurface:
     """Orchestrates a ``Driver`` into ``DriveResult``s.
 
     Lifecycle: ``start`` (idempotent) -> ``drive`` (one turn -> aggregated
-    result) -> optional ``reset`` -> ``close``. ``drive`` before ``start`` is a
+    result) -> optional ``newChat`` -> ``close``. ``drive`` before ``start`` is a
     programming error (raises); ``close`` before ``start`` is a safe no-op.
     """
 
@@ -140,10 +140,10 @@ class DriveSurface:
         bubbles, timed_out = self._driver.send(text, timeout_s)
         return aggregate_turn(bubbles, timed_out=timed_out)
 
-    def reset(self) -> bool:
+    def newChat(self) -> bool:
         if not self._started:
             raise RuntimeError("DriveSurface not started; call start() first")
-        return self._driver.reset()
+        return self._driver.newChat()
 
     def close(self) -> None:
         if not self._started:
