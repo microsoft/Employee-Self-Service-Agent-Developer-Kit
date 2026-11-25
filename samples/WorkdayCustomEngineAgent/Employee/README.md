@@ -27,7 +27,7 @@ These topics use ESS Template Configuration records and `msdyn_copilotforemploye
 ## Before you start
 
 - Use an editable ESS **Custom Engine Agent** with the ESS HR Workday solution accelerator installed and configured. These samples extend that agent; they do not install an agent, connectors, or system topics.
-- Complete [Workday integration](https://learn.microsoft.com/en-us/copilot/employee-self-service/workday), including authenticated connections, employee-context initialization, and Workday permissions for each selected operation. The supplied XML requests use **User** authentication.
+- Complete the [simplified Workday integration setup](https://learn.microsoft.com/en-us/copilot/employee-self-service/workday-simplified-setup), including authenticated connections, employee-context initialization, and Workday permissions for each selected operation. The supplied XML requests use **User** authentication.
 - Have maker access to the agent's Power Platform environment and permission to create or update its ESS Template Configuration records. Work with your Workday administrator on security domains and business-process permissions; do not broaden permissions merely to make a test pass.
 - Confirm `Global.ESS_UserContext_Employee_Id` contains the signed-in employee's Workday Employee ID. Job information, contact information, education, and government IDs also use `Global.ESS_UserContext_Employee_Firstname` and `Global.ESS_UserContext_Employee_Lastname`.
 - Keep `msdyn_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution` configured. Topics that resolve reference values also need `GetReferenceData` or `WorkdaySystemRefreshReferenceData`, as described in their individual READMEs.
