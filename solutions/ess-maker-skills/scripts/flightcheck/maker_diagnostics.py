@@ -155,7 +155,7 @@ def _check_environment(runner):
     try:
         environment = getattr(runner, "_maker_environment_snapshot", None)
         if environment is None:
-            environment = _Access(runner).admin().get_environment(runner.env_id)
+            environment = _Access(runner).admin(bap=True).get_environment(runner.env_id)
         if not isinstance(environment, dict) or str(environment.get("name", "")).casefold() != runner.env_id.casefold():
             raise ValueError("Environment metadata did not identify the exact selected environment.")
         properties = environment.get("properties")

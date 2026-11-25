@@ -151,7 +151,7 @@ def main():
     print("Authenticating to Power Platform Admin API...")
     pp_admin = PPAdminClient(tenant_id)
     try:
-        pp_admin.authenticate()
+        pp_admin.authenticate(include_powerapps=False, include_flow=False)
         print("  Power Platform: OK")
     except Exception as e:
         print(f"ERROR: Power Platform authentication failed — {e}")

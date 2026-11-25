@@ -19,7 +19,7 @@ import requests
 
 from auth import discover_tenant, query_all
 from ..agent_scope import configured_agents
-from ..pp_admin_client import FLOW_SCOPE, PP_SCOPE, PPAdminClient
+from ..pp_admin_client import BAP_SCOPE, FLOW_SCOPE, PP_SCOPE, PPAdminClient
 from ._da_connection_refs import agent_bot_ids, _require_identity_field
 
 
@@ -219,7 +219,7 @@ class _Access:
             if self.token_provider else getattr(runner, "pp_admin", None)
         )
 
-    def admin(self, *, flow: bool = False):
+    def admin(self, *, flow: bool = False, bap: bool = False):
         if getattr(self.runner, "ring", "prod") != "prod":
             raise ValueError("Flow and connection administration is only verified on the prod service ring.")
         if self.token_provider:
@@ -228,7 +228,9 @@ class _Access:
                 self.runner._da_pp_read_client = self.pp
             if flow and not self.pp.has_flow_token:
                 self.pp.set_read_tokens(flow_token=self.token_provider(FLOW_SCOPE))
-            if not flow and not self.pp.has_powerapps_token:
+            if bap and not self.pp.has_bap_token:
+                self.pp.set_read_tokens(bap_token=self.token_provider(BAP_SCOPE))
+            if not (flow or bap) and not self.pp.has_powerapps_token:
                 self.pp.set_read_tokens(powerapps_token=self.token_provider(PP_SCOPE))
         if self.pp is None:
             raise ValueError("Power Platform administration read access is unavailable.")
@@ -247,7 +249,7 @@ class _Access:
         if self.token_provider:
             snapshot = getattr(self.runner, "_maker_environment_snapshot", None)
             environment = _mapping(
-                snapshot if snapshot is not None else self.admin().get_environment(self.runner.env_id),
+                snapshot if snapshot is not None else self.admin(bap=True).get_environment(self.runner.env_id),
                 "Environment lookup",
             )
             if str(environment.get("name", "")).casefold() != self.runner.env_id.casefold():

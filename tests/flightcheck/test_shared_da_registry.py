@@ -1577,7 +1577,7 @@ def test_dlp_wrapper_evaluates_exact_connectors_without_hiding_policy_read_limit
     if mode == "blocked_unknown":
         policy = admin_mock.dlp_policy(blocked=[connector])
     client = PPAdminClient(TENANT_ID)
-    client.set_read_tokens(powerapps_token="fixture-read-token")
+    client.set_read_tokens(bap_token="fixture-bap-read-token")
     runner = SimpleNamespace(
         agent_slug="hr", env_id=admin_mock.MOCK_ENV_ID, pp_admin=client,
         da_observations={}, _da_connection_audit=ConnectionAudit(references=[
@@ -1599,6 +1599,7 @@ def test_dlp_wrapper_evaluates_exact_connectors_without_hiding_policy_read_limit
             json={} if mode == "denied" else {"value": [{"properties": None}] if mode == "malformed" else [policy]},
         )
         row = executor.run(runner)[0]
+        assert http.calls[0].request.headers["Authorization"] == "Bearer fixture-bap-read-token"
     assert row.status == expected, row.result
     assert bool(row.remediation) is (expected != "Passed")
     if mode in {"allow", "blocked", "blocked_unknown"}:
