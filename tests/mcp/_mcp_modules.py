@@ -46,7 +46,7 @@ MCP_ROOT = REPO_ROOT / "solutions" / "ess-maker-skills" / "src" / "mcp"
 
 # Modules in dependency order. A module must appear after everything it imports
 # so its siblings are already registered under their plain names when it runs.
-LANDING_PAGE_MODULES = ("client", "drafts", "server")
+LANDING_PAGE_MODULES = ("client", "drafts", "lpc_telemetry", "server")
 ORG_ANNOUNCEMENTS_MODULES = (
     "validation",
     "client",
