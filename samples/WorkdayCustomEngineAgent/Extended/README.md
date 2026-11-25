@@ -6,7 +6,7 @@ search_exclude: false
 
 Extend your existing Employee Self-Service (ESS) **Custom Engine Agent (CEA)** with four REST-based Workday topics. Employees can view their inbox tasks and pay slips or request feedback about themselves; managers can submit a direct report's transfer to a different manager. Add only the scenarios your organization needs.
 
-These samples extend an installed Workday integration; they do not install an agent, connections, system topics, or flows. Unlike the XML-based [employee](../Employee/) and [manager](../Manager/) samples, they call `WorkdaySystemGetRESTExecution` with an `operationName` and JSON `parameters`. Follow the REST setup below, not the XML template-registration steps. See the [Workday CA overview](../) for all sample areas.
+These samples extend an installed Workday integration; they do not install an agent, connections, system topics, or flows. Unlike the XML-based [employee](../Employee/) and [manager](../Manager/) samples, they call `WorkdaySystemGetRESTExecution` with an `operationName` and JSON `parameters`. Follow the REST setup below, not the XML template-registration steps. See the [Workday CEA overview](../) for all sample areas.
 
 ## Contents
 
