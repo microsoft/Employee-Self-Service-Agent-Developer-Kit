@@ -9,6 +9,8 @@ Extend your existing Employee Self-Service (ESS) **Custom Engine Agent (CEA)** w
 
 The samples do not install an agent or configure its Workday integration. Employee and manager scenarios use XML templates through the installed common-execution system topic; extended scenarios use a separate REST execution flow.
 
+Building a **Declarative Agent (DA)**? See the [Workday samples for Declarative Agent makers](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/tree/main/samples/Workday).
+
 ## Folder layout
 
 | Folder | Description |
