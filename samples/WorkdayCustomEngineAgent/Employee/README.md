@@ -44,8 +44,7 @@ The [Workday extensibility walkthrough](https://learn.microsoft.com/en-us/copilo
 5. Set **Name** to a descriptive label. Set **Unique name** to the exact `scenarioName` from the selected topic's common-execution call, using the table below. Paste the **entire XML file** into **Value**, then select **Save and Close**.
 6. Repeat for every configuration required by the selected scenario, including cross-folder dependencies. You do not need to create unused scenario topics.
 
-{: .important }
-> The configuration record's **Unique name** is the lookup key passed as `scenarioName`. It is not necessarily the XML filename, inner `<scenario name="...">`, or `<requestTemplate name="...">`. Preserve the supplied XML names and placeholders; do not add `msdyn_` to every inner XML name.
+> **Important:** The configuration record's **Unique name** is the lookup key passed as `scenarioName`. It is not necessarily the XML filename, inner `<scenario name="...">`, or `<requestTemplate name="...">`. Preserve the supplied XML names and placeholders; do not add `msdyn_` to every inner XML name.
 
 ### CEA configuration lookup names
 
