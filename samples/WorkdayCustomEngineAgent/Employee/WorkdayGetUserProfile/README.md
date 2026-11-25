@@ -36,6 +36,14 @@ Users can activate this topic with phrases like:
 | `topic.yaml` | Main Copilot Studio topic definition |
 | `msdyn_HRWorkdayHCMEmployeeGetUserProfile.xml` | XML template with XPath extractions for profile data |
 
+## Setup
+
+Follow the [CEA prerequisites](../#before-you-start) and [register the template configuration](../#register-the-template-configurations) with **Unique name** `msdyn_HRWorkdayHCMEmployeeGetUserProfile` and the complete XML in **Value**.
+
+Then [add this scenario](../#add-a-scenario) by pasting the entire `topic.yaml` into a blank topic's code editor, resolving the CEA common-execution reference, saving, and enabling it. This scenario uses `Global.ESS_UserContext_Employee_Id` and today's effective date.
+
+You can customize `modelDescription` and response labels while preserving the `finalizedData` output contract and XML extraction keys. Review which personal fields your organization permits the agent to display; the record includes date of birth and home-contact details.
+
 ## Workday APIs Used
 
 | API | Service | Version | Purpose |
@@ -153,13 +161,19 @@ outputType:
 
 ## Important Notes
 
-1. **Privacy**: This topic only returns data for the requesting user. Questions about other employees (managers, colleagues) are explicitly rejected per the model description.
+1. **Privacy**: Requests use the signed-in employee's ID, and the model description instructs the agent not to answer questions about other employees. That instruction is not an authorization boundary; retain Workday's user-level permissions.
 
 2. **Tenure Information**: Length of Service is only included in the AI's response when the user specifically asks about tenure, service length, or how long they've been with the company.
 
 3. **Status Conversion**: The raw `Active` field from Workday (1 or 0) is converted to human-readable "Active" or "Inactive".
 
 4. **Response Optimization**: The Get_Workers request is optimized to exclude unnecessary data (benefits, qualifications, photos, etc.) to improve performance.
+
+## Test and troubleshoot
+
+In fresh conversations, ask for a profile, manager, and length of service. Compare the returned `finalizedData` fields and tenure with approved Workday test data. Include a request about another employee and an employee with absent optional contact fields.
+
+The service calculation parses `ContinuousServiceDate` with `DateValue`, without a blank-date guard. Validate employees without a continuous-service date before rollout. If the read or parser fails, inspect the common-execution `isSuccess`/`errorResponse` and XML response keys before changing bindings. Use the [shared CEA troubleshooting checks](../#troubleshooting) before publishing.
 
 ## Version History
 
