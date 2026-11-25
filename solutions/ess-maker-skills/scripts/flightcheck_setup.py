@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import sys
@@ -32,6 +34,23 @@ from setup_existing_da import (
 )
 
 
+def _environments_with_agents(
+    environments: list[dict[str, Any]],
+    make_client: Callable[[str], AgentBuilderClient],
+) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
+    def probe(env: dict[str, Any]) -> list[dict[str, Any]]:
+        try:
+            return make_client(str(uuid.UUID(env["id"]))).list_minimal_bots()
+        except (ValueError, AgentBuilderError, requests.RequestException):
+            return []
+
+    if not environments:
+        return []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(probe, environments))
+    return [(env, agents) for env, agents in zip(environments, results) if agents]
+
+
 def _choose(options: list[dict[str, Any]], label: str, name_key: str) -> dict[str, Any]:
     if not options:
         raise ValueError(
@@ -41,10 +60,11 @@ def _choose(options: list[dict[str, Any]], label: str, name_key: str) -> dict[st
     for index, option in enumerate(options, 1):
         name = option.get(name_key) or option.get("shortBotName") or option.get("botId") or option.get("id")
         print(f"  {index}. {name}")
-    choice = input(f"Select {label} number: ").strip()
-    if not choice.isdecimal() or not 1 <= int(choice) <= len(options):
-        raise ValueError(f"Select one of the listed {label}; selection cannot be skipped.")
-    return options[int(choice) - 1]
+    while True:
+        choice = input(f"Select {label} number: ").strip()
+        if choice.isdecimal() and 1 <= int(choice) <= len(options):
+            return options[int(choice) - 1]
+        print(f"Enter a number from 1 to {len(options)}.")
 
 
 def configure_standalone(kit_root: Path, ring: str) -> dict[str, Any]:
@@ -89,23 +109,44 @@ def configure_standalone(kit_root: Path, ring: str) -> dict[str, Any]:
     if not account:
         raise ValueError("Sign-in did not verify the selected Microsoft account.")
     tenant_id = str(uuid.UUID(tenant_id))
+    def make_client(env_id: str) -> AgentBuilderClient:
+        return AgentBuilderClient(
+            derive_environment_host(env_id, ring), token, ring=ring,
+            tenant_id=tenant_id, api_version=version,
+        )
+
     if target:
-        environment_id = target["environmentId"]
+        environment_id = str(uuid.UUID(target["environmentId"]))
+        client = make_client(environment_id)
+        agent_id = target["agentId"]
     else:
         environments = summarize_environments(
             list_environments(token, ring, api_version=version)
         )
-        environment_id = _choose(environments, "environment", "name")["id"]
-    environment_id = str(uuid.UUID(environment_id))
+        # Only environments that hold DA agents are offered, so the user
+        # never picks an environment that cannot work.
+        print("Checking environments for DA agents...")
+        candidates = _environments_with_agents(environments, make_client)
+        if not candidates:
+            raise ValueError(
+                "No environment visible to this account contains a DA agent. "
+                "Verify access or rerun with the intended DA's Copilot Studio URL."
+            )
+        while True:
+            options = [
+                {**env, "name": f"{env['name']} ({len(agents)} DA agent(s))"}
+                for env, agents in candidates
+            ]
+            picked = _choose(options, "environment", "name")
+            environment_id = str(uuid.UUID(picked["id"]))
+            agents = next(a for e, a in candidates if e["id"] == picked["id"])
+            client = make_client(environment_id)
+            agents = agents + [{"botId": None, "fullBotName": "<- Back to environment list"}]
+            chosen = _choose(agents, "DA agent", "fullBotName")
+            if chosen.get("botId"):
+                agent_id = chosen["botId"]
+                break
     host = derive_environment_host(environment_id, ring)
-    client = AgentBuilderClient(
-        host, token, ring=ring, tenant_id=tenant_id, api_version=version,
-    )
-    if target:
-        agent_id = target["agentId"]
-    else:
-        agents = client.list_minimal_bots()
-        agent_id = _choose(agents, "DA agent", "fullBotName").get("botId")
     agent_id = str(uuid.UUID(str(agent_id or "")))
     agent = client.get_agent(agent_id)
     _confirm_direct_native_authoring_identity(agent_id, agent)
