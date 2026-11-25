@@ -4,27 +4,27 @@
 # pip ecosystem grouping in .github/dependabot.yml.
 
 # Auth + HTTP
-msal>=1.31.0,<2.0
-requests>=2.32.0,<3.0
-urllib3>=2.2.0,<3.0
-httpx>=0.27.0,<1.0
+msal>=1.39.0,<2.0
+requests>=2.34.2,<3.0
+urllib3>=2.8.0,<3.0
+httpx>=0.28.1,<1.0
 
 # Browser topic testing attaches to an operator-owned Edge/Chromium over CDP.
 # No Playwright browser download is required.
-playwright>=1.61.0,<2.0
+playwright>=1.65.2,<2.0
 
 # Local AgentConfiguration MCP server
-mcp>=1.29.0,<2.0.0
+mcp>=2.3.0,<3.0.0
 
 # YAML parse for pre-push schema validation
-PyYAML>=6.0.2,<7.0
-jsonschema>=4.0,<5.0
+PyYAML>=6.0.4,<7.0
+jsonschema>=4.26.0,<5.0
 
 # Safe XML parsing for Workday SOAP responses (XXE / billion-laughs hardened).
 defusedxml>=0.7.1,<0.8
 
 # Microsoft Object Model serialization through the installed .NET runtime.
-pythonnet>=3.1.0,<4.0
+pythonnet>=3.2.1,<4.0
 
 # FlightCheck only - safe defaults; the flightcheck CLI is opt-in.
 # (msal/requests/defusedxml already covered above; no flightcheck-specific deps yet.)
@@ -33,8 +33,8 @@ pythonnet>=3.1.0,<4.0
 # bootstrap installs only this file, so the planner + landing-page MCP servers
 # cannot start after setup unless their runtime deps are installed here. Kept in
 # sync with src/mcp/agentconfig_planner/requirements.txt.
-mcp>=1.29.0,<2.0.0
-httpx>=0.27.0,<1.0
+mcp>=2.3.0,<3.0.0
+httpx>=0.28.1,<1.0
 
 # Windows ARM64: force a cryptography version that ships native win_arm64
 # wheels (added in 46.0, Aug 2025). Older versions resolve to an sdist
@@ -42,7 +42,7 @@ httpx>=0.27.0,<1.0
 # msal pulls cryptography transitively; this constraint only narrows the
 # acceptable range on win_arm64 so resolution lands on a wheel-having
 # version. Other platforms keep msal's own (wider) cryptography bound.
-cryptography>=46.0.0; sys_platform == "win32" and platform_machine == "ARM64"
+cryptography>=50.0.2; sys_platform == "win32" and platform_machine == "ARM64"
 
 # Shared AgentConfiguration authentication and cache persistence
 -r ../src/mcp/agentconfig_core/requirements.txt
