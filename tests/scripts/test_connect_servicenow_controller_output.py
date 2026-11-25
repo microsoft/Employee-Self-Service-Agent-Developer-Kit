@@ -99,6 +99,8 @@ def test_pending_card_title_is_the_question_and_has_no_body() -> None:
     assert card["message"] == "Should we continue with ESS IT?"
     field = next(iter(card["requestedSchema"]["properties"].values()))
     assert "description" not in field
+    assert field["title"] == "Should we continue with ESS IT?"
+    assert field["title"] not in {"Selection", "Input"}
     assert out["endTurn"] is False
     assert "pendingCard" in out["nextCommand"]
 

@@ -64,9 +64,11 @@ python scripts/connect_servicenow_da.py --provider {PROVIDER} adapt-question
 Require `schemaVersion: servicenow.ask-user-arguments.v1`, then call the
 active `ask_user` tool with the returned `askUserArguments` object verbatim.
 Do not recreate the schema. The adapter maps the canonical header to top-level
-`message`, the complete canonical question to property `description`, uses a
-neutral property `title`, emits explicit `oneOf` labels for options, and marks
-the response field required. The actual callable contract is
+`message` and to the response property `title` (the host shows the property
+title as the question, so it must never be a generic label such as
+"Selection"), emits explicit `oneOf` labels for options, and marks the
+response field required. Longer explanations stay in the chat message, not in
+the card. The actual callable contract is
 `{message, requestedSchema}`. `questions: [...]` is internal Agent Host output,
 not callable input. The canonical `allowFreeformInput` intent remains in the
 adapter envelope; the active host currently has a known defect that exposes

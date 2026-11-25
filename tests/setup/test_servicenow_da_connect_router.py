@@ -658,7 +658,8 @@ def test_da_servicenow_connect_routes_to_agent_chooser() -> None:
     assert "adapt-question" in runner
     assert "servicenow.ask-user-arguments.v1" in runner
     assert "askUserArguments" in runner
-    assert "property `description`" in runner
+    assert "response property `title`" in runner
+    assert "never be a generic label" in runner
     assert "`questions: [...]` is internal Agent Host output" in runner
     assert "known defect that exposes" in runner
     assert "Other providers retain this runner's existing output" in runner
