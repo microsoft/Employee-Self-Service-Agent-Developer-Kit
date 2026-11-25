@@ -19,7 +19,7 @@ The samples do not install an agent or configure its Workday integration. Employ
 
 ## Before you start
 
-- Use an editable ESS Custom Engine Agent with its Workday integration installed and configured. Complete the [Workday integration setup](https://learn.microsoft.com/en-us/copilot/employee-self-service/workday), including authenticated connections, employee-context initialization, and permissions for the operations you plan to use.
+- Use an editable ESS Custom Engine Agent with its Workday integration installed and configured. Complete the [simplified Workday integration setup](https://learn.microsoft.com/en-us/copilot/employee-self-service/workday-simplified-setup), including authenticated connections, employee-context initialization, and permissions for the operations you plan to use.
 - Have maker access to the agent's environment and permission to manage ESS Template Configuration records. Work with your Workday administrator on security-domain and business-process permissions.
 - Confirm the system topics referenced by your selected YAML are available. Employee and manager XML scenarios call `msdyn_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution`; individual topics may also require manager checks or reference-data initialization.
 - Start in a non-production environment with approved test records. Read scenarios can expose employee information, and write scenarios can change Workday records or start business processes.
